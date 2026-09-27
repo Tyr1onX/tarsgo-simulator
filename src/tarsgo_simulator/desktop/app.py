@@ -90,14 +90,13 @@ def main(scenario_path: str | Path | None = None) -> None:
                     if math.dist(selection_start, selection_current) > 5:
                         selection_rect = _selection_rectangle(selection_start, selection_current)
                         selected_robot_ids = _select_player_robots_in_rectangle(
-                            selection_rect, match, player_team
+                            selection_rect, match
                         )
                     else:
                         world = _screen_to_world(event.pos, match)
                         _apply_click_selection(
                             world,
                             match,
-                            player_team,
                             selected_robot_ids,
                             shift=selection_shift,
                         )
@@ -109,7 +108,7 @@ def main(scenario_path: str | Path | None = None) -> None:
             live_player_ids = {
                 robot.id
                 for robot in match.robots
-                if robot.alive and robot.team == player_team
+                if robot.alive and match.is_player_controlled(robot.id)
             }
             selected_robot_ids.intersection_update(live_player_ids)
             selection_rect = (
@@ -159,10 +158,9 @@ def _screen_to_world(position: tuple[int, int], match: Match) -> tuple[float, fl
 def _select_player_robot(
     point: tuple[float, float],
     match: Match,
-    player_team: str,
 ) -> str | None:
     for robot in match.robots:
-        if not robot.alive or robot.team != player_team:
+        if not robot.alive or not match.is_player_controlled(robot.id):
             continue
         distance = math.hypot(robot.position[0] - point[0], robot.position[1] - point[1])
         if distance <= match.map.collision_radius + 9:
@@ -173,14 +171,11 @@ def _select_player_robot(
 def _apply_click_selection(
     point: tuple[float, float] | None,
     match: Match,
-    player_team: str,
     selected_robot_ids: set[str],
     *,
     shift: bool,
 ) -> None:
-    robot_id = (
-        _select_player_robot(point, match, player_team) if point is not None else None
-    )
+    robot_id = _select_player_robot(point, match) if point is not None else None
     if shift:
         if robot_id is not None:
             if robot_id in selected_robot_ids:
@@ -208,11 +203,10 @@ def _selection_rectangle(
 def _select_player_robots_in_rectangle(
     selection_rect: pygame.Rect,
     match: Match,
-    player_team: str,
 ) -> set[str]:
     selected = set()
     for robot in match.robots:
-        if not robot.alive or robot.team != player_team:
+        if not robot.alive or not match.is_player_controlled(robot.id):
             continue
         center = (
             round(MAP_ORIGIN[0] + robot.position[0]),
@@ -303,10 +297,19 @@ def _draw(
         )
         pygame.draw.rect(screen, ZONE_COLOR, zone_rect, width=2)
 
-    labels = {}
-    for team_id, prefix in ((player_team, "T"), (opponent_team, "O")):
-        for index, robot in enumerate(item for item in match.robots if item.team == team_id):
-            labels[robot.id] = f"{prefix}{index + 1}"
+    if all(robot.type == "infantry" for robot in match.robots):
+        labels = {}
+        for team_id, prefix in ((player_team, "T"), (opponent_team, "O")):
+            for index, robot in enumerate(
+                item for item in match.robots if item.team == team_id
+            ):
+                labels[robot.id] = f"{prefix}{index + 1}"
+    else:
+        type_labels = {"hero": "H", "infantry": "I", "sentry": "S"}
+        labels = {
+            robot.id: type_labels.get(robot.type, robot.type[:1].upper())
+            for robot in match.robots
+        }
 
     for robot in match.robots:
         center = (

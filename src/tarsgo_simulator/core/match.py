@@ -13,7 +13,7 @@ from tarsgo_simulator.rules.protocol import MatchResult, RuleSet
 from tarsgo_simulator.rules.registry import create_ruleset
 
 
-_OPPONENT_REPLAN_INTERVAL = 0.5
+_AI_REPLAN_INTERVAL = 0.5
 
 
 class Match:
@@ -69,9 +69,10 @@ class Match:
         self._events_from_last_update = 0
         self._active_update_dt: float | None = None
         self._active_update_start_time: float | None = None
-        player_team = scenario.player_team
-        self._opponent_replan_elapsed = {
-            robot.id: 0.0 for robot in self.robots if robot.team != player_team
+        self._ai_replan_elapsed = {
+            robot.id: 0.0
+            for robot in self.robots
+            if not self.is_player_controlled(robot.id)
         }
         self.ruleset.reset(self)
 
@@ -79,11 +80,14 @@ class Match:
     def time_limit(self) -> float:
         return self.ruleset.time_limit
 
+    def is_player_controlled(self, robot_id: str) -> bool:
+        return robot_id in self.config.scenario.player_controlled
+
     def order_move(self, robot_id: str, goal: tuple[float, float]) -> bool:
         if self.finished:
             return False
         robot = next((item for item in self.robots if item.id == robot_id), None)
-        if robot is None or not robot.alive or robot.team != self.config.scenario.player_team:
+        if robot is None or not robot.alive or not self.is_player_controlled(robot.id):
             return False
         return self._set_robot_destination(robot, goal)
 
@@ -157,7 +161,7 @@ class Match:
         if any(
             robot is None
             or not robot.alive
-            or robot.team != self.config.scenario.player_team
+            or not self.is_player_controlled(robot.id)
             for robot in selected
         ):
             return False
@@ -201,7 +205,7 @@ class Match:
         self._active_update_dt = dt
         self._active_update_start_time = self.elapsed_time
         try:
-            self._update_opponent_ai(dt)
+            self._update_ai(dt)
             for robot in self.robots:
                 robot.update_cooldown(dt)
             self._move_robots(dt)
@@ -272,37 +276,40 @@ class Match:
             if robot.alive and robot.id not in blocked:
                 robot.commit_movement(proposals[robot.id])
 
-    def _update_opponent_ai(self, dt: float) -> None:
-        player_team = self.config.scenario.player_team
-        players = [robot for robot in self.robots if robot.team == player_team and robot.alive]
-        for opponent in self.robots:
-            if opponent.team == player_team:
+    def _update_ai(self, dt: float) -> None:
+        for robot in self.robots:
+            if self.is_player_controlled(robot.id):
                 continue
-            if not opponent.alive or not players:
-                opponent.path.clear()
-                self._opponent_replan_elapsed[opponent.id] = 0.0
+            targets = [
+                target
+                for target in self.robots
+                if target.alive and target.team != robot.team
+            ]
+            if not robot.alive or not targets:
+                robot.path.clear()
+                self._ai_replan_elapsed[robot.id] = 0.0
                 continue
 
             target = min(
-                players,
-                key=lambda robot: (
-                    math.dist(opponent.position, robot.position),
-                    robot.id,
+                targets,
+                key=lambda candidate: (
+                    math.dist(robot.position, candidate.position),
+                    candidate.id,
                 ),
             )
-            distance = math.dist(opponent.position, target.position)
-            if distance <= opponent.attack_range and self.map.has_line_of_sight(
-                opponent.position, target.position
+            distance = math.dist(robot.position, target.position)
+            if distance <= robot.attack_range and self.map.has_line_of_sight(
+                robot.position, target.position
             ):
-                opponent.path.clear()
-                self._opponent_replan_elapsed[opponent.id] = 0.0
+                robot.path.clear()
+                self._ai_replan_elapsed[robot.id] = 0.0
                 continue
 
-            elapsed = self._opponent_replan_elapsed[opponent.id] + dt
-            if elapsed >= _OPPONENT_REPLAN_INTERVAL:
-                elapsed %= _OPPONENT_REPLAN_INTERVAL
-                self._set_robot_destination(opponent, target.position)
-            self._opponent_replan_elapsed[opponent.id] = elapsed
+            elapsed = self._ai_replan_elapsed[robot.id] + dt
+            if elapsed >= _AI_REPLAN_INTERVAL:
+                elapsed %= _AI_REPLAN_INTERVAL
+                self._set_robot_destination(robot, target.position)
+            self._ai_replan_elapsed[robot.id] = elapsed
 
     def _apply_result(self, result: MatchResult) -> None:
         self.finished = True

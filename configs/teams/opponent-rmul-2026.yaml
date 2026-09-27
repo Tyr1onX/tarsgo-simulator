@@ -1,0 +1,10 @@
+schema_version: 1
+team_id: opponent-rmul-2026
+display_name: Opponent
+robots:
+  - id: opponent-hero
+    type: hero
+  - id: opponent-infantry
+    type: infantry
+  - id: opponent-sentry
+    type: sentry

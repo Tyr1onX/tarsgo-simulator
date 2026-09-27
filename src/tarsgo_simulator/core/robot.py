@@ -1,4 +1,4 @@
-"""A single, data-driven infantry robot used by the V0 slice."""
+"""A single, data-driven robot used by the V0 slice."""
 
 from dataclasses import dataclass, field
 import math
