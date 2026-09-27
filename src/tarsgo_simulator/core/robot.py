@@ -6,6 +6,9 @@ import math
 from tarsgo_simulator.core.map import GameMap
 
 
+MovementProposal = tuple[tuple[float, float], list[tuple[float, float]]]
+
+
 @dataclass
 class Robot:
     id: str
@@ -35,38 +38,47 @@ class Robot:
             self.alive = False
             self.path.clear()
 
-    def update(self, dt: float, game_map: GameMap) -> None:
+    def update_cooldown(self, dt: float) -> None:
         if not self.alive:
             return
-
         self.attack_cooldown = max(0.0, self.attack_cooldown - dt)
+
+    def propose_movement(self, dt: float, game_map: GameMap) -> MovementProposal:
+        """Calculate this frame's move without changing the robot's state."""
+        if not self.alive:
+            return self.position, list(self.path)
+
         remaining = self.speed * dt
-        while self.path and remaining > 0:
-            waypoint = self.path[0]
-            distance = _distance(self.position, waypoint)
+        position = self.position
+        path = list(self.path)
+        while path and remaining > 0:
+            waypoint = path[0]
+            distance = _distance(position, waypoint)
             if distance < 0.001:
-                self.position = waypoint
-                self.path.pop(0)
+                position = waypoint
+                path.pop(0)
                 continue
-            if not game_map.can_traverse(self.position, waypoint):
-                self.path.clear()
-                return
+            if not game_map.can_traverse(position, waypoint):
+                return position, []
             if distance <= remaining:
-                self.position = waypoint
-                self.path.pop(0)
+                position = waypoint
+                path.pop(0)
                 remaining -= distance
                 continue
 
             ratio = remaining / distance
             next_position = (
-                self.position[0] + (waypoint[0] - self.position[0]) * ratio,
-                self.position[1] + (waypoint[1] - self.position[1]) * ratio,
+                position[0] + (waypoint[0] - position[0]) * ratio,
+                position[1] + (waypoint[1] - position[1]) * ratio,
             )
-            if not game_map.can_traverse(self.position, next_position):
-                self.path.clear()
-                return
-            self.position = next_position
+            if not game_map.can_traverse(position, next_position):
+                return position, []
+            position = next_position
             remaining = 0
+        return position, path
+
+    def commit_movement(self, proposal: MovementProposal) -> None:
+        self.position, self.path = proposal
 
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:

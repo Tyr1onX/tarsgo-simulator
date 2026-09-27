@@ -7,7 +7,7 @@ from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import MatchConfig, load_match_config
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import find_path
-from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.core.robot import MovementProposal, Robot
 
 
 _OPPONENT_REPLAN_INTERVAL = 0.5
@@ -52,6 +52,7 @@ class Match:
                         type=definition.type,
                     )
                 )
+        self._validate_spawn_separation()
         self.elapsed_time = 0.0
         self.finished = False
         self.winner: str | None = None
@@ -83,10 +84,60 @@ class Match:
 
         self._update_opponent_ai(dt)
         for robot in self.robots:
-            robot.update(dt, self.map)
+            robot.update_cooldown(dt)
+        self._move_robots(dt)
         update_combat(self.robots, self.map)
         self.elapsed_time += dt
         self._check_result()
+
+    def _validate_spawn_separation(self) -> None:
+        minimum_distance = self.map.collision_radius * 2
+        for index, first in enumerate(self.robots):
+            for second in self.robots[index + 1 :]:
+                if math.dist(first.position, second.position) < minimum_distance:
+                    raise ValueError(
+                        f"机器人出生点冲突：{first.id} 与 {second.id} 的距离小于 "
+                        f"{minimum_distance:g}"
+                    )
+
+    def _move_robots(self, dt: float) -> None:
+        proposals: dict[str, MovementProposal] = {}
+        for robot in self.robots:
+            proposals[robot.id] = (
+                robot.propose_movement(dt, self.map)
+                if robot.alive
+                else (robot.position, list(robot.path))
+            )
+
+        blocked: set[str] = set()
+        minimum_distance = self.map.collision_radius * 2
+        while True:
+            final_positions = {
+                robot.id: (
+                    robot.position if robot.id in blocked else proposals[robot.id][0]
+                )
+                for robot in self.robots
+            }
+            conflicts: set[str] = set()
+            for index, first in enumerate(self.robots):
+                for second in self.robots[index + 1 :]:
+                    if _movement_conflicts(
+                        first.position,
+                        final_positions[first.id],
+                        second.position,
+                        final_positions[second.id],
+                        minimum_distance,
+                    ):
+                        conflicts.update((first.id, second.id))
+
+            new_conflicts = conflicts - blocked
+            if not new_conflicts:
+                break
+            blocked.update(new_conflicts)
+
+        for robot in self.robots:
+            if robot.alive and robot.id not in blocked:
+                robot.commit_movement(proposals[robot.id])
 
     def _update_opponent_ai(self, dt: float) -> None:
         player_team = self.config.scenario.player_team
@@ -142,3 +193,32 @@ class Match:
             if team.team_id == team_id:
                 return team.display_name
         return team_id
+
+
+def _movement_conflicts(
+    start_a: tuple[float, float],
+    end_a: tuple[float, float],
+    start_b: tuple[float, float],
+    end_b: tuple[float, float],
+    minimum_distance: float,
+) -> bool:
+    """Check the closest relative separation during this frame's proposed moves."""
+    relative_start = (start_a[0] - start_b[0], start_a[1] - start_b[1])
+    relative_change = (
+        (end_a[0] - start_a[0]) - (end_b[0] - start_b[0]),
+        (end_a[1] - start_a[1]) - (end_b[1] - start_b[1]),
+    )
+    change_squared = relative_change[0] ** 2 + relative_change[1] ** 2
+    if change_squared == 0:
+        closest = relative_start
+    else:
+        progress = -(
+            relative_start[0] * relative_change[0]
+            + relative_start[1] * relative_change[1]
+        ) / change_squared
+        progress = min(1.0, max(0.0, progress))
+        closest = (
+            relative_start[0] + relative_change[0] * progress,
+            relative_start[1] + relative_change[1] * progress,
+        )
+    return math.hypot(*closest) < minimum_distance
