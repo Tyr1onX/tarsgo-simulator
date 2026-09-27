@@ -1868,6 +1868,7 @@ def test_rmul_counts_only_actual_hp_lost_as_attack_damage() -> None:
     target.hp = 5
     attacker.attack_cooldown = 0
     target.attack_cooldown = 999
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
 
     match.update(0.01)
 
@@ -1969,6 +1970,8 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
     opponent.position = (550.0, 260.0)
     player.attack_cooldown = 0
     opponent.attack_cooldown = 0
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+    match.ruleset.allowed_projectiles_by_robot[RMUL_OPPONENT_HERO] = 1
 
     match.update(0.01)
 
@@ -1994,6 +1997,7 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
     assert not match.ruleset.can_attack(player)
 
     opponent.attack_cooldown = 0
+    match.ruleset.allowed_projectiles_by_robot[RMUL_OPPONENT_HERO] = 1
     match.update(0.01)
     assert player.hp < 70
     assert player.attack_cooldown == 0
@@ -2029,6 +2033,7 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     # Supply zones only release state; they do not heal.
     robot.hp = 15
     robot.position = (110.0, 260.0)
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
     match.update(0.0)
     lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     assert not lifecycle.weak
@@ -2042,6 +2047,7 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     opponent.position = (550.0, 260.0)
     robot.attack_cooldown = 0
     opponent.attack_cooldown = 0
+    match.ruleset.allowed_projectiles_by_robot[RMUL_OPPONENT_HERO] = 1
     match.update(0.01)
 
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
@@ -2141,3 +2147,425 @@ def test_training_v0_keeps_dead_robots_permanently_dead() -> None:
 
     assert not robot.alive
     assert match.ruleset.display_state is None
+
+
+def _write_rmul_rule_config(tmp_path: Path, mutate) -> Path:
+    config_root = _copy_configs(tmp_path)
+    rules_file = config_root / "rules" / "rmul-2026-3v3.yaml"
+    data = yaml.safe_load(rules_file.read_text(encoding="utf-8"))
+    mutate(data)
+    rules_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return config_root / "scenarios" / "rmul-2026-rules-lab.yaml"
+
+
+def test_rmul_economy_and_allowed_projectiles_start_from_yaml() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+
+    assert rules.coins_by_team == {
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 0,
+    }
+    assert rules.allowed_projectiles_by_robot == {
+        RMUL_HERO: 0,
+        RMUL_INFANTRY: 0,
+        RMUL_SENTRY: 750,
+        RMUL_OPPONENT_HERO: 0,
+        RMUL_OPPONENT_INFANTRY: 0,
+        RMUL_OPPONENT_SENTRY: 750,
+    }
+    assert dict(match.ruleset.display_state.coins) == rules.coins_by_team
+    assert dict(
+        (robot_id, (projectile, count))
+        for robot_id, projectile, count in match.ruleset.display_state.robot_projectiles
+    ) == {
+        RMUL_HERO: ("42mm", 0),
+        RMUL_INFANTRY: ("17mm", 0),
+        RMUL_SENTRY: ("17mm", 750),
+        RMUL_OPPONENT_HERO: ("42mm", 0),
+        RMUL_OPPONENT_INFANTRY: ("17mm", 0),
+        RMUL_OPPONENT_SENTRY: ("17mm", 750),
+    }
+    for robot_id in (
+        RMUL_HERO,
+        RMUL_INFANTRY,
+        RMUL_OPPONENT_HERO,
+        RMUL_OPPONENT_INFANTRY,
+    ):
+        assert not rules.can_attack(_robot(match, robot_id))
+    assert rules.can_attack(_robot(match, RMUL_SENTRY))
+    assert rules.can_attack(_robot(match, RMUL_OPPONENT_SENTRY))
+
+
+def test_rmul_timed_coin_grant_uses_threshold_crossing_and_never_repeats() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+
+    match.update(0.9)
+    assert set(rules.coins_by_team.values()) == {0}
+    match.update(0.2)
+    assert set(rules.coins_by_team.values()) == {200}
+    assert rules._granted_timed_coin_events == {299}
+
+    match.update(0.5)
+    assert set(rules.coins_by_team.values()) == {200}
+
+
+def test_rmul_all_timed_coin_grants_are_large_dt_and_slice_invariant() -> None:
+    one_step = _rules_lab_match()
+    sliced = _rules_lab_match()
+
+    one_step.update(300.0)
+    for dt in (1.0, 60.0, 60.0, 60.0, 60.0, 59.0):
+        sliced.update(dt)
+
+    expected = {RMUL_TARS_TEAM: 1200, RMUL_OPPONENT_TEAM: 1200}
+    expected_events = {299, 239, 179, 119, 59}
+    assert one_step.ruleset.coins_by_team == expected
+    assert sliced.ruleset.coins_by_team == expected
+    assert one_step.ruleset._granted_timed_coin_events == expected_events
+    assert sliced.ruleset._granted_timed_coin_events == expected_events
+
+
+def test_rmul_vp_gap_rewards_trigger_when_crossed_and_only_once() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+    rules.victory_points.update({RMUL_TARS_TEAM: 200, RMUL_OPPONENT_TEAM: 131})
+    opponent_hero = _robot(match, RMUL_OPPONENT_HERO)
+    match.apply_damage(opponent_hero, opponent_hero.hp)
+    match.update(0.01)
+
+    assert rules.victory_points[RMUL_TARS_TEAM] - rules.victory_points[RMUL_OPPONENT_TEAM] == 89
+    assert rules.coins_by_team == {RMUL_TARS_TEAM: 0, RMUL_OPPONENT_TEAM: 200}
+    assert rules._granted_vp_gap_thresholds == {70}
+
+    rules.victory_points[RMUL_OPPONENT_TEAM] = 61
+    opponent_infantry = _robot(match, RMUL_OPPONENT_INFANTRY)
+    match.apply_damage(opponent_infantry, opponent_infantry.hp)
+    match.update(0.01)
+
+    assert rules.victory_points[RMUL_TARS_TEAM] - rules.victory_points[RMUL_OPPONENT_TEAM] == 159
+    assert rules.coins_by_team == {RMUL_TARS_TEAM: 0, RMUL_OPPONENT_TEAM: 400}
+    assert rules._granted_vp_gap_thresholds == {70, 140}
+
+
+def test_rmul_vp_gap_jump_awards_both_thresholds_and_leader_reversal_does_not_repeat() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+    rules.victory_points.update({RMUL_TARS_TEAM: 200, RMUL_OPPONENT_TEAM: 140})
+    rules._grant_vp_gap_coins(previous_gap=60)
+
+    rules.victory_points.update({RMUL_TARS_TEAM: 290, RMUL_OPPONENT_TEAM: 140})
+    rules._grant_vp_gap_coins(previous_gap=60)
+    assert rules._granted_vp_gap_thresholds == {70, 140}
+    assert rules.coins_by_team == {RMUL_TARS_TEAM: 0, RMUL_OPPONENT_TEAM: 400}
+
+    rules.victory_points.update({RMUL_TARS_TEAM: 120, RMUL_OPPONENT_TEAM: 200})
+    rules._grant_vp_gap_coins(previous_gap=150)
+    rules.victory_points.update({RMUL_TARS_TEAM: 210, RMUL_OPPONENT_TEAM: 200})
+    rules._grant_vp_gap_coins(previous_gap=10)
+    assert rules.coins_by_team == {RMUL_TARS_TEAM: 0, RMUL_OPPONENT_TEAM: 400}
+
+
+def test_rmul_hero_and_infantry_exchange_one_unit_in_own_supply() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+    rules.coins_by_team[RMUL_TARS_TEAM] = 20
+
+    assert match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 10
+    assert rules.allowed_projectiles_by_robot[RMUL_HERO] == 1
+    assert match.order_exchange_projectiles(RMUL_INFANTRY)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 0
+    assert rules.allowed_projectiles_by_robot[RMUL_INFANTRY] == 10
+    assert rules.allowed_projectiles_by_robot[RMUL_SENTRY] == 750
+
+
+def test_rmul_exchange_failures_are_atomic_and_respect_supply_and_control() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+    hero = _robot(match, RMUL_HERO)
+    red_balance = rules.coins_by_team[RMUL_TARS_TEAM]
+    counts = dict(rules.allowed_projectiles_by_robot)
+
+    rules.coins_by_team[RMUL_TARS_TEAM] = 9
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 9
+    assert rules.allowed_projectiles_by_robot == counts
+
+    rules.coins_by_team[RMUL_TARS_TEAM] = 100
+    hero.position = (450.0, 450.0)
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 100
+    assert rules.allowed_projectiles_by_robot == counts
+
+    hero.position = (790.0, 260.0)
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 100
+    assert rules._robot_penalties[RMUL_HERO].forbidden_elapsed == 0
+
+    hero.position = (120.0, 190.0)
+    rules.coins_by_team[RMUL_TARS_TEAM] = 1000
+    assert not match.order_exchange_projectiles(RMUL_SENTRY)
+    assert rules.allowed_projectiles_by_robot[RMUL_SENTRY] == 750
+    assert not match.order_exchange_projectiles(RMUL_OPPONENT_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 1000
+    assert rules.allowed_projectiles_by_robot == counts
+
+    rules._robot_penalties[RMUL_HERO].disqualified = True
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    rules._robot_penalties[RMUL_HERO].disqualified = False
+    hero.alive = False
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    hero.alive = True
+    match.finished = True
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 1000
+    assert rules.allowed_projectiles_by_robot == counts
+    assert red_balance == 0
+
+
+def test_rmul_committed_attack_consumes_one_projectile_and_zero_blocks_followup() -> None:
+    match = _rules_lab_match()
+    attacker = _robot(match, RMUL_HERO)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    attacker.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    attacker.attack_cooldown = 0
+    target.attack_cooldown = 999
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+
+    match.update(0.01)
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 0
+    assert target.hp == target.max_hp - attacker.damage
+    assert attacker.attack_cooldown == attacker.attack_interval
+
+    attacker.attack_cooldown = 0
+    match.update(0.01)
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 0
+    assert target.hp == target.max_hp - attacker.damage
+    assert attacker.attack_cooldown == 0
+
+
+def test_rmul_zero_projectiles_prevents_attack_without_setting_cooldown() -> None:
+    match = _rules_lab_match()
+    attacker = _robot(match, RMUL_HERO)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    attacker.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    attacker.attack_cooldown = 0
+    target.attack_cooldown = 999
+
+    match.update(0.01)
+
+    assert not match.ruleset.can_attack(attacker)
+    assert attacker.attack_cooldown == 0
+    assert target.hp == target.max_hp
+    assert match.ruleset.attack_damage_by_team[RMUL_TARS_TEAM] == 0
+
+
+@pytest.mark.parametrize("missing_target", ["none", "range", "line_of_sight"])
+def test_rmul_uncommitted_attack_does_not_consume_projectile(
+    missing_target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    match = _rules_lab_match()
+    attacker = _robot(match, RMUL_HERO)
+    attacker.position = (450.0, 260.0)
+    attacker.attack_cooldown = 0
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+    if missing_target == "none":
+        for robot in match.robots:
+            if robot.team == RMUL_OPPONENT_TEAM:
+                robot.alive = False
+    elif missing_target == "range":
+        _robot(match, RMUL_OPPONENT_HERO).position = (850.0, 260.0)
+    else:
+        monkeypatch.setattr(match.map, "has_line_of_sight", lambda *_: False)
+
+    match.update(0.01)
+
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 1
+    assert attacker.attack_cooldown == 0
+    assert match.ruleset.attack_damage_by_team[RMUL_TARS_TEAM] == 0
+
+
+def test_rmul_invincible_target_still_consumes_committed_projectile() -> None:
+    match = _rules_lab_match()
+    attacker = _robot(match, RMUL_HERO)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    attacker.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    attacker.attack_cooldown = 0
+    target.attack_cooldown = 999
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+    match.ruleset._robot_lifecycles[RMUL_OPPONENT_HERO].invincible_remaining = 10
+
+    match.update(0.01)
+
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 0
+    assert attacker.attack_cooldown == attacker.attack_interval
+    assert target.hp == target.max_hp
+    assert match.ruleset.attack_damage_by_team[RMUL_TARS_TEAM] == 0
+
+
+def test_rmul_weak_robot_does_not_consume_projectile() -> None:
+    match = _rules_lab_match()
+    attacker = _robot(match, RMUL_HERO)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    attacker.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    attacker.attack_cooldown = 0
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+    match.ruleset._robot_lifecycles[RMUL_HERO].weak = True
+
+    match.update(0.01)
+
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 1
+    assert attacker.attack_cooldown == 0
+    assert target.hp == target.max_hp
+
+
+def test_rmul_sentry_consumes_one_of_its_750_allowed_projectiles() -> None:
+    match = _rules_lab_match()
+    sentry = _robot(match, RMUL_SENTRY)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    sentry.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    sentry.attack_cooldown = 0
+    target.attack_cooldown = 999
+
+    match.update(0.01)
+
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_SENTRY] == 749
+    assert target.hp == target.max_hp - sentry.damage
+
+
+def test_rmul_each_committed_attack_consumes_even_if_target_was_already_killed() -> None:
+    match = _rules_lab_match()
+    hero = _robot(match, RMUL_HERO)
+    infantry = _robot(match, RMUL_INFANTRY)
+    target = _robot(match, RMUL_OPPONENT_HERO)
+    hero.position = (450.0, 250.0)
+    infantry.position = (450.0, 280.0)
+    target.position = (530.0, 265.0)
+    target.hp = 10
+    hero.attack_cooldown = 0
+    infantry.attack_cooldown = 0
+    target.attack_cooldown = 999
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
+    match.ruleset.allowed_projectiles_by_robot[RMUL_INFANTRY] = 1
+
+    match.update(0.01)
+
+    assert not target.alive
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 0
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_INFANTRY] == 0
+
+
+def test_rmul_allowed_projectiles_survive_death_and_respawn() -> None:
+    match = _rules_lab_match()
+    match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 37
+
+    _complete_rmul_respawn(match, RMUL_HERO)
+
+    assert _robot(match, RMUL_HERO).alive
+    assert match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] == 37
+
+
+def test_rmul_reset_restores_coins_grants_and_all_projectile_allowances() -> None:
+    match = _rules_lab_match()
+    rules = match.ruleset
+    match.update(1.1)
+    rules.victory_points.update({RMUL_TARS_TEAM: 200, RMUL_OPPONENT_TEAM: 120})
+    rules._grant_vp_gap_coins(previous_gap=69)
+    assert match.order_exchange_projectiles(RMUL_HERO)
+    rules.allowed_projectiles_by_robot[RMUL_SENTRY] = 749
+    assert rules._granted_timed_coin_events == {299}
+    assert rules._granted_vp_gap_thresholds == {70}
+
+    match.reset()
+
+    assert rules.coins_by_team == {RMUL_TARS_TEAM: 0, RMUL_OPPONENT_TEAM: 0}
+    assert rules._granted_timed_coin_events == set()
+    assert rules._granted_vp_gap_thresholds == set()
+    assert rules.allowed_projectiles_by_robot == {
+        RMUL_HERO: 0,
+        RMUL_INFANTRY: 0,
+        RMUL_SENTRY: 750,
+        RMUL_OPPONENT_HERO: 0,
+        RMUL_OPPONENT_INFANTRY: 0,
+        RMUL_OPPONENT_SENTRY: 750,
+    }
+
+
+def test_rmul_red_card_has_no_extra_economy_side_effects() -> None:
+    match = _rules_lab_match()
+    match.elapsed_time = 20.0
+    rules = match.ruleset
+    offender, _ = _prepare_rmul_forbidden_zone(match, RMUL_HERO)
+    rules.coins_by_team[RMUL_TARS_TEAM] = 25
+    before_allowances = dict(rules.allowed_projectiles_by_robot)
+
+    match.update(23.1)
+
+    assert rules._robot_penalties[RMUL_HERO].disqualified
+    assert not offender.alive
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 25
+    assert rules.allowed_projectiles_by_robot == before_allowances
+    assert not match.order_exchange_projectiles(RMUL_HERO)
+    assert rules.coins_by_team[RMUL_TARS_TEAM] == 25
+
+
+def test_training_rules_have_no_exchange_or_projectile_limit() -> None:
+    match = _open_field_match()
+    attacker = _robot(match, T1)
+    target = _robot(match, O1)
+    attacker.position = (400.0, 260.0)
+    target.position = (500.0, 260.0)
+    attacker.attack_cooldown = 0
+    target.attack_cooldown = 999
+
+    assert not match.order_exchange_projectiles(T1)
+    assert match.ruleset.display_state is None
+    assert match.ruleset.can_attack(attacker)
+    match.update(0.01)
+    assert target.hp == target.max_hp - attacker.damage
+
+
+@pytest.mark.parametrize(
+    "invalid_case",
+    [
+        "empty_timed_grants",
+        "duplicate_timed_time",
+        "invalid_timed_amount",
+        "timed_time_out_of_range",
+        "duplicate_vp_threshold",
+        "negative_initial_allowance",
+        "sentry_exchangeable",
+        "missing_exchange_amount",
+    ],
+)
+def test_rmul_invalid_economy_yaml_is_rejected(
+    tmp_path: Path, invalid_case: str
+) -> None:
+    def mutate(data: dict) -> None:
+        if invalid_case == "empty_timed_grants":
+            data["economy"]["timed_grants"] = []
+        elif invalid_case == "duplicate_timed_time":
+            data["economy"]["timed_grants"][1]["remaining_time"] = 299
+        elif invalid_case == "invalid_timed_amount":
+            data["economy"]["timed_grants"][0]["amount"] = 0
+        elif invalid_case == "timed_time_out_of_range":
+            data["economy"]["timed_grants"][0]["remaining_time"] = 300
+        elif invalid_case == "duplicate_vp_threshold":
+            data["economy"]["vp_gap_grants"][1]["threshold"] = 70
+        elif invalid_case == "negative_initial_allowance":
+            data["allowed_projectiles"]["hero"]["initial"] = -1
+        elif invalid_case == "sentry_exchangeable":
+            data["allowed_projectiles"]["sentry"]["exchangeable"] = True
+        else:
+            del data["allowed_projectiles"]["infantry"]["exchange_amount"]
+
+    scenario_file = _write_rmul_rule_config(tmp_path, mutate)
+    with pytest.raises(ConfigError):
+        Match(load_match_config(scenario_file))

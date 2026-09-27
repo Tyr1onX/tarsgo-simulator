@@ -38,6 +38,15 @@ class _RobotPenaltyState:
     disqualified: bool = False
 
 
+@dataclass(frozen=True)
+class _AllowedProjectileRule:
+    projectile: str
+    initial: int
+    exchangeable: bool
+    exchange_cost: int | None = None
+    exchange_amount: int | None = None
+
+
 class RMUL2026Rules:
     def __init__(self, document: RuleDocument) -> None:
         if document.metadata.status != "official-partial":
@@ -51,6 +60,12 @@ class RMUL2026Rules:
 
         self._document = document
         self._time_limit = _number(document.data, "match_duration", document)
+        economy = _mapping(document.data, "economy", document)
+        self._timed_coin_grants = _parse_timed_coin_grants(
+            economy, document, self._time_limit
+        )
+        self._vp_gap_coin_grants = _parse_vp_gap_coin_grants(economy, document)
+        self._allowed_projectile_rules = _parse_allowed_projectiles(document)
         victory_points = _mapping(document.data, "victory_points", document)
         self._initial_victory_points = _integer(
             victory_points, "initial", document, "victory_points.initial"
@@ -225,6 +240,10 @@ class RMUL2026Rules:
         self._forbidden_zones: dict[str, Zone] = {}
         self._opposing_team: dict[str, str] = {}
         self._robot_penalties: dict[str, _RobotPenaltyState] = {}
+        self.coins_by_team: dict[str, int] = {}
+        self.allowed_projectiles_by_robot: dict[str, int] = {}
+        self._granted_timed_coin_events: set[int] = set()
+        self._granted_vp_gap_thresholds: set[int] = set()
 
     @property
     def time_limit(self) -> float:
@@ -261,6 +280,15 @@ class RMUL2026Rules:
             control_owner=self.control_owner,
             robot_statuses=tuple(robot_statuses),
             attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
+            coins=tuple(sorted(self.coins_by_team.items())),
+            robot_projectiles=tuple(
+                (
+                    robot_id,
+                    self._allowed_projectile_rules[robot_type].projectile,
+                    self.allowed_projectiles_by_robot[robot_id],
+                )
+                for robot_id, robot_type in sorted(self._robot_types_by_id.items())
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -274,7 +302,41 @@ class RMUL2026Rules:
 
     def can_attack(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
-        return robot.alive and (lifecycle is None or not lifecycle.weak)
+        return (
+            robot.alive
+            and self.allowed_projectiles_by_robot.get(robot.id, 0) > 0
+            and (lifecycle is None or not lifecycle.weak)
+        )
+
+    def on_attack_committed(self, robot: Robot) -> None:
+        if robot.id in self.allowed_projectiles_by_robot:
+            self.allowed_projectiles_by_robot[robot.id] = max(
+                0, self.allowed_projectiles_by_robot[robot.id] - 1
+            )
+
+    def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        rule = self._allowed_projectile_rules.get(robot.type)
+        penalty = self._robot_penalties.get(robot.id)
+        supply_zone = self._supply_zones.get(robot.team)
+        if (
+            match.finished
+            or rule is None
+            or not rule.exchangeable
+            or rule.exchange_cost is None
+            or rule.exchange_amount is None
+            or not robot.alive
+            or penalty is None
+            or penalty.disqualified
+            or supply_zone is None
+            or not supply_zone.contains(robot.position)
+            or self.coins_by_team.get(robot.team, 0) < rule.exchange_cost
+            or robot.id not in self.allowed_projectiles_by_robot
+        ):
+            return False
+
+        self.coins_by_team[robot.team] -= rule.exchange_cost
+        self.allowed_projectiles_by_robot[robot.id] += rule.exchange_amount
+        return True
 
     def can_receive_damage(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
@@ -352,10 +414,18 @@ class RMUL2026Rules:
             )
             for robot in match.robots
         }
+        self._robot_types_by_id = {robot.id: robot.type for robot in match.robots}
+        self.allowed_projectiles_by_robot = {
+            robot.id: self._allowed_projectile_rules[robot.type].initial
+            for robot in match.robots
+        }
         self.victory_points = {
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
         }
+        self.coins_by_team = dict.fromkeys(self.victory_points, 0)
+        self._granted_timed_coin_events = set()
+        self._granted_vp_gap_thresholds = set()
         self.attack_damage_by_team = dict.fromkeys(self.victory_points, 0)
         self.control_owner = None
         self._control_loss_elapsed = 0.0
@@ -363,6 +433,10 @@ class RMUL2026Rules:
         self._previous_zone_teams = set()
 
     def update(self, match: "Match", dt: float) -> None:
+        team_ids = tuple(self.victory_points)
+        previous_vp_gap = abs(
+            self.victory_points[team_ids[0]] - self.victory_points[team_ids[1]]
+        )
         # Consume each damage/death fact once, including facts emitted by a
         # penalty later in this same update.
         event_cursor = 0
@@ -394,6 +468,47 @@ class RMUL2026Rules:
         entering_teams = present_teams - self._previous_zone_teams
         self._advance_control(present_teams, entering_teams, active_dt)
         self._previous_zone_teams = present_teams
+        self._grant_timed_coins(match, dt)
+        self._grant_vp_gap_coins(previous_vp_gap)
+
+    def _grant_timed_coins(self, match: "Match", dt: float) -> None:
+        frame_start = match.elapsed_time - dt
+        remaining_before = min(
+            self._time_limit, max(0.0, self._time_limit - frame_start)
+        )
+        remaining_after = min(
+            self._time_limit, max(0.0, self._time_limit - match.elapsed_time)
+        )
+        for remaining_time, amount in self._timed_coin_grants:
+            if (
+                remaining_time not in self._granted_timed_coin_events
+                and remaining_before > remaining_time
+                and remaining_after <= remaining_time
+            ):
+                for team_id in self.coins_by_team:
+                    self.coins_by_team[team_id] += amount
+                self._granted_timed_coin_events.add(remaining_time)
+
+    def _grant_vp_gap_coins(self, previous_gap: int) -> None:
+        team_ids = tuple(self.victory_points)
+        current_gap = abs(
+            self.victory_points[team_ids[0]] - self.victory_points[team_ids[1]]
+        )
+        if current_gap < previous_gap:
+            return
+        if self.victory_points[team_ids[0]] < self.victory_points[team_ids[1]]:
+            losing_team = team_ids[0]
+        elif self.victory_points[team_ids[1]] < self.victory_points[team_ids[0]]:
+            losing_team = team_ids[1]
+        else:
+            return
+        for threshold, amount in self._vp_gap_coin_grants:
+            if (
+                threshold not in self._granted_vp_gap_thresholds
+                and previous_gap < threshold <= current_gap
+            ):
+                self.coins_by_team[losing_team] += amount
+                self._granted_vp_gap_thresholds.add(threshold)
 
     def _consume_events(
         self, match: "Match", start: int
@@ -691,6 +806,129 @@ def _mapping(data: Mapping[str, Any], key: str, document: RuleDocument) -> Mappi
     return value
 
 
+def _parse_timed_coin_grants(
+    economy: Mapping[str, Any], document: RuleDocument, time_limit: float
+) -> tuple[tuple[int, int], ...]:
+    if set(economy) != {"timed_grants", "vp_gap_grants"}:
+        raise ConfigError(
+            f"{document.path}: `economy` 只能包含 timed_grants、vp_gap_grants"
+        )
+    grants = economy.get("timed_grants")
+    if not isinstance(grants, list) or not grants:
+        raise ConfigError(f"{document.path}: `economy.timed_grants` 必须是非空列表")
+    parsed = []
+    seen_times: set[int] = set()
+    for index, item in enumerate(grants):
+        field = f"economy.timed_grants[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{document.path}: `{field}` 必须是 YAML 字典")
+        if set(item) != {"remaining_time", "amount"}:
+            raise ConfigError(f"{document.path}: `{field}` 字段不完整或包含未知字段")
+        remaining_time = _positive_integer(
+            item, "remaining_time", document, f"{field}.remaining_time"
+        )
+        amount = _positive_integer(item, "amount", document, f"{field}.amount")
+        if remaining_time >= time_limit:
+            raise ConfigError(
+                f"{document.path}: `{field}.remaining_time` 必须小于比赛时长"
+            )
+        if remaining_time in seen_times:
+            raise ConfigError(
+                f"{document.path}: `economy.timed_grants` remaining_time 不能重复"
+            )
+        seen_times.add(remaining_time)
+        parsed.append((remaining_time, amount))
+    return tuple(sorted(parsed, reverse=True))
+
+
+def _parse_vp_gap_coin_grants(
+    economy: Mapping[str, Any], document: RuleDocument
+) -> tuple[tuple[int, int], ...]:
+    grants = economy.get("vp_gap_grants")
+    if not isinstance(grants, list) or not grants:
+        raise ConfigError(f"{document.path}: `economy.vp_gap_grants` 必须是非空列表")
+    parsed = []
+    seen_thresholds: set[int] = set()
+    for index, item in enumerate(grants):
+        field = f"economy.vp_gap_grants[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{document.path}: `{field}` 必须是 YAML 字典")
+        if set(item) != {"threshold", "amount"}:
+            raise ConfigError(f"{document.path}: `{field}` 字段不完整或包含未知字段")
+        threshold = _positive_integer(
+            item, "threshold", document, f"{field}.threshold"
+        )
+        amount = _positive_integer(item, "amount", document, f"{field}.amount")
+        if threshold in seen_thresholds:
+            raise ConfigError(
+                f"{document.path}: `economy.vp_gap_grants` threshold 不能重复"
+            )
+        seen_thresholds.add(threshold)
+        parsed.append((threshold, amount))
+    return tuple(sorted(parsed))
+
+
+def _parse_allowed_projectiles(
+    document: RuleDocument,
+) -> dict[str, _AllowedProjectileRule]:
+    definitions = _mapping(document.data, "allowed_projectiles", document)
+    if set(definitions) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: `allowed_projectiles` 必须只包含 hero、infantry、sentry"
+        )
+
+    parsed = {}
+    for robot_type in _RMUL_ROBOT_TYPES:
+        field = f"allowed_projectiles.{robot_type}"
+        item = _mapping(definitions, robot_type, document)
+        projectile = _string(item, "projectile", document, f"{field}.projectile")
+        initial = _nonnegative_integer(item, "initial", document, f"{field}.initial")
+        exchangeable = item.get("exchangeable")
+        if not isinstance(exchangeable, bool):
+            raise ConfigError(f"{document.path}: `{field}.exchangeable` 必须是布尔值")
+
+        if robot_type == "sentry":
+            if exchangeable:
+                raise ConfigError(f"{document.path}: 哨兵允许发弹量不可兑换增加")
+            expected_keys = {"projectile", "initial", "exchangeable"}
+            if set(item) != expected_keys:
+                raise ConfigError(
+                    f"{document.path}: `{field}` 不可兑换，不应配置兑换价格或数量"
+                )
+            parsed[robot_type] = _AllowedProjectileRule(
+                projectile=projectile,
+                initial=initial,
+                exchangeable=False,
+            )
+            continue
+
+        if not exchangeable:
+            raise ConfigError(
+                f"{document.path}: `{field}.exchangeable` 必须为 true"
+            )
+        expected_keys = {
+            "projectile",
+            "initial",
+            "exchangeable",
+            "exchange_cost",
+            "exchange_amount",
+        }
+        if set(item) != expected_keys:
+            raise ConfigError(f"{document.path}: `{field}` 兑换参数不完整或包含未知字段")
+        parsed[robot_type] = _AllowedProjectileRule(
+            projectile=projectile,
+            initial=initial,
+            exchangeable=True,
+            exchange_cost=_positive_integer(
+                item, "exchange_cost", document, f"{field}.exchange_cost"
+            ),
+            exchange_amount=_positive_integer(
+                item, "exchange_amount", document, f"{field}.exchange_amount"
+            ),
+        )
+    return parsed
+
+
 def _string(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
 ) -> str:
@@ -723,6 +961,24 @@ def _integer(
     value = data.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
+    return value
+
+
+def _positive_integer(
+    data: Mapping[str, Any], key: str, document: RuleDocument, field: str
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
+    return value
+
+
+def _nonnegative_integer(
+    data: Mapping[str, Any], key: str, document: RuleDocument, field: str
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负整数")
     return value
 
 
