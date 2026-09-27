@@ -17,5 +17,7 @@ setup:
     red: tarsgo
     blue: opponent-balanced
   spawns:
-    tarsgo-infantry: [120, 260]
-    opponent-infantry: [780, 260]
+    tarsgo-infantry-1: [120, 210]
+    tarsgo-infantry-2: [120, 310]
+    opponent-infantry-1: [780, 210]
+    opponent-infantry-2: [780, 310]

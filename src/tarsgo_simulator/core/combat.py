@@ -7,22 +7,26 @@ from tarsgo_simulator.core.robot import Robot
 
 
 def update_combat(robots: list[Robot], game_map: GameMap) -> None:
-    """Let each living robot attack the only opposing living robot in range."""
+    """Let each robot attack its nearest visible living enemy in range."""
     attacks: list[tuple[Robot, Robot, int]] = []
     for attacker in robots:
         if not attacker.alive or attacker.attack_cooldown > 0:
             continue
 
-        target = next(
-            (robot for robot in robots if robot.alive and robot.team != attacker.team),
-            None,
+        targets = [
+            robot
+            for robot in robots
+            if robot.alive
+            and robot.team != attacker.team
+            and _distance(attacker.position, robot.position) <= attacker.attack_range
+            and game_map.has_line_of_sight(attacker.position, robot.position)
+        ]
+        if not targets:
+            continue
+        target = min(
+            targets,
+            key=lambda robot: (_distance(attacker.position, robot.position), robot.id),
         )
-        if target is None:
-            continue
-        if _distance(attacker.position, target.position) > attacker.attack_range:
-            continue
-        if not game_map.has_line_of_sight(attacker.position, target.position):
-            continue
 
         attacker.attack_cooldown = attacker.attack_interval
         attacks.append((attacker, target, attacker.damage))

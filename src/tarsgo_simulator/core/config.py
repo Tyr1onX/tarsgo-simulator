@@ -26,11 +26,16 @@ class InfantryRules:
 
 
 @dataclass(frozen=True)
+class RobotDefinition:
+    id: str
+    type: str
+
+
+@dataclass(frozen=True)
 class TeamDefinition:
     team_id: str
     display_name: str
-    robot_id: str
-    robot_type: str
+    robots: tuple[RobotDefinition, ...]
 
 
 @dataclass(frozen=True)
@@ -120,9 +125,13 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         raise ConfigError(f"{scenario_file}: `player_team` 必须是 setup.teams 中的一支队伍")
 
     spawn_data = _mapping(setup, "spawns", "setup.spawns", scenario_file)
-    robot_ids = [team.robot_id for team in teams.values()]
+    robot_ids = [robot.id for team in teams.values() for robot in team.robots]
     if len(set(robot_ids)) != len(robot_ids):
-        raise ConfigError(f"{scenario_file}: 双方机器人 id 必须不同")
+        raise ConfigError(f"{scenario_file}: 比赛内所有机器人 id 必须全局唯一")
+    unknown_spawns = set(spawn_data) - set(robot_ids)
+    if unknown_spawns:
+        unknown = ", ".join(sorted(str(robot_id) for robot_id in unknown_spawns))
+        raise ConfigError(f"{scenario_file}: 出生点引用了未配置的机器人：{unknown}")
     spawns = {robot_id: _point(spawn_data, robot_id, scenario_file) for robot_id in robot_ids}
 
     scenario = ScenarioDefinition(
@@ -242,13 +251,25 @@ def _load_team(path: Path) -> TeamDefinition:
     team_id = _string(data, "team_id", "team_id", path)
     display_name = _string(data, "display_name", "display_name", path)
     robots = _required(data, "robots", "robots", path)
-    if not isinstance(robots, list) or len(robots) != 1 or not isinstance(robots[0], dict):
-        raise ConfigError(f"{path}: `robots` 当前必须只包含一台步兵")
-    robot_id = _string(robots[0], "id", "robots[0].id", path)
-    robot_type = _string(robots[0], "type", "robots[0].type", path)
-    if robot_type != "infantry":
-        raise ConfigError(f"{path}: `robots[0].type` 当前只支持 `infantry`")
-    return TeamDefinition(team_id, display_name, robot_id, robot_type)
+    if not isinstance(robots, list) or not robots:
+        raise ConfigError(f"{path}: `robots` 必须是非空列表")
+
+    definitions = []
+    robot_ids: set[str] = set()
+    for index, value in enumerate(robots):
+        field = f"robots[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path}: `{field}` 必须是 YAML 字典")
+        robot_id = _string(value, "id", f"{field}.id", path)
+        robot_type = _string(value, "type", f"{field}.type", path)
+        if robot_id in robot_ids:
+            raise ConfigError(f"{path}: 机器人 id `{robot_id}` 在同一队中重复")
+        if robot_type != "infantry":
+            raise ConfigError(f"{path}: `{field}.type` 当前只支持 `infantry`")
+        robot_ids.add(robot_id)
+        definitions.append(RobotDefinition(robot_id, robot_type))
+
+    return TeamDefinition(team_id, display_name, tuple(definitions))
 
 
 def _safe_name(value: str, field: str, path: Path) -> str:

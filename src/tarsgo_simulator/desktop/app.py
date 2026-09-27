@@ -67,6 +67,10 @@ def main() -> None:
                         match.order_move(selected_robot_id, world)
 
             match.update(dt)
+            if selected_robot_id is not None and not any(
+                robot.id == selected_robot_id and robot.alive for robot in match.robots
+            ):
+                selected_robot_id = None
             _draw(
                 screen,
                 font,
@@ -112,11 +116,17 @@ def _draw(
     selected_robot_id: str | None,
 ) -> None:
     screen.fill(BACKGROUND)
-    player = next(robot for robot in match.robots if robot.team == player_team)
-    opponent = next(robot for robot in match.robots if robot.team == opponent_team)
+    player_robots = [robot for robot in match.robots if robot.team == player_team]
+    opponent_robots = [robot for robot in match.robots if robot.team == opponent_team]
 
-    left = f"{match.team_name(player_team)}  HP {player.hp}/{player.max_hp}"
-    right = f"{match.team_name(opponent_team)}  HP {opponent.hp}/{opponent.max_hp}"
+    player_alive = sum(robot.alive for robot in player_robots)
+    opponent_alive = sum(robot.alive for robot in opponent_robots)
+    player_hp = sum(robot.hp for robot in player_robots)
+    opponent_hp = sum(robot.hp for robot in opponent_robots)
+    player_max_hp = sum(robot.max_hp for robot in player_robots)
+    opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
+    left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
+    right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
     timer = max(0, math.ceil(match.config.match_duration - match.elapsed_time))
     if match.finished:
         status = f"{match.team_name(match.winner)} WINS" if match.winner else "DRAW"
@@ -141,6 +151,11 @@ def _draw(
         )
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
 
+    labels = {}
+    for team_id, prefix in ((player_team, "T"), (opponent_team, "O")):
+        for index, robot in enumerate(item for item in match.robots if item.team == team_id):
+            labels[robot.id] = f"{prefix}{index + 1}"
+
     for robot in match.robots:
         center = (
             round(MAP_ORIGIN[0] + robot.position[0]),
@@ -159,8 +174,7 @@ def _draw(
         hp_width = round(bar_width * robot.hp / robot.max_hp)
         if hp_width:
             pygame.draw.rect(screen, HP_COLOR, (bar_x, bar_y, hp_width, bar_height))
-        label = "TARS" if robot.team == player_team else "OPP"
-        label_surface = small_font.render(label, True, TEXT_COLOR)
+        label_surface = small_font.render(labels[robot.id], True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
 
 

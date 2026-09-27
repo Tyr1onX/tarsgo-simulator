@@ -2,5 +2,7 @@ schema_version: 1
 team_id: opponent-balanced
 display_name: Opponent
 robots:
-  - id: opponent-infantry
+  - id: opponent-infantry-1
+    type: infantry
+  - id: opponent-infantry-2
     type: infantry
