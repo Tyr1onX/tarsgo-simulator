@@ -66,6 +66,8 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_start = None
                         selection_current = None
                         selection_shift = False
+                    elif event.key == pygame.K_e and len(selected_robot_ids) == 1:
+                        match.order_exchange_projectiles(next(iter(selected_robot_ids)))
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         if _screen_to_world(event.pos, match) is not None:
@@ -245,13 +247,14 @@ def _draw(
     else:
         victory_points = dict(display_state.victory_points)
         attack_damage = dict(display_state.attack_damage)
+        coins = dict(display_state.coins)
         left = (
             f"{match.team_name(player_team)} VP {victory_points[player_team]} "
-            f"DMG {attack_damage.get(player_team, 0)}"
+            f"C {coins.get(player_team, 0)} DMG {attack_damage.get(player_team, 0)}"
         )
         right = (
             f"{match.team_name(opponent_team)} VP {victory_points[opponent_team]} "
-            f"DMG {attack_damage.get(opponent_team, 0)}"
+            f"C {coins.get(opponent_team, 0)} DMG {attack_damage.get(opponent_team, 0)}"
         )
     timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
@@ -310,6 +313,14 @@ def _draw(
             robot.id: type_labels.get(robot.type, robot.type[:1].upper())
             for robot in match.robots
         }
+    projectile_counts = (
+        {
+            robot_id: f"{projectile.removesuffix('mm')}:{count}"
+            for robot_id, projectile, count in display_state.robot_projectiles
+        }
+        if display_state is not None
+        else {}
+    )
 
     for robot in match.robots:
         center = (
@@ -329,7 +340,10 @@ def _draw(
         hp_width = round(bar_width * robot.hp / robot.max_hp)
         if hp_width:
             pygame.draw.rect(screen, HP_COLOR, (bar_x, bar_y, hp_width, bar_height))
-        label_surface = small_font.render(labels[robot.id], True, TEXT_COLOR)
+        robot_label = labels[robot.id]
+        if robot.id in projectile_counts:
+            robot_label = f"{robot_label} {projectile_counts[robot.id]}"
+        label_surface = small_font.render(robot_label, True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
         robot_status = robot_statuses.get(robot.id)
         if robot_status:

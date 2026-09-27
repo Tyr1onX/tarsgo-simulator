@@ -23,6 +23,33 @@ respawn:
   invincibility_duration: 30
 supply:
   heal_fraction_per_second: 0.25
+economy:
+  timed_grants:
+    - {remaining_time: 299, amount: 200}
+    - {remaining_time: 239, amount: 200}
+    - {remaining_time: 179, amount: 200}
+    - {remaining_time: 119, amount: 300}
+    - {remaining_time: 59, amount: 300}
+  vp_gap_grants:
+    - {threshold: 70, amount: 200}
+    - {threshold: 140, amount: 200}
+allowed_projectiles:
+  hero:
+    projectile: 42mm
+    initial: 0
+    exchangeable: true
+    exchange_cost: 10
+    exchange_amount: 1
+  infantry:
+    projectile: 17mm
+    initial: 0
+    exchangeable: true
+    exchange_cost: 10
+    exchange_amount: 10
+  sentry:
+    projectile: 17mm
+    initial: 750
+    exchangeable: false
 supply_zones:
   red: red-supply
   blue: blue-supply

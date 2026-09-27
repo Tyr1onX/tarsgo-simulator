@@ -91,6 +91,14 @@ class Match:
             return False
         return self._set_robot_destination(robot, goal)
 
+    def order_exchange_projectiles(self, robot_id: str) -> bool:
+        if self.finished:
+            return False
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if robot is None or not robot.alive or not self.is_player_controlled(robot.id):
+            return False
+        return self.ruleset.exchange_projectiles(self, robot)
+
     def apply_damage(
         self,
         target: Robot,
@@ -213,6 +221,7 @@ class Match:
                 self.robots,
                 self.map,
                 can_attack=self.ruleset.can_attack,
+                on_attack_committed=self.ruleset.on_attack_committed,
                 apply_damage=lambda target, amount, attacker: self.apply_damage(
                     target, amount, source_robot=attacker
                 ),

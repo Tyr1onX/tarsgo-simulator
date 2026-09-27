@@ -29,6 +29,8 @@ class RuleSetDisplayState:
     control_owner: str | None
     robot_statuses: tuple[tuple[str, str], ...] = ()
     attack_damage: tuple[tuple[str, int], ...] = ()
+    coins: tuple[tuple[str, int], ...] = ()
+    robot_projectiles: tuple[tuple[str, str, int], ...] = ()
 
 
 class RuleSet(Protocol):
@@ -38,6 +40,10 @@ class RuleSet(Protocol):
     def robot_parameters(self, robot_type: str) -> RobotParameters: ...
 
     def can_attack(self, robot: "Robot") -> bool: ...
+
+    def on_attack_committed(self, robot: "Robot") -> None: ...
+
+    def exchange_projectiles(self, match: "Match", robot: "Robot") -> bool: ...
 
     def can_receive_damage(self, robot: "Robot") -> bool: ...
 

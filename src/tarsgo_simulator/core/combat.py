@@ -13,6 +13,7 @@ def update_combat(
     *,
     can_attack: Callable[[Robot], bool],
     apply_damage: Callable[[Robot, int, Robot], int],
+    on_attack_committed: Callable[[Robot], None] | None = None,
 ) -> None:
     """Let each robot attack its nearest visible living enemy in range."""
     attacks: list[tuple[Robot, Robot, int]] = []
@@ -37,6 +38,8 @@ def update_combat(
 
         attacker.attack_cooldown = attacker.attack_interval
         attacks.append((attacker, target, attacker.damage))
+        if on_attack_committed is not None:
+            on_attack_committed(attacker)
 
     # All attacks are chosen before damage is applied, preserving same-frame
     # attacks even when one robot is destroyed by another intent.

@@ -43,6 +43,13 @@ class TrainingV0Rules:
     def can_attack(self, robot: Robot) -> bool:
         return robot.alive
 
+    def on_attack_committed(self, robot: Robot) -> None:
+        """Training V0 has no limited projectile resource."""
+
+    def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        """Training V0 has no economy or projectile exchange."""
+        return False
+
     def can_receive_damage(self, robot: Robot) -> bool:
         return robot.alive
 
