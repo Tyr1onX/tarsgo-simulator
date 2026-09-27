@@ -4,18 +4,18 @@
 
 本仓库自己的代码适用根目录 `LICENSE` 中的 MIT License。
 
-## 当前第三方代码与资源
+## 当前依赖
 
-初始底座未 vendoring、复制或改写外部项目源码，也未加入第三方图片、字体或音效。
+依赖版本范围见 `pyproject.toml` 与 `requirements-dev.txt`。下表记录上游声明的许可证；它不是最终打包文件的完整许可证清单。
 
-运行依赖通过 Python 包管理器单独安装：
+| 依赖 | 用途 | 上游许可证 |
+| --- | --- | --- |
+| Pygame | 运行时 | GNU LGPL v2.1；上游说明见 [pygame README](https://github.com/pygame/pygame#license) 与其 `docs/LGPL.txt` |
+| PyYAML | 运行时 | MIT；见 [PyYAML 项目](https://github.com/yaml/pyyaml#license) |
+| pytest | 开发与 CI 测试 | MIT；见 [pytest 项目](https://github.com/pytest-dev/pytest#license) |
+| PyInstaller | 开发与桌面打包 | GPL v2 with exception；少数文件另受 Apache-2.0 约束。其例外允许分发由它构建的应用，但仍须遵守被打包依赖的许可证；见 [PyInstaller 许可证说明](https://pyinstaller.org/en/latest/license.html) |
 
-- Pygame：运行时依赖。
-- PyYAML：运行时依赖。
-- pytest：开发/CI 测试依赖。
-- PyInstaller：桌面打包依赖。
-
-依赖及其传递依赖仍受各自上游许可证约束。准备向队员分发打包文件时，应基于实际锁定的依赖版本核对并附上完整的第三方许可证与 notices。
+初始底座没有 vendoring、复制或改写外部项目源码，也没有加入第三方图片、字体或音效。当前 CI 只提供构建骨架。准备分发 `.exe` 或 `.app` 时，须根据实际解析并打入应用的依赖版本生成完整 notices，并确认 Pygame 所带 SDL 组件等传递依赖的许可证要求。
 
 ## 计划评估的上游项目
 
