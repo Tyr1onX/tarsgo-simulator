@@ -414,6 +414,120 @@ def test_player_can_move_each_friendly_robot_independently() -> None:
     assert match.map.is_passable(second.position)
 
 
+def _prepare_group_move(match: Match) -> tuple[Robot, Robot]:
+    _make_opponents_stationary_and_distant(match)
+    first, second = _robot(match, T1), _robot(match, T2)
+    first.position = (100.0, 200.0)
+    second.position = (100.0, 300.0)
+    return first, second
+
+
+def test_group_move_preserves_relative_goal_offsets() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+
+    assert match.order_group_move([T1, T2], (500.0, 400.0))
+
+    assert first.path[-1] == (500.0, 350.0)
+    assert second.path[-1] == (500.0, 450.0)
+    assert second.path[-1][0] - first.path[-1][0] == 0
+    assert second.path[-1][1] - first.path[-1][1] == 100
+
+
+def test_group_move_moves_both_robots_without_overlapping() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+    first_start, second_start = first.position, second.position
+
+    assert match.order_group_move([T1, T2], (500.0, 400.0))
+    for _ in range(100):
+        match.update(0.05)
+        _assert_no_robot_overlap(match)
+
+    assert first.position != first_start
+    assert second.position != second_start
+    assert math.dist(first.position, (500.0, 350.0)) <= 20
+    assert math.dist(second.position, (500.0, 450.0)) <= 20
+
+
+def test_group_move_failure_is_atomic_when_one_target_is_outside_map() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+    first.position = (200.0, 300.0)
+    second.position = (300.0, 300.0)
+    first.path = [(200.0, 300.0), (240.0, 300.0)]
+    second.path = [(300.0, 300.0), (340.0, 300.0)]
+    old_paths = (list(first.path), list(second.path))
+
+    assert not match.order_group_move([T1, T2], (950.0, 300.0))
+
+    assert (first.path, second.path) == old_paths
+
+
+def test_group_move_rejects_enemy_and_preserves_all_paths() -> None:
+    match = _open_field_match()
+    _make_opponents_stationary_and_distant(match)
+    first, enemy = _robot(match, T1), _robot(match, O1)
+    first.path = [(120.0, 120.0), (160.0, 120.0)]
+    enemy.path = [(950.0, 50.0), (900.0, 50.0)]
+    old_paths = (list(first.path), list(enemy.path))
+
+    assert not match.order_group_move([T1, O1], (500.0, 300.0))
+
+    assert (first.path, enemy.path) == old_paths
+
+
+def test_group_move_rejects_dead_robot_without_moving_other_members() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+    first.path = [(100.0, 200.0), (140.0, 200.0)]
+    second.path = [(100.0, 300.0), (140.0, 300.0)]
+    second.take_damage(second.hp)
+    old_paths = (list(first.path), list(second.path))
+
+    assert not match.order_group_move([T1, T2], (500.0, 400.0))
+
+    assert (first.path, second.path) == old_paths
+
+
+def test_group_move_is_independent_of_robot_id_input_order() -> None:
+    forward = _open_field_match()
+    reverse = _open_field_match()
+    forward_robots = _prepare_group_move(forward)
+    reverse_robots = _prepare_group_move(reverse)
+
+    assert forward.order_group_move([T1, T2], (500.0, 400.0))
+    assert reverse.order_group_move([T2, T1], (500.0, 400.0))
+
+    assert [robot.path for robot in forward_robots] == [
+        robot.path for robot in reverse_robots
+    ]
+
+
+def test_group_move_rejects_duplicate_ids_without_changing_paths() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+    first.path = [(100.0, 200.0), (140.0, 200.0)]
+    second.path = [(100.0, 300.0), (140.0, 300.0)]
+    old_paths = (list(first.path), list(second.path))
+
+    assert not match.order_group_move([T1, T1], (500.0, 400.0))
+
+    assert (first.path, second.path) == old_paths
+
+
+def test_group_move_rejects_unknown_robot_id_without_changing_paths() -> None:
+    match = _open_field_match()
+    first, second = _prepare_group_move(match)
+    first.path = [(100.0, 200.0), (140.0, 200.0)]
+    second.path = [(100.0, 300.0), (140.0, 300.0)]
+    old_paths = (list(first.path), list(second.path))
+
+    assert not match.order_group_move([T1, "missing-robot"], (500.0, 400.0))
+
+    assert (first.path, second.path) == old_paths
+
+
 def test_combat_damage_and_attack_cooldown() -> None:
     match = Match(load_match_config(default_scenario_path()))
     _keep_only(match, T1, O1)

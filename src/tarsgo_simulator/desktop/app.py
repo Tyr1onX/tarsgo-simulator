@@ -43,7 +43,10 @@ def main() -> None:
             for team in match.config.scenario.teams.values()
             if team.team_id != player_team
         )
-        selected_robot_id: str | None = None
+        selected_robot_ids: set[str] = set()
+        selection_start: tuple[int, int] | None = None
+        selection_current: tuple[int, int] | None = None
+        selection_shift = False
         running = True
 
         while running:
@@ -56,21 +59,61 @@ def main() -> None:
                         running = False
                     elif event.key == pygame.K_r:
                         match.reset()
-                        selected_robot_id = None
+                        selected_robot_ids.clear()
+                        selection_start = None
+                        selection_current = None
+                        selection_shift = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    world = _screen_to_world(event.pos, match)
-                    if world is None:
-                        continue
                     if event.button == 1:
-                        selected_robot_id = _select_player_robot(world, match, player_team)
-                    elif event.button == 3 and selected_robot_id is not None:
-                        match.order_move(selected_robot_id, world)
+                        if _screen_to_world(event.pos, match) is not None:
+                            selection_start = event.pos
+                            selection_current = event.pos
+                            modifiers = getattr(event, "mod", 0) | pygame.key.get_mods()
+                            selection_shift = bool(modifiers & pygame.KMOD_SHIFT)
+                    elif event.button == 3:
+                        world = _screen_to_world(event.pos, match)
+                        if world is None:
+                            continue
+                        if len(selected_robot_ids) == 1:
+                            match.order_move(next(iter(selected_robot_ids)), world)
+                        elif len(selected_robot_ids) > 1:
+                            match.order_group_move(sorted(selected_robot_ids), world)
+                elif event.type == pygame.MOUSEMOTION and selection_start is not None:
+                    selection_current = event.pos
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if selection_start is None:
+                        continue
+                    selection_current = event.pos
+                    if math.dist(selection_start, selection_current) > 5:
+                        selection_rect = _selection_rectangle(selection_start, selection_current)
+                        selected_robot_ids = _select_player_robots_in_rectangle(
+                            selection_rect, match, player_team
+                        )
+                    else:
+                        world = _screen_to_world(event.pos, match)
+                        _apply_click_selection(
+                            world,
+                            match,
+                            player_team,
+                            selected_robot_ids,
+                            shift=selection_shift,
+                        )
+                    selection_start = None
+                    selection_current = None
+                    selection_shift = False
 
             match.update(dt)
-            if selected_robot_id is not None and not any(
-                robot.id == selected_robot_id and robot.alive for robot in match.robots
-            ):
-                selected_robot_id = None
+            live_player_ids = {
+                robot.id
+                for robot in match.robots
+                if robot.alive and robot.team == player_team
+            }
+            selected_robot_ids.intersection_update(live_player_ids)
+            selection_rect = (
+                _selection_rectangle(selection_start, selection_current)
+                if selection_start is not None and selection_current is not None
+                else None
+            )
             _draw(
                 screen,
                 font,
@@ -78,7 +121,8 @@ def main() -> None:
                 match,
                 player_team,
                 opponent_team,
-                selected_robot_id,
+                selected_robot_ids,
+                selection_rect,
             )
             pygame.display.flip()
     finally:
@@ -106,6 +150,59 @@ def _select_player_robot(
     return None
 
 
+def _apply_click_selection(
+    point: tuple[float, float] | None,
+    match: Match,
+    player_team: str,
+    selected_robot_ids: set[str],
+    *,
+    shift: bool,
+) -> None:
+    robot_id = (
+        _select_player_robot(point, match, player_team) if point is not None else None
+    )
+    if shift:
+        if robot_id is not None:
+            if robot_id in selected_robot_ids:
+                selected_robot_ids.remove(robot_id)
+            else:
+                selected_robot_ids.add(robot_id)
+        return
+
+    selected_robot_ids.clear()
+    if robot_id is not None:
+        selected_robot_ids.add(robot_id)
+
+
+def _selection_rectangle(
+    start: tuple[int, int], end: tuple[int, int]
+) -> pygame.Rect:
+    return pygame.Rect(
+        min(start[0], end[0]),
+        min(start[1], end[1]),
+        abs(end[0] - start[0]),
+        abs(end[1] - start[1]),
+    )
+
+
+def _select_player_robots_in_rectangle(
+    selection_rect: pygame.Rect,
+    match: Match,
+    player_team: str,
+) -> set[str]:
+    selected = set()
+    for robot in match.robots:
+        if not robot.alive or robot.team != player_team:
+            continue
+        center = (
+            round(MAP_ORIGIN[0] + robot.position[0]),
+            round(MAP_ORIGIN[1] + robot.position[1]),
+        )
+        if selection_rect.collidepoint(center):
+            selected.add(robot.id)
+    return selected
+
+
 def _draw(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -113,7 +210,8 @@ def _draw(
     match: Match,
     player_team: str,
     opponent_team: str,
-    selected_robot_id: str | None,
+    selected_robot_ids: set[str],
+    selection_rect: pygame.Rect | None,
 ) -> None:
     screen.fill(BACKGROUND)
     player_robots = [robot for robot in match.robots if robot.team == player_team]
@@ -163,7 +261,7 @@ def _draw(
         )
         radius = max(9, round(match.map.collision_radius))
         color = PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
-        if selected_robot_id == robot.id:
+        if robot.id in selected_robot_ids:
             pygame.draw.circle(screen, SELECTION_COLOR, center, radius + 6, width=2)
         pygame.draw.circle(screen, color if robot.alive else MUTED_COLOR, center, radius)
 
@@ -176,6 +274,9 @@ def _draw(
             pygame.draw.rect(screen, HP_COLOR, (bar_x, bar_y, hp_width, bar_height))
         label_surface = small_font.render(labels[robot.id], True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
+
+    if selection_rect is not None:
+        pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)
 
 
 if __name__ == "__main__":
