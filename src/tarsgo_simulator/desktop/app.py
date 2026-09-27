@@ -225,7 +225,7 @@ def _draw(
     opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
     left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
     right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
-    timer = max(0, math.ceil(match.config.match_duration - match.elapsed_time))
+    timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
         status = f"{match.team_name(match.winner)} WINS" if match.winner else "DRAW"
     else:

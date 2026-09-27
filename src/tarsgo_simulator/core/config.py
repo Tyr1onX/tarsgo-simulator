@@ -1,10 +1,10 @@
-"""Load and validate the small set of YAML files used by the V0 match."""
+"""Load shared metadata and scenario data from the project's YAML files."""
 
 from dataclasses import dataclass
 import math
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -12,17 +12,27 @@ from tarsgo_simulator.core.map import Rectangle
 
 
 class ConfigError(ValueError):
-    """Raised when a required training configuration value is invalid."""
+    """Raised when a required configuration value is invalid."""
 
 
 @dataclass(frozen=True)
-class InfantryRules:
-    max_hp: int
-    move_speed: float
-    collision_radius: float
-    attack_range: float
-    attack_interval: float
-    damage: int
+class RuleMetadata:
+    schema_version: int
+    id: str
+    status: str
+    competition: str | None
+    season: int | None
+    format: str | None
+    official_version: str | None
+    source_url: str | None
+    last_verified: str | None
+
+
+@dataclass(frozen=True)
+class RuleDocument:
+    metadata: RuleMetadata
+    data: Mapping[str, Any]
+    path: Path
 
 
 @dataclass(frozen=True)
@@ -50,9 +60,7 @@ class ScenarioDefinition:
 
 @dataclass(frozen=True)
 class MatchConfig:
-    rules_id: str
-    match_duration: float
-    infantry: InfantryRules
+    rule_document: RuleDocument
     scenario: ScenarioDefinition
 
 
@@ -81,28 +89,10 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         raise ConfigError(f"{scenario_file}: `learning_goals` 必须是非空字符串列表")
 
     rules_file = config_root / "rules" / f"{_safe_name(rules_id, 'rules', scenario_file)}.yaml"
+    if not rules_file.is_file():
+        raise ConfigError(f"Unknown RuleSet id `{rules_id}`: 找不到规则配置文件 {rules_file}")
     rules_data = _read_yaml(rules_file)
-    _check_schema(rules_data, rules_file)
-    actual_rules_id = _string(rules_data, "id", "id", rules_file)
-    if actual_rules_id != rules_id:
-        raise ConfigError(f"{rules_file}: `id` 必须与场景引用的规则 id `{rules_id}` 一致")
-    if _string(rules_data, "status", "status", rules_file) != "synthetic":
-        raise ConfigError(f"{rules_file}: `status` 必须为 `synthetic`，不能冒充官方参数")
-
-    infantry_data = _mapping(rules_data, "infantry", "infantry", rules_file)
-    infantry = InfantryRules(
-        max_hp=_number(infantry_data, "max_hp", "infantry.max_hp", rules_file, integer=True),
-        move_speed=_number(infantry_data, "move_speed", "infantry.move_speed", rules_file),
-        collision_radius=_number(
-            infantry_data, "collision_radius", "infantry.collision_radius", rules_file
-        ),
-        attack_range=_number(infantry_data, "attack_range", "infantry.attack_range", rules_file),
-        attack_interval=_number(
-            infantry_data, "attack_interval", "infantry.attack_interval", rules_file
-        ),
-        damage=_number(infantry_data, "damage", "infantry.damage", rules_file, integer=True),
-    )
-    match_duration = _number(rules_data, "match_duration", "match_duration", rules_file)
+    rule_document = _load_rule_document(rules_data, rules_file, rules_id)
 
     setup = _mapping(scenario_data, "setup", "setup", scenario_file)
     map_data = _mapping(setup, "map", "setup.map", scenario_file)
@@ -142,7 +132,48 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         teams=teams,
         spawns=spawns,
     )
-    return MatchConfig(rules_id, match_duration, infantry, scenario)
+    return MatchConfig(rule_document, scenario)
+
+
+def _load_rule_document(
+    data: dict[str, Any], path: Path, expected_id: str
+) -> RuleDocument:
+    """Validate shared metadata while leaving rule-specific payloads to RuleSets."""
+    version = _required(data, "schema_version", "schema_version", path)
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+        raise ConfigError(f"{path}: schema_version 当前只支持整数 1")
+    rule_id = _string(data, "id", "id", path)
+    if rule_id != expected_id:
+        raise ConfigError(f"{path}: `id` 必须与场景引用的规则 id `{expected_id}` 一致")
+    status = _string(data, "status", "status", path)
+
+    competition = _optional_string(data, "competition", path)
+    season = data.get("season")
+    if season is not None and (
+        not isinstance(season, int) or isinstance(season, bool) or season < 1
+    ):
+        raise ConfigError(f"{path}: `season` 必须是正整数")
+    metadata = RuleMetadata(
+        schema_version=version,
+        id=rule_id,
+        status=status,
+        competition=competition,
+        season=season,
+        format=_optional_string(data, "format", path),
+        official_version=_optional_string(data, "official_version", path),
+        source_url=_optional_string(data, "source_url", path),
+        last_verified=_optional_string(data, "last_verified", path),
+    )
+    return RuleDocument(metadata, data, path)
+
+
+def _optional_string(data: dict[str, Any], key: str, path: Path) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{path}: `{key}` 必须是非空字符串或 null")
+    return value.strip()
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
