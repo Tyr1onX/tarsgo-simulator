@@ -54,6 +54,37 @@ def test_map_passability_and_obstacle_collision() -> None:
     assert not game_map.can_traverse((30, 60), (170, 60))
 
 
+def test_line_of_sight_is_clear_on_an_empty_map() -> None:
+    game_map = GameMap(300, 200, [], collision_radius=10)
+
+    assert game_map.has_line_of_sight((30, 100), (270, 100))
+
+
+def test_wall_blocks_line_of_sight_including_its_boundary() -> None:
+    game_map = GameMap(300, 200, [Rectangle(130, 70, 40, 60)], collision_radius=10)
+
+    assert not game_map.has_line_of_sight((30, 100), (270, 100))
+    assert not game_map.has_line_of_sight((30, 70), (270, 70))
+
+
+def test_line_of_sight_uses_wall_bounds_not_movement_inflation() -> None:
+    game_map = GameMap(300, 200, [Rectangle(130, 100, 40, 40)], collision_radius=10)
+    start, end = (30, 95), (270, 95)
+
+    assert not game_map.can_traverse(start, end)
+    assert game_map.has_line_of_sight(start, end)
+
+
+def _match_with_short_wall() -> Match:
+    config = load_match_config(default_scenario_path())
+    scenario = replace(
+        config.scenario,
+        obstacles=(Rectangle(440, 200, 20, 120),),
+        spawns={"tarsgo-infantry": (400.0, 260.0), "opponent-infantry": (500.0, 260.0)},
+    )
+    return Match(replace(config, scenario=scenario))
+
+
 def test_a_star_routes_around_obstacle() -> None:
     game_map = GameMap(240, 180, [Rectangle(100, 40, 40, 100)], collision_radius=10)
     start = (30.0, 80.0)
@@ -105,6 +136,19 @@ def test_combat_damage_and_attack_cooldown() -> None:
     match.update(0.6)
     assert player.hp < first_hp[0]
     assert opponent.hp < first_hp[1]
+
+
+def test_robots_in_range_do_not_damage_each_other_through_wall() -> None:
+    match = _match_with_short_wall()
+    player, opponent = match.robots
+    assert math.dist(player.position, opponent.position) <= player.attack_range
+    assert not match.map.has_line_of_sight(player.position, opponent.position)
+
+    for _ in range(6):
+        match.update(0.1)
+
+    assert player.hp == player.max_hp
+    assert opponent.hp == opponent.max_hp
 
 
 def test_match_ends_with_winner_when_robot_dies() -> None:
@@ -237,6 +281,43 @@ def test_opponent_replans_toward_moving_player() -> None:
 
     assert player.position[1] < old_target_y
     assert opponent.position[1] < 260
+
+
+def test_opponent_does_not_stop_in_attack_range_behind_wall() -> None:
+    match = _match_with_short_wall()
+    player, opponent = match.robots
+    spawn = opponent.position
+
+    assert math.dist(player.position, opponent.position) < opponent.attack_range
+    assert not match.map.has_line_of_sight(opponent.position, player.position)
+
+    match.update(0.5)
+
+    assert opponent.position != spawn
+    assert opponent.path
+    assert match.map.is_passable(opponent.position)
+
+
+def test_opponent_routes_around_wall_then_both_robots_fire() -> None:
+    match = _match_with_short_wall()
+    player, opponent = match.robots
+    started_behind_wall = not match.map.has_line_of_sight(opponent.position, player.position)
+    moved_around_wall = False
+
+    for _ in range(400):
+        previous = opponent.position
+        match.update(0.05)
+        assert match.map.is_passable(opponent.position)
+        assert match.map.can_traverse(previous, opponent.position)
+        moved_around_wall |= opponent.position[1] < 200 or opponent.position[1] > 320
+        if player.hp < player.max_hp and opponent.hp < opponent.max_hp:
+            break
+
+    assert started_behind_wall
+    assert moved_around_wall
+    assert match.map.has_line_of_sight(opponent.position, player.position)
+    assert player.hp < player.max_hp
+    assert opponent.hp < opponent.max_hp
 
 
 @pytest.mark.parametrize("reverse_robots", [False, True])

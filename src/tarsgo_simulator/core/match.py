@@ -80,7 +80,7 @@ class Match:
         self._update_opponent_ai(dt)
         for robot in self.robots:
             robot.update(dt, self.map)
-        update_combat(self.robots)
+        update_combat(self.robots, self.map)
         self.elapsed_time += dt
         self._check_result()
 
@@ -104,7 +104,9 @@ class Match:
             player.position[0] - opponent.position[0],
             player.position[1] - opponent.position[1],
         )
-        if distance <= opponent.attack_range:
+        if distance <= opponent.attack_range and self.map.has_line_of_sight(
+            opponent.position, player.position
+        ):
             opponent.path.clear()
             self._opponent_replan_elapsed = 0.0
             return
