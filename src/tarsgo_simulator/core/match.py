@@ -217,6 +217,7 @@ class Match:
             for robot in self.robots:
                 robot.update_cooldown(dt)
             self._move_robots(dt)
+            self.ruleset.prepare_combat(self, dt)
             update_combat(
                 self.robots,
                 self.map,
