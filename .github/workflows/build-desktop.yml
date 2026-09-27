@@ -43,7 +43,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: TARS-Go-Simulator-windows
-          path: dist/TARS-Go-Simulator.exe
+          path: dist/TARS-Go-Simulator/TARS-Go-Simulator.exe
           if-no-files-found: error
       - name: Upload macOS application
         if: runner.os == 'macOS'
