@@ -1,0 +1,8 @@
+schema_version: 1
+id: first-steps
+title: 初次接触
+status: draft
+learning_goals: []
+setup:
+  teams: []
+  robots: []

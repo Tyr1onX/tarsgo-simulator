@@ -1,0 +1,2 @@
+# Install this checkout and its runtime dependencies.
+-e .
