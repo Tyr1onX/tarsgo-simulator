@@ -1,6 +1,6 @@
 # TARS-Go RoboMaster 战术训练模拟器
 
-面向 TARS-Go 队伍的新队员教学与战术推演项目。当前仓库处于 **V0 底座阶段**：先建立可维护的桌面端工程结构、配置约定和跨平台构建流程，暂不实现完整比赛机制。
+面向 TARS-Go 队伍的新队员教学与战术推演项目。当前版本提供一局单机步兵 1v1 教学对战；官方比赛规则和实车参数仍在独立核验中。
 
 ## 已确定的技术路线
 
@@ -13,7 +13,14 @@
 
 ## 当前状态
 
-仓库只提供启动窗口、目录边界、占位配置和 CI 构建骨架。配置中的规则、机器人和场景数据都是未验证的空白草稿，不代表官方规则或 TARS-Go 实车参数。
+### Current playable slice
+
+- 单机 Infantry 1v1。
+- 左键选择 TARS-Go 步兵，右键移动；路径会绕开障碍物。
+- 进入射程后自动攻击，HP 归零时结束并显示胜方。
+- 按 `R` 重新开始，按 `Esc` 退出。
+
+`configs/rules/training-v0.yaml` 是内部合成训练参数，不代表官方比赛规则或 TARS-Go 实车参数。`configs/rules/2026-rmul-3v3.yaml` 继续作为待核实的官方规则占位文件。
 
 ## 本地运行
 
@@ -39,6 +46,7 @@ Windows PowerShell 激活虚拟环境的命令为：
 - `configs/rules/`：赛季与比赛规则 YAML。
 - `configs/teams/`：队伍机器人参数 YAML。
 - `configs/scenarios/`：教学场景 YAML。
+- `docs/upstream-audit.md`：固定上游 commit 的代码审计和迁移建议。
 - `tests/`：轻量测试入口。
 - `.github/workflows/`：自动测试，以及 Windows/macOS 桌面构建。
 
@@ -46,6 +54,6 @@ Windows PowerShell 激活虚拟环境的命令为：
 
 每次向 `main` 推送或提交面向 `main` 的 PR 时，GitHub Actions 会运行测试并分别尝试构建 Windows `.exe` 与 macOS `.app`。构建文件作为 workflow artifact 提供下载。当前构建流程未配置代码签名或 macOS 公证。
 
-## 后续复用评估
+## 上游代码
 
-首个可运行底座稳定后，再评估是否复用 MIT 项目 [T-DT-Algorithm-2026/rm_simulator](https://github.com/T-DT-Algorithm-2026/rm_simulator)。当前仓库没有复制该项目代码或资源。评估时先记录上游具体 commit、模块边界与许可证要求，再决定是否移植和如何保留署名。
+上游 [T-DT-Algorithm-2026/rm_simulator](https://github.com/T-DT-Algorithm-2026/rm_simulator) 已按固定 commit 完成代码审计。本切片重新实现核心逻辑，没有复制上游代码或资源。

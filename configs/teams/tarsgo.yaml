@@ -1,5 +1,6 @@
 schema_version: 1
 team_id: tarsgo
 display_name: TARS-Go
-status: unconfigured
-robots: []
+robots:
+  - id: tarsgo-infantry
+    type: infantry
