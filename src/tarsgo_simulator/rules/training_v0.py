@@ -4,6 +4,7 @@ import math
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
+from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.protocol import MatchResult, RobotParameters, RuleSetDisplayState
 
 
@@ -38,6 +39,12 @@ class TrainingV0Rules:
         if robot_type != "infantry":
             raise ConfigError(f"training-v0 不支持机器人类型 `{robot_type}`")
         return self._infantry
+
+    def can_attack(self, robot: Robot) -> bool:
+        return robot.alive
+
+    def can_receive_damage(self, robot: Robot) -> bool:
+        return robot.alive
 
     def reset(self, match: "Match") -> None:
         """Training V0 keeps no state outside the Match."""

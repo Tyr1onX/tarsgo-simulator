@@ -86,6 +86,16 @@ def _rules_lab_match() -> Match:
     return match
 
 
+def _complete_rmul_respawn(match: Match, robot_id: str) -> Robot:
+    robot = _robot(match, robot_id)
+    robot.take_damage(robot.hp)
+    match.update(0.01)
+    lifecycle = match.ruleset._robot_lifecycles[robot_id]
+    assert lifecycle.respawn_required is not None
+    match.update(lifecycle.respawn_required)
+    return robot
+
+
 def _write_scenario(tmp_path: Path, mutate) -> Path:
     config_root = _copy_configs(tmp_path)
     scenario_file = config_root / "scenarios" / "first-steps.yaml"
@@ -721,7 +731,12 @@ def test_combat_targets_nearest_enemy_independent_of_list_order(
     if reverse_robots:
         robots.reverse()
 
-    update_combat(robots, GameMap(400, 300, [], collision_radius=10))
+    update_combat(
+        robots,
+        GameMap(400, 300, [], collision_radius=10),
+        can_attack=lambda robot: robot.alive,
+        can_receive_damage=lambda robot: robot.alive,
+    )
 
     assert nearer.hp == 90
     assert farther.hp == 100
@@ -738,7 +753,12 @@ def test_combat_ties_choose_lexicographically_smallest_robot_id(
     if reverse_robots:
         robots.reverse()
 
-    update_combat(robots, GameMap(400, 300, [], collision_radius=10))
+    update_combat(
+        robots,
+        GameMap(400, 300, [], collision_radius=10),
+        can_attack=lambda robot: robot.alive,
+        can_receive_damage=lambda robot: robot.alive,
+    )
 
     assert earlier_id.hp == 90
     assert later_id.hp == 100
@@ -1128,3 +1148,223 @@ def test_rmul_timeout_vp_tie_draws_without_using_hp_as_fake_tiebreak() -> None:
 
     assert match.finished
     assert match.winner is None
+
+
+def test_rmul_first_death_read_progress_and_respawn_position() -> None:
+    match = _rules_lab_match()
+    robot = _robot(match, T1)
+    death_position = (250.0, 220.0)
+    robot.position = death_position
+    robot.path = [(290.0, 220.0)]
+    robot.take_damage(robot.hp)
+
+    # The full five-second death frame starts the read bar at zero.
+    match.update(5.0)
+
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    assert len([event for event in match.current_events if event.robot_id == T1]) == 1
+    assert match.ruleset.victory_points["tarsgo"] == 180
+    assert not robot.alive
+    assert lifecycle.death_count == 1
+    assert lifecycle.respawn_progress == 0
+    assert lifecycle.respawn_required == 5
+    assert dict(match.ruleset.display_state.robot_statuses)[T1] == "RESP 0.0/5"
+
+    match.update(4.0)
+    assert not robot.alive
+    assert lifecycle.respawn_progress == 4
+    match.update(1.0)
+
+    assert robot.alive
+    assert robot.hp == int(robot.max_hp * 0.2) == 20
+    assert robot.position == death_position
+    assert robot.path == []
+    assert lifecycle.weak
+    assert lifecycle.invincible_remaining == 30
+
+
+def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None:
+    match = _rules_lab_match()
+    robot = _robot(match, T1)
+    robot.take_damage(robot.hp)
+    match.update(0.01)
+    match.update(5.0)
+    assert robot.alive
+
+    robot.position = (300.0, 260.0)
+    robot.take_damage(robot.hp)
+    match.update(3.0)
+
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    assert match.ruleset.victory_points["tarsgo"] == 160
+    assert len([event for event in match.current_events if event.robot_id == T1]) == 1
+    assert lifecycle.death_count == 2
+    assert lifecycle.respawn_progress == 0
+    assert lifecycle.respawn_required == 10
+
+    match.update(9.0)
+    assert not robot.alive
+    assert lifecycle.respawn_progress == 9
+    match.update(1.0)
+    assert robot.alive
+    assert lifecycle.weak
+
+    other = _robot(match, T2)
+    other.take_damage(other.hp)
+    match.update(0.01)
+    other_lifecycle = match.ruleset._robot_lifecycles[T2]
+    assert other_lifecycle.death_count == 1
+    assert other_lifecycle.respawn_required == 5
+    assert match.ruleset.victory_points["tarsgo"] == 140
+
+
+def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() -> None:
+    match = _rules_lab_match()
+    player = _complete_rmul_respawn(match, T1)
+    opponent = _robot(match, O1)
+    player.position = (450.0, 260.0)
+    opponent.position = (550.0, 260.0)
+    player.attack_cooldown = 0
+    opponent.attack_cooldown = 0
+
+    match.update(0.01)
+
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    assert lifecycle.weak
+    assert not match.ruleset.can_attack(player)
+    assert player.attack_cooldown == 0
+    assert opponent.attack_cooldown == opponent.attack_interval
+    assert player.hp == 20
+    assert opponent.hp == opponent.max_hp
+    assert match.ruleset.control_owner is None
+
+    # Invincibility expires after 30 seconds; weak remains until supply detection.
+    match.update(30.0)
+    assert lifecycle.invincible_remaining == 0
+    assert lifecycle.weak
+    assert match.ruleset.can_receive_damage(player)
+    assert not match.ruleset.can_attack(player)
+
+    opponent.attack_cooldown = 0
+    match.update(0.01)
+    assert player.hp < 20
+    assert player.attack_cooldown == 0
+
+
+def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
+    match = _rules_lab_match()
+    robot = _complete_rmul_respawn(match, T1)
+    robot.position = (450.0, 260.0)
+
+    match.update(0.0)
+    assert match.ruleset.control_owner is None
+    assert match.ruleset._robot_lifecycles[T1].weak
+
+    # Supply zones only release state; they do not heal.
+    robot.hp = 15
+    robot.position = (110.0, 260.0)
+    match.update(0.0)
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    assert not lifecycle.weak
+    assert lifecycle.invincible_remaining == 0
+    assert robot.hp == 15
+    assert match.ruleset.can_attack(robot)
+    assert match.ruleset.can_receive_damage(robot)
+
+    robot.position = (450.0, 260.0)
+    opponent = _robot(match, O1)
+    opponent.position = (550.0, 260.0)
+    robot.attack_cooldown = 0
+    opponent.attack_cooldown = 0
+    match.update(0.01)
+
+    assert match.ruleset.control_owner == "tarsgo"
+    assert robot.hp == 5
+    assert opponent.hp < opponent.max_hp
+
+
+def test_rmul_only_each_teams_own_supply_zone_releases_states() -> None:
+    match = _rules_lab_match()
+    t1, o1 = _robot(match, T1), _robot(match, O1)
+    t1.take_damage(t1.hp)
+    o1.take_damage(o1.hp)
+    match.update(0.01)
+    match.update(5.0)
+    rules = match.ruleset
+
+    assert rules._supply_zones["tarsgo"].id == "red-supply"
+    assert rules._supply_zones["opponent-balanced"].id == "blue-supply"
+    assert t1.alive and o1.alive
+    assert rules._robot_lifecycles[T1].weak
+    assert rules._robot_lifecycles[O1].weak
+
+    # Put each revived robot in the other team's supply zone.
+    t1.position = (790.0, 210.0)
+    o1.position = (110.0, 210.0)
+    match.update(0.1)
+    assert rules._robot_lifecycles[T1].weak
+    assert rules._robot_lifecycles[T1].invincible_remaining > 0
+    assert rules._robot_lifecycles[O1].weak
+    assert rules._robot_lifecycles[O1].invincible_remaining > 0
+
+    t1.position = (110.0, 210.0)
+    o1.position = (790.0, 210.0)
+    match.update(0.0)
+    assert not rules._robot_lifecycles[T1].weak
+    assert rules._robot_lifecycles[T1].invincible_remaining == 0
+    assert not rules._robot_lifecycles[O1].weak
+    assert rules._robot_lifecycles[O1].invincible_remaining == 0
+
+
+def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> None:
+    match = _rules_lab_match()
+    robot = _robot(match, T1)
+    robot.take_damage(robot.hp)
+    match.update(0.01)
+    match.update(5.0)
+    robot.position = (300.0, 260.0)
+    robot.take_damage(robot.hp)
+    match.update(0.01)
+    assert match.ruleset._robot_lifecycles[T1].respawn_required == 10
+    match.update(10.0)
+    assert match.ruleset._robot_lifecycles[T1].weak
+    assert match.ruleset._robot_lifecycles[T1].invincible_remaining == 30
+
+    _robot(match, T2).position = (450.0, 260.0)
+    match.update(0.01)
+    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.victory_points["tarsgo"] == 160
+
+    match.reset()
+
+    assert match.ruleset.victory_points == {
+        "tarsgo": 200,
+        "opponent-balanced": 200,
+    }
+    assert match.ruleset.control_owner is None
+    for robot_id, spawn in match.config.scenario.spawns.items():
+        reset_robot = _robot(match, robot_id)
+        lifecycle = match.ruleset._robot_lifecycles[robot_id]
+        assert reset_robot.alive
+        assert reset_robot.hp == reset_robot.max_hp
+        assert reset_robot.position == spawn
+        assert reset_robot.path == []
+        assert lifecycle.death_count == 0
+        assert lifecycle.respawn_progress == 0
+        assert lifecycle.respawn_required is None
+        assert not lifecycle.weak
+        assert lifecycle.invincible_remaining == 0
+
+
+def test_training_v0_keeps_dead_robots_permanently_dead() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    for robot in match.robots:
+        robot.speed = 0
+        robot.attack_cooldown = 999
+    robot = _robot(match, T1)
+    robot.take_damage(robot.hp)
+    match.update(0.01)
+    match.update(10.0)
+
+    assert not robot.alive
+    assert match.ruleset.display_state is None

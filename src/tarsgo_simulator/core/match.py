@@ -142,10 +142,18 @@ class Match:
         for robot in self.robots:
             robot.update_cooldown(dt)
         self._move_robots(dt)
-        update_combat(self.robots, self.map)
+        update_combat(
+            self.robots,
+            self.map,
+            can_attack=self.ruleset.can_attack,
+            can_receive_damage=self.ruleset.can_receive_damage,
+        )
         self.elapsed_time += dt
         self._collect_robot_destroyed_events()
         self.ruleset.update(self, dt)
+        # A RuleSet may bring a robot back to life after death events are
+        # collected. Treat that as the baseline for the next destruction edge.
+        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
         result = self.ruleset.evaluate_result(self)
         if result is not None:
             self._apply_result(result)

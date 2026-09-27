@@ -1,16 +1,23 @@
 """Deterministic direct-damage combat for the V0 slice."""
 
 import math
+from collections.abc import Callable
 
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.robot import Robot
 
 
-def update_combat(robots: list[Robot], game_map: GameMap) -> None:
+def update_combat(
+    robots: list[Robot],
+    game_map: GameMap,
+    *,
+    can_attack: Callable[[Robot], bool],
+    can_receive_damage: Callable[[Robot], bool],
+) -> None:
     """Let each robot attack its nearest visible living enemy in range."""
     attacks: list[tuple[Robot, Robot, int]] = []
     for attacker in robots:
-        if not attacker.alive or attacker.attack_cooldown > 0:
+        if not can_attack(attacker) or attacker.attack_cooldown > 0:
             continue
 
         targets = [
@@ -32,7 +39,8 @@ def update_combat(robots: list[Robot], game_map: GameMap) -> None:
         attacks.append((attacker, target, attacker.damage))
 
     for _, target, damage in attacks:
-        target.take_damage(damage)
+        if can_receive_damage(target):
+            target.take_damage(damage)
 
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:

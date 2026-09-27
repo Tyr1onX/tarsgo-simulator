@@ -1,16 +1,28 @@
-"""Partial RMUL 2026 rules for the VP and central control-zone slice."""
+"""Partial RMUL 2026 rules for VP, control zones, and respawn lifecycle."""
 
+from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument, load_rule_document
 from tarsgo_simulator.core.events import MatchEventType
+from tarsgo_simulator.core.map import Zone
+from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.protocol import (
     MatchResult,
     RobotParameters,
     RuleSetDisplayState,
 )
 from tarsgo_simulator.rules.training_v0 import TrainingV0Rules
+
+
+@dataclass
+class _RobotLifecycle:
+    death_count: int = 0
+    respawn_progress: float = 0.0
+    respawn_required: float | None = None
+    weak: bool = False
+    invincible_remaining: float = 0.0
 
 
 class RMUL2026Rules:
@@ -48,6 +60,42 @@ class RMUL2026Rules:
             control_zone, "loss_delay", document, "control_zone.loss_delay"
         )
 
+        respawn = _mapping(document.data, "respawn", document)
+        self._initial_respawn_progress = _number(
+            respawn,
+            "initial_progress_required",
+            document,
+            "respawn.initial_progress_required",
+        )
+        self._additional_respawn_progress_per_death = _number(
+            respawn,
+            "additional_progress_per_death",
+            document,
+            "respawn.additional_progress_per_death",
+        )
+        self._respawn_progress_per_second = _number(
+            respawn,
+            "progress_per_second",
+            document,
+            "respawn.progress_per_second",
+        )
+        self._respawn_hp_fraction = _fraction(
+            respawn, "hp_fraction", document, "respawn.hp_fraction"
+        )
+        self._invincibility_duration = _number(
+            respawn,
+            "invincibility_duration",
+            document,
+            "respawn.invincibility_duration",
+        )
+        supply_zones = _mapping(document.data, "supply_zones", document)
+        self._supply_zone_ids = {
+            side: _string(supply_zones, side, document, f"supply_zones.{side}")
+            for side in ("red", "blue")
+        }
+        if len(set(self._supply_zone_ids.values())) != 2:
+            raise ConfigError(f"{document.path}: red / blue 补给区必须使用不同的 zone id")
+
         parameter_profile = _string(
             document.data, "lab_parameter_profile", document, "lab_parameter_profile"
         )
@@ -65,6 +113,8 @@ class RMUL2026Rules:
         self._control_loss_elapsed = 0.0
         self._control_tick_accumulator = 0.0
         self._previous_zone_teams: set[str] = set()
+        self._robot_lifecycles: dict[str, _RobotLifecycle] = {}
+        self._supply_zones: dict[str, Zone] = {}
 
     @property
     def time_limit(self) -> float:
@@ -72,14 +122,41 @@ class RMUL2026Rules:
 
     @property
     def display_state(self) -> RuleSetDisplayState:
+        robot_statuses = []
+        for robot_id, lifecycle in sorted(self._robot_lifecycles.items()):
+            if lifecycle.respawn_required is not None:
+                status = (
+                    f"RESP {lifecycle.respawn_progress:.1f}/"
+                    f"{lifecycle.respawn_required:g}"
+                )
+            elif lifecycle.weak and lifecycle.invincible_remaining > 0:
+                status = f"WEAK INV {math.ceil(lifecycle.invincible_remaining)}s"
+            elif lifecycle.weak:
+                status = "WEAK"
+            elif lifecycle.invincible_remaining > 0:
+                status = f"INV {math.ceil(lifecycle.invincible_remaining)}s"
+            else:
+                continue
+            robot_statuses.append((robot_id, status))
         return RuleSetDisplayState(
             victory_points=tuple(sorted(self.victory_points.items())),
             control_owner=self.control_owner,
+            robot_statuses=tuple(robot_statuses),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
         """Use the explicitly synthetic infantry profile in the rules lab."""
         return self._lab_parameters.robot_parameters(robot_type)
+
+    def can_attack(self, robot: Robot) -> bool:
+        lifecycle = self._robot_lifecycles.get(robot.id)
+        return robot.alive and (lifecycle is None or not lifecycle.weak)
+
+    def can_receive_damage(self, robot: Robot) -> bool:
+        lifecycle = self._robot_lifecycles.get(robot.id)
+        return robot.alive and (
+            lifecycle is None or lifecycle.invincible_remaining <= 0
+        )
 
     def reset(self, match: "Match") -> None:
         zones = [zone for zone in match.map.zones if zone.id == self._control_zone_id]
@@ -89,6 +166,22 @@ class RMUL2026Rules:
                 f"with id `{self._control_zone_id}`"
             )
         self._control_zone = zones[0]
+        zones_by_id = {zone.id: zone for zone in match.map.zones}
+        missing_supply_zones = sorted(
+            set(self._supply_zone_ids.values()) - set(zones_by_id)
+        )
+        if missing_supply_zones:
+            missing = ", ".join(missing_supply_zones)
+            raise ConfigError(
+                f"{self._document.path}: scenario 缺少补给区 map zones：{missing}"
+            )
+        self._supply_zones = {
+            match.config.scenario.teams[side].team_id: zones_by_id[zone_id]
+            for side, zone_id in self._supply_zone_ids.items()
+        }
+        self._robot_lifecycles = {
+            robot.id: _RobotLifecycle() for robot in match.robots
+        }
         self.victory_points = {
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
@@ -100,11 +193,21 @@ class RMUL2026Rules:
 
     def update(self, match: "Match", dt: float) -> None:
         # Apply every same-frame fact before Match asks this ruleset for a result.
+        newly_destroyed: set[str] = set()
         for event in match.current_events:
-            if (
-                event.type == MatchEventType.ROBOT_DESTROYED
-                and event.team_id in self.victory_points
-            ):
+            if event.type != MatchEventType.ROBOT_DESTROYED:
+                continue
+            lifecycle = self._robot_lifecycles.get(event.robot_id)
+            if lifecycle is not None:
+                lifecycle.death_count += 1
+                lifecycle.respawn_progress = 0.0
+                lifecycle.respawn_required = self._initial_respawn_progress + (
+                    lifecycle.death_count - 1
+                ) * self._additional_respawn_progress_per_death
+                lifecycle.weak = False
+                lifecycle.invincible_remaining = 0.0
+                newly_destroyed.add(event.robot_id)
+            if event.team_id in self.victory_points:
                 self.victory_points[event.team_id] = max(
                     0,
                     self.victory_points[event.team_id] - self._robot_destroyed_penalty,
@@ -112,14 +215,51 @@ class RMUL2026Rules:
 
         frame_start = match.elapsed_time - dt
         active_dt = max(0.0, min(dt, self._time_limit - frame_start))
+        self._advance_robot_lifecycles(match, active_dt, newly_destroyed)
         present_teams = {
             robot.team
             for robot in match.robots
-            if robot.alive and self._control_zone.contains(robot.position)
+            if robot.alive
+            and not self._robot_lifecycles[robot.id].weak
+            and self._control_zone.contains(robot.position)
         }
         entering_teams = present_teams - self._previous_zone_teams
         self._advance_control(present_teams, entering_teams, active_dt)
         self._previous_zone_teams = present_teams
+
+    def _advance_robot_lifecycles(
+        self,
+        match: "Match",
+        dt: float,
+        newly_destroyed: set[str],
+    ) -> None:
+        for robot in match.robots:
+            lifecycle = self._robot_lifecycles[robot.id]
+            if not robot.alive:
+                # The robot died during this frame. Start accumulating next frame.
+                if robot.id in newly_destroyed or lifecycle.respawn_required is None:
+                    continue
+                lifecycle.respawn_progress += dt * self._respawn_progress_per_second
+                if lifecycle.respawn_progress + 1e-9 < lifecycle.respawn_required:
+                    continue
+
+                robot.alive = True
+                # HP is an integer in the Engine; positive fractional values round down.
+                robot.hp = max(1, int(robot.max_hp * self._respawn_hp_fraction))
+                robot.path.clear()
+                lifecycle.respawn_progress = 0.0
+                lifecycle.respawn_required = None
+                lifecycle.weak = True
+                lifecycle.invincible_remaining = self._invincibility_duration
+                continue
+
+            lifecycle.invincible_remaining = max(
+                0.0, lifecycle.invincible_remaining - dt
+            )
+            supply_zone = self._supply_zones[robot.team]
+            if lifecycle.weak and supply_zone.contains(robot.position):
+                lifecycle.weak = False
+                lifecycle.invincible_remaining = 0.0
 
     def _advance_control(
         self,
@@ -240,6 +380,23 @@ def _integer(
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
     return value
+
+
+def _fraction(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or not 0 < value <= 1
+    ):
+        raise ConfigError(f"{document.path}: `{field}` 必须在 0 和 1 之间（含 1）")
+    return float(value)
 
 
 if TYPE_CHECKING:

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from tarsgo_simulator.core.match import Match
+    from tarsgo_simulator.core.robot import Robot
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class MatchResult:
 class RuleSetDisplayState:
     victory_points: tuple[tuple[str, int], ...]
     control_owner: str | None
+    robot_statuses: tuple[tuple[str, str], ...] = ()
 
 
 class RuleSet(Protocol):
@@ -33,6 +35,10 @@ class RuleSet(Protocol):
     def time_limit(self) -> float: ...
 
     def robot_parameters(self, robot_type: str) -> RobotParameters: ...
+
+    def can_attack(self, robot: "Robot") -> bool: ...
+
+    def can_receive_damage(self, robot: "Robot") -> bool: ...
 
     def reset(self, match: "Match") -> None: ...
 
