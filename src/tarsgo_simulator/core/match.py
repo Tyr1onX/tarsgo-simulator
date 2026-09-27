@@ -66,7 +66,9 @@ class Match:
         self.finished = False
         self.winner: str | None = None
         self.current_events: list[MatchEvent] = []
-        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
+        self._events_from_last_update = 0
+        self._active_update_dt: float | None = None
+        self._active_update_start_time: float | None = None
         player_team = scenario.player_team
         self._opponent_replan_elapsed = {
             robot.id: 0.0 for robot in self.robots if robot.team != player_team
@@ -84,6 +86,62 @@ class Match:
         if robot is None or not robot.alive or robot.team != self.config.scenario.player_team:
             return False
         return self._set_robot_destination(robot, goal)
+
+    def apply_damage(
+        self,
+        target: Robot,
+        amount: int,
+        *,
+        source_robot: Robot | None = None,
+        source_team_id: str | None = None,
+        bypass_invincibility: bool = False,
+    ) -> int:
+        """Apply HP loss and emit its damage and destruction facts exactly once."""
+        if (
+            self.finished
+            or amount <= 0
+            or not any(robot is target for robot in self.robots)
+            or not target.alive
+        ):
+            return 0
+        if not bypass_invincibility and not self.ruleset.can_receive_damage(target):
+            return 0
+
+        if source_robot is not None:
+            source_team_id = source_robot.team
+        was_alive = target.alive
+        previous_hp = max(0, target.hp)
+        target.hp = max(0, previous_hp - amount)
+        if target.hp == 0:
+            target.alive = False
+            target.path.clear()
+
+        actual_damage = previous_hp - target.hp
+        event_time = self.elapsed_time
+        if self._active_update_start_time is not None and self._active_update_dt is not None:
+            event_time = self._active_update_start_time + self._active_update_dt
+        if actual_damage > 0:
+            self.current_events.append(
+                MatchEvent(
+                    type=MatchEventType.ROBOT_DAMAGED,
+                    time=event_time,
+                    robot_id=target.id,
+                    team_id=target.team,
+                    attacker_id=source_robot.id if source_robot else None,
+                    attacker_team_id=source_team_id,
+                    damage=actual_damage,
+                )
+            )
+        if was_alive and not target.alive:
+            self.current_events.append(
+                MatchEvent(
+                    type=MatchEventType.ROBOT_DESTROYED,
+                    time=event_time,
+                    robot_id=target.id,
+                    team_id=target.team,
+                )
+            )
+        return actual_damage
 
     def order_group_move(
         self,
@@ -137,24 +195,30 @@ class Match:
         if dt < 0:
             raise ValueError("dt 不能小于 0")
 
-        self.current_events.clear()
-        self._update_opponent_ai(dt)
-        for robot in self.robots:
-            robot.update_cooldown(dt)
-        self._move_robots(dt)
-        damage_records = update_combat(
-            self.robots,
-            self.map,
-            can_attack=self.ruleset.can_attack,
-            can_receive_damage=self.ruleset.can_receive_damage,
-        )
-        self.elapsed_time += dt
-        self._collect_robot_damaged_events(damage_records)
-        self._collect_robot_destroyed_events()
-        self.ruleset.update(self, dt)
-        # A RuleSet may bring a robot back to life after death events are
-        # collected. Treat that as the baseline for the next destruction edge.
-        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
+        if self._events_from_last_update:
+            del self.current_events[: self._events_from_last_update]
+            self._events_from_last_update = 0
+        self._active_update_dt = dt
+        self._active_update_start_time = self.elapsed_time
+        try:
+            self._update_opponent_ai(dt)
+            for robot in self.robots:
+                robot.update_cooldown(dt)
+            self._move_robots(dt)
+            update_combat(
+                self.robots,
+                self.map,
+                can_attack=self.ruleset.can_attack,
+                apply_damage=lambda target, amount, attacker: self.apply_damage(
+                    target, amount, source_robot=attacker
+                ),
+            )
+            self.elapsed_time += dt
+            self.ruleset.update(self, dt)
+        finally:
+            self._active_update_dt = None
+            self._active_update_start_time = None
+        self._events_from_last_update = len(self.current_events)
         result = self.ruleset.evaluate_result(self)
         if result is not None:
             self._apply_result(result)
@@ -243,37 +307,6 @@ class Match:
     def _apply_result(self, result: MatchResult) -> None:
         self.finished = True
         self.winner = result.winner
-
-    def _collect_robot_destroyed_events(self) -> None:
-        for robot in sorted(self.robots, key=lambda item: item.id):
-            was_alive = self._alive_at_last_update.get(robot.id, robot.alive)
-            if was_alive and not robot.alive:
-                self.current_events.append(
-                    MatchEvent(
-                        type=MatchEventType.ROBOT_DESTROYED,
-                        time=self.elapsed_time,
-                        robot_id=robot.id,
-                        team_id=robot.team,
-                    )
-                )
-        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
-
-    def _collect_robot_damaged_events(
-        self,
-        damage_records: list[tuple[Robot, Robot, int]],
-    ) -> None:
-        for attacker, target, amount in damage_records:
-            self.current_events.append(
-                MatchEvent(
-                    type=MatchEventType.ROBOT_DAMAGED,
-                    time=self.elapsed_time,
-                    robot_id=target.id,
-                    team_id=target.team,
-                    attacker_id=attacker.id,
-                    attacker_team_id=attacker.team,
-                    damage=amount,
-                )
-            )
 
     def team_name(self, team_id: str) -> str:
         for team in self.config.scenario.teams.values():

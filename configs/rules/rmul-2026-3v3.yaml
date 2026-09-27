@@ -26,4 +26,14 @@ supply:
 supply_zones:
   red: red-supply
   blue: blue-supply
+penalties:
+  supply_forbidden_zone:
+    first_yellow_after: 3
+    repeat_yellow_interval: 10
+  yellow_card:
+    offender_hp_fraction: 0.15
+    teammate_hp_fraction: 0.05
+    repeat_window: 30
+    repeat_multiplier: 2
+    red_after_count: 3
 lab_parameter_profile: training-v0

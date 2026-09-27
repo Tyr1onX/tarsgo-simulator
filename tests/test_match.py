@@ -52,7 +52,10 @@ def _keep_only(match: Match, *robot_ids: str) -> None:
     keep = set(robot_ids)
     for robot in match.robots:
         if robot.id not in keep:
-            robot.take_damage(robot.hp)
+            # This helper builds a fixture; avoid emitting in-match damage facts.
+            robot.hp = 0
+            robot.alive = False
+            robot.path.clear()
 
 
 def _copy_configs(tmp_path: Path) -> Path:
@@ -88,7 +91,7 @@ def _rules_lab_match() -> Match:
 
 def _complete_rmul_respawn(match: Match, robot_id: str) -> Robot:
     robot = _robot(match, robot_id)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp)
     match.update(0.01)
     lifecycle = match.ruleset._robot_lifecycles[robot_id]
     assert lifecycle.respawn_required is not None
@@ -435,7 +438,8 @@ def test_dead_robot_remains_a_collision_blocker() -> None:
     moving, blocker = _robot(match, T1), _robot(match, T2)
     moving.position = (300.0, 300.0)
     blocker.position = (450.0, 300.0)
-    blocker.take_damage(blocker.hp)
+    blocker.hp = 0
+    blocker.alive = False
     assert match.order_move(T1, (700.0, 300.0))
 
     for _ in range(40):
@@ -554,7 +558,9 @@ def test_group_move_rejects_dead_robot_without_moving_other_members() -> None:
     first, second = _prepare_group_move(match)
     first.path = [(100.0, 200.0), (140.0, 200.0)]
     second.path = [(100.0, 300.0), (140.0, 300.0)]
-    second.take_damage(second.hp)
+    second.hp = 0
+    second.alive = False
+    second.path.clear()
     old_paths = (list(first.path), list(second.path))
 
     assert not match.order_group_move([T1, T2], (500.0, 400.0))
@@ -637,13 +643,13 @@ def test_robots_in_range_do_not_damage_each_other_through_wall() -> None:
 
 def test_match_continues_when_one_robot_dies_and_ends_when_team_is_eliminated() -> None:
     match = Match(load_match_config(default_scenario_path()))
-    _robot(match, T1).take_damage(100)
+    match.apply_damage(_robot(match, T1), 100)
     match.update(0.01)
 
     assert not match.finished
     assert _robot(match, T2).alive
 
-    _robot(match, T2).take_damage(100)
+    match.apply_damage(_robot(match, T2), 100)
     match.update(0.01)
 
     assert match.finished
@@ -706,8 +712,8 @@ def test_match_move_fight_and_reset_roundtrip() -> None:
 def test_training_ruleset_restarts_with_match_reset() -> None:
     match = Match(load_match_config(default_scenario_path()))
     ruleset = match.ruleset
-    _robot(match, T1).take_damage(100)
-    _robot(match, T2).take_damage(100)
+    match.apply_damage(_robot(match, T1), 100)
+    match.apply_damage(_robot(match, T2), 100)
     match.update(0.01)
     assert match.finished
 
@@ -730,16 +736,16 @@ def test_combat_targets_nearest_enemy_independent_of_list_order(
     robots = [attacker, farther, nearer]
     if reverse_robots:
         robots.reverse()
+    hits = []
 
     update_combat(
         robots,
         GameMap(400, 300, [], collision_radius=10),
         can_attack=lambda robot: robot.alive,
-        can_receive_damage=lambda robot: robot.alive,
+        apply_damage=lambda target, damage, attacker: hits.append((target.id, damage)) or damage,
     )
 
-    assert nearer.hp == 90
-    assert farther.hp == 100
+    assert hits == [("z-near", 10)]
 
 
 @pytest.mark.parametrize("reverse_robots", [False, True])
@@ -752,16 +758,16 @@ def test_combat_ties_choose_lexicographically_smallest_robot_id(
     robots = [attacker, later_id, earlier_id]
     if reverse_robots:
         robots.reverse()
+    hits = []
 
     update_combat(
         robots,
         GameMap(400, 300, [], collision_radius=10),
         can_attack=lambda robot: robot.alive,
-        can_receive_damage=lambda robot: robot.alive,
+        apply_damage=lambda target, damage, attacker: hits.append((target.id, damage)) or damage,
     )
 
-    assert earlier_id.hp == 90
-    assert later_id.hp == 100
+    assert hits == [("enemy-a", 10)]
 
 
 def test_both_opponent_robots_move_with_independent_timers() -> None:
@@ -893,7 +899,7 @@ def test_opponents_retarget_when_their_nearest_player_dies() -> None:
 
     match.update(0.05)
     assert not match.finished
-    player1.take_damage(player1.hp)
+    match.apply_damage(player1, player1.hp)
     match.update(0.5)
 
     assert not match.finished
@@ -907,9 +913,9 @@ def test_reset_restores_all_robots_and_ai_state() -> None:
     assert match.order_move(T1, (220.0, 150.0))
     for _ in range(15):
         match.update(0.05)
-    _robot(match, T1).take_damage(30)
-    _robot(match, T2).take_damage(100)
-    _robot(match, O1).take_damage(20)
+    match.apply_damage(_robot(match, T1), 30)
+    match.apply_damage(_robot(match, T2), 100)
+    match.apply_damage(_robot(match, O1), 20)
     match.update(0.05)
 
     match.reset()
@@ -966,12 +972,20 @@ def test_scenario_rejects_zone_outside_map(tmp_path: Path) -> None:
 
 def test_match_emits_one_robot_destroyed_event_only_once() -> None:
     match = Match(load_match_config(default_scenario_path()))
-    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    robot = _robot(match, T1)
+    assert match.apply_damage(robot, robot.hp) == robot.max_hp
+    assert match.apply_damage(robot, 10) == 0
+
+    assert [(event.type, event.robot_id, event.team_id) for event in match.current_events] == [
+        (MatchEventType.ROBOT_DAMAGED, T1, "tarsgo"),
+        (MatchEventType.ROBOT_DESTROYED, T1, "tarsgo"),
+    ]
 
     match.update(0.01)
-    assert [(event.type, event.robot_id, event.team_id) for event in match.current_events] == [
-        (MatchEventType.ROBOT_DESTROYED, T1, "tarsgo")
-    ]
+    assert sum(
+        event.type == MatchEventType.ROBOT_DESTROYED
+        for event in match.current_events
+    ) == 1
 
     match.update(0.01)
     assert match.current_events == []
@@ -979,12 +993,16 @@ def test_match_emits_one_robot_destroyed_event_only_once() -> None:
 
 def test_match_emits_all_same_frame_robot_destroyed_events() -> None:
     match = Match(load_match_config(default_scenario_path()))
-    _robot(match, T1).take_damage(_robot(match, T1).hp)
-    _robot(match, O1).take_damage(_robot(match, O1).hp)
+    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
+    match.apply_damage(_robot(match, O1), _robot(match, O1).hp)
 
     match.update(0.01)
 
-    assert {(event.robot_id, event.team_id) for event in match.current_events} == {
+    assert {
+        (event.robot_id, event.team_id)
+        for event in match.current_events
+        if event.type == MatchEventType.ROBOT_DESTROYED
+    } == {
         (T1, "tarsgo"),
         (O1, "opponent-balanced"),
     }
@@ -992,7 +1010,7 @@ def test_match_emits_all_same_frame_robot_destroyed_events() -> None:
 
 def test_match_reset_clears_current_events() -> None:
     match = Match(load_match_config(default_scenario_path()))
-    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
     match.update(0.01)
     assert match.current_events
 
@@ -1017,9 +1035,274 @@ def test_rmul_rules_lab_initializes_victory_points_and_time_from_yaml() -> None:
     assert match.ruleset.control_owner is None
 
 
+def _prepare_rmul_forbidden_zone(
+    match: Match, offender_id: str = T1
+) -> tuple[Robot, Robot]:
+    offender = _robot(match, offender_id)
+    teammate = next(
+        robot for robot in _team_robots(match, offender.team) if robot is not offender
+    )
+    offender.position = (790.0, 210.0) if offender.team == "tarsgo" else (120.0, 210.0)
+    teammate.position = (300.0, 450.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+        robot.path.clear()
+    return offender, teammate
+
+
+def test_rmul_yellow_card_requires_more_than_three_seconds_and_attributes_damage() -> None:
+    match = _rules_lab_match()
+    offender, teammate = _prepare_rmul_forbidden_zone(match)
+
+    match.update(3.0)
+    assert match.ruleset._robot_penalties[T1].yellow_cards == 0
+    assert offender.hp == offender.max_hp
+
+    match.update(0.01)
+
+    assert match.ruleset._robot_penalties[T1].yellow_cards == 1
+    assert offender.hp == 85
+    assert teammate.hp == 95
+    assert match.ruleset.attack_damage_by_team == {
+        "tarsgo": 0,
+        "opponent-balanced": 20,
+    }
+    assert dict(match.ruleset.display_state.robot_statuses)[T1].startswith(
+        "Y1 FORB"
+    )
+    damage = [
+        event for event in match.current_events
+        if event.type == MatchEventType.ROBOT_DAMAGED
+    ]
+    assert {(event.robot_id, event.attacker_team_id, event.damage) for event in damage} == {
+        (T1, "opponent-balanced", 15),
+        (T2, "opponent-balanced", 5),
+    }
+
+
+def test_rmul_yellow_cards_repeat_every_ten_seconds_then_third_is_red() -> None:
+    match = _rules_lab_match()
+    offender, teammate = _prepare_rmul_forbidden_zone(match)
+
+    match.update(3.01)
+    assert offender.hp == 85
+    match.update(9.99)
+    assert match.ruleset._robot_penalties[T1].yellow_cards == 1
+    match.update(0.01)
+    assert match.ruleset._robot_penalties[T1].yellow_cards == 2
+    assert offender.hp == 55
+    assert teammate.hp == 90
+
+    match.update(10.0)
+
+    penalty = match.ruleset._robot_penalties[T1]
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    assert penalty.yellow_cards == 3
+    assert penalty.disqualified
+    assert dict(match.ruleset.display_state.robot_statuses)[T1] == "RED"
+    assert not offender.alive
+    assert offender.hp == 0
+    assert not offender.path
+    assert lifecycle.respawn_required is None
+    assert match.ruleset.victory_points["tarsgo"] == 180
+    assert teammate.hp == 85
+    assert match.ruleset.attack_damage_by_team == {
+        "tarsgo": 0,
+        "opponent-balanced": 115,
+    }
+
+
+def test_rmul_yellow_damage_leaves_low_hp_robots_at_one_and_alive() -> None:
+    match = _rules_lab_match()
+    offender, teammate = _prepare_rmul_forbidden_zone(match)
+    offender.hp = 10
+    teammate.hp = 2
+
+    match.update(3.01)
+
+    assert offender.hp == teammate.hp == 1
+    assert offender.alive and teammate.alive
+    assert not any(
+        event.type == MatchEventType.ROBOT_DESTROYED
+        and event.robot_id in {offender.id, teammate.id}
+        for event in match.current_events
+    )
+    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 10
+
+
+def test_rmul_yellow_repeat_percentage_returns_to_base_after_thirty_seconds() -> None:
+    match = _rules_lab_match()
+    offender, teammate = _prepare_rmul_forbidden_zone(match)
+    match.update(3.01)
+    assert offender.hp == 85
+
+    offender.position = (500.0, 450.0)
+    match.update(30.1)
+    offender.position = (790.0, 210.0)
+    match.update(3.01)
+
+    assert match.ruleset._robot_penalties[T1].yellow_cards == 2
+    assert offender.hp == 70
+    assert teammate.hp == 90
+    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 40
+
+
+def test_rmul_large_update_and_small_updates_apply_same_forbidden_zone_cards() -> None:
+    large = _rules_lab_match()
+    small = _rules_lab_match()
+    large_offender, large_teammate = _prepare_rmul_forbidden_zone(large)
+    small_offender, small_teammate = _prepare_rmul_forbidden_zone(small)
+
+    large.update(23.1)
+    for _ in range(231):
+        small.update(0.1)
+
+    assert large.ruleset._robot_penalties[T1] == small.ruleset._robot_penalties[T1]
+    assert (large_offender.hp, large_teammate.hp) == (
+        small_offender.hp,
+        small_teammate.hp,
+    ) == (0, 85)
+    assert large.ruleset.attack_damage_by_team == small.ruleset.attack_damage_by_team
+    assert large.ruleset.victory_points == small.ruleset.victory_points
+
+
+def test_rmul_red_card_disables_opponent_ai_and_respawn() -> None:
+    match = _rules_lab_match()
+    opponent, _ = _prepare_rmul_forbidden_zone(match, O1)
+    _robot(match, T1).position = (500.0, 450.0)
+
+    match.update(23.1)
+    assert match.ruleset._robot_penalties[O1].disqualified
+    assert not opponent.alive
+    assert not opponent.path
+    assert not any(
+        event.type == MatchEventType.ROBOT_DAMAGED and event.attacker_id == O1
+        for event in match.current_events
+    )
+    assert match.ruleset.victory_points["opponent-balanced"] == 180
+
+    position_after_red = opponent.position
+    match.update(6.0)
+
+    assert not opponent.alive
+    assert opponent.position == position_after_red
+    assert not opponent.path
+    assert match.ruleset._robot_lifecycles[O1].respawn_required is None
+    assert match.ruleset.victory_points["opponent-balanced"] == 180
+
+
+def test_rmul_leaving_enemy_supply_resets_only_continuous_violation_timer() -> None:
+    match = _rules_lab_match()
+    offender, _ = _prepare_rmul_forbidden_zone(match)
+    match.update(2.0)
+    state = match.ruleset._robot_penalties[T1]
+    assert state.forbidden_elapsed == pytest.approx(2.0)
+
+    offender.position = (500.0, 450.0)
+    match.update(0.1)
+    assert state.forbidden_elapsed == 0.0
+    assert state.next_yellow_at == 3.0
+    match.update(2.0)
+    offender.position = (790.0, 210.0)
+    match.update(2.0)
+
+    assert state.yellow_cards == 0
+    assert state.forbidden_elapsed == pytest.approx(2.0)
+
+
+def test_rmul_death_stops_violation_timer_but_keeps_yellow_count() -> None:
+    match = _rules_lab_match()
+    offender, _ = _prepare_rmul_forbidden_zone(match)
+    match.update(3.01)
+    state = match.ruleset._robot_penalties[T1]
+    assert state.yellow_cards == 1
+
+    match.apply_damage(offender, offender.hp, source_team_id="opponent-balanced")
+    match.update(0.01)
+    assert not offender.alive
+    assert state.forbidden_elapsed == 0.0
+    assert state.yellow_cards == 1
+
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    match.update(lifecycle.respawn_required or 5.0)
+    assert offender.alive
+    assert state.forbidden_elapsed == 0.0
+    match.update(0.1)
+    assert state.yellow_cards == 1
+    assert state.forbidden_elapsed == pytest.approx(0.1)
+
+
+def test_rmul_enemy_supply_zone_remains_pathable_and_robot_can_enter() -> None:
+    match = _rules_lab_match()
+    robot = _robot(match, T1)
+    robot.position = (600.0, 260.0)
+    robot.speed = 100.0
+    _robot(match, T2).position = (100.0, 450.0)
+    _robot(match, O1).position = (850.0, 500.0)
+    _robot(match, O2).position = (900.0, 400.0)
+
+    assert match.order_move(T1, (790.0, 260.0))
+    assert robot.path
+    assert robot.path[-1] == (790.0, 260.0)
+    assert match.map.is_passable((790.0, 260.0))
+    for _ in range(30):
+        match.update(0.1)
+        if match.ruleset._forbidden_zones[robot.team].contains(robot.position):
+            break
+    assert match.ruleset._forbidden_zones[robot.team].contains(robot.position)
+    assert match.ruleset._robot_penalties[T1].forbidden_elapsed > 0
+
+
+def test_rmul_player_red_card_cannot_be_moved_or_group_moved_and_reset_clears_state() -> None:
+    match = _rules_lab_match()
+    offender, _ = _prepare_rmul_forbidden_zone(match)
+    match.update(23.1)
+
+    state = match.ruleset._robot_penalties[T1]
+    assert state.disqualified
+    assert not offender.alive
+    assert offender.hp == 0
+    assert not offender.path
+    assert not match.order_move(T1, (400.0, 260.0))
+    assert not match.order_group_move([T1, T2], (400.0, 260.0))
+
+    match.reset()
+
+    reset_offender = _robot(match, T1)
+    reset_state = match.ruleset._robot_penalties[T1]
+    assert reset_offender.alive
+    assert reset_offender.hp == reset_offender.max_hp
+    assert not reset_offender.path
+    assert reset_state.yellow_cards == 0
+    assert reset_state.last_yellow_time is None
+    assert reset_state.last_yellow_fraction == 0.0
+    assert not reset_state.disqualified
+    assert reset_state.forbidden_elapsed == 0.0
+    assert reset_state.next_yellow_at == 3.0
+    assert match.ruleset.attack_damage_by_team == {
+        "tarsgo": 0,
+        "opponent-balanced": 0,
+    }
+
+
+def test_training_rules_do_not_apply_rmul_supply_zone_penalties() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    offender = _robot(match, T1)
+    offender.position = (790.0, 260.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+
+    match.update(30.0)
+
+    assert offender.hp == offender.max_hp
+    assert not hasattr(match.ruleset, "_robot_penalties")
+
+
 def test_rmul_robot_destroyed_penalty_applies_to_owning_team() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
 
     match.update(0.01)
 
@@ -1030,30 +1313,30 @@ def test_rmul_multiple_robot_deaths_apply_each_penalty_in_same_frame() -> None:
     match = _rules_lab_match()
     for robot_id in (T1, T2, O1):
         robot = _robot(match, robot_id)
-        robot.take_damage(robot.hp)
+        match.apply_damage(robot, robot.hp)
 
     match.update(0.01)
 
     assert match.ruleset.victory_points == {"tarsgo": 160, "opponent-balanced": 180}
-    assert len(match.current_events) == 3
+    assert len(match.current_events) == 6
 
 
 def test_rmul_simultaneous_deaths_penalize_both_teams() -> None:
     match = _rules_lab_match()
     for robot_id in (T1, O1):
         robot = _robot(match, robot_id)
-        robot.take_damage(robot.hp)
+        match.apply_damage(robot, robot.hp)
 
     match.update(0.01)
 
     assert match.ruleset.victory_points == {"tarsgo": 180, "opponent-balanced": 180}
-    assert len(match.current_events) == 2
+    assert len(match.current_events) == 4
 
 
 def test_rmul_reaching_zero_vp_ends_match_immediately() -> None:
     match = _rules_lab_match()
     match.ruleset.victory_points["tarsgo"] = 20
-    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
 
     match.update(0.01)
 
@@ -1274,13 +1557,16 @@ def test_rmul_first_death_read_progress_and_respawn_position() -> None:
     death_position = (250.0, 220.0)
     robot.position = death_position
     robot.path = [(290.0, 220.0)]
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp)
 
     # The full five-second death frame starts the read bar at zero.
     match.update(5.0)
 
     lifecycle = match.ruleset._robot_lifecycles[T1]
-    assert len([event for event in match.current_events if event.robot_id == T1]) == 1
+    assert len([
+        event for event in match.current_events
+        if event.robot_id == T1 and event.type == MatchEventType.ROBOT_DESTROYED
+    ]) == 1
     assert match.ruleset.victory_points["tarsgo"] == 180
     assert not robot.alive
     assert lifecycle.death_count == 1
@@ -1304,18 +1590,21 @@ def test_rmul_first_death_read_progress_and_respawn_position() -> None:
 def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None:
     match = _rules_lab_match()
     robot = _robot(match, T1)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp)
     match.update(0.01)
     match.update(5.0)
     assert robot.alive
 
     robot.position = (300.0, 260.0)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp, bypass_invincibility=True)
     match.update(3.0)
 
     lifecycle = match.ruleset._robot_lifecycles[T1]
     assert match.ruleset.victory_points["tarsgo"] == 160
-    assert len([event for event in match.current_events if event.robot_id == T1]) == 1
+    assert len([
+        event for event in match.current_events
+        if event.robot_id == T1 and event.type == MatchEventType.ROBOT_DESTROYED
+    ]) == 1
     assert lifecycle.death_count == 2
     assert lifecycle.respawn_progress == 0
     assert lifecycle.respawn_required == 10
@@ -1328,7 +1617,7 @@ def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None
     assert lifecycle.weak
 
     other = _robot(match, T2)
-    other.take_damage(other.hp)
+    match.apply_damage(other, other.hp)
     match.update(0.01)
     other_lifecycle = match.ruleset._robot_lifecycles[T2]
     assert other_lifecycle.death_count == 1
@@ -1374,6 +1663,24 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
     assert player.attack_cooldown == 0
 
 
+def test_match_damage_entry_enforces_invincibility_unless_penalty_bypasses_it() -> None:
+    match = _rules_lab_match()
+    robot = _complete_rmul_respawn(match, T1)
+    robot.position = (400.0, 300.0)
+    match.update(0.0)
+    hp_before = robot.hp
+
+    assert match.apply_damage(robot, 5) == 0
+    assert robot.hp == hp_before
+    assert match.current_events == []
+
+    assert match.apply_damage(robot, 5, bypass_invincibility=True) == 5
+    assert robot.hp == hp_before - 5
+    assert [event.type for event in match.current_events] == [
+        MatchEventType.ROBOT_DAMAGED
+    ]
+
+
 def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     match = _rules_lab_match()
     robot = _complete_rmul_respawn(match, T1)
@@ -1409,8 +1716,8 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
 def test_rmul_only_each_teams_own_supply_zone_releases_states() -> None:
     match = _rules_lab_match()
     t1, o1 = _robot(match, T1), _robot(match, O1)
-    t1.take_damage(t1.hp)
-    o1.take_damage(o1.hp)
+    match.apply_damage(t1, t1.hp)
+    match.apply_damage(o1, o1.hp)
     match.update(0.01)
     match.update(5.0)
     rules = match.ruleset
@@ -1442,11 +1749,11 @@ def test_rmul_only_each_teams_own_supply_zone_releases_states() -> None:
 def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> None:
     match = _rules_lab_match()
     robot = _robot(match, T1)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp)
     match.update(0.01)
     match.update(5.0)
     robot.position = (300.0, 260.0)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp, bypass_invincibility=True)
     match.update(0.01)
     assert match.ruleset._robot_lifecycles[T1].respawn_required == 10
     match.update(10.0)
@@ -1492,7 +1799,7 @@ def test_training_v0_keeps_dead_robots_permanently_dead() -> None:
         robot.speed = 0
         robot.attack_cooldown = 999
     robot = _robot(match, T1)
-    robot.take_damage(robot.hp)
+    match.apply_damage(robot, robot.hp)
     match.update(0.01)
     match.update(10.0)
 

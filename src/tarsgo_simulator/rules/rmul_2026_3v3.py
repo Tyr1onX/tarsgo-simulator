@@ -26,6 +26,16 @@ class _RobotLifecycle:
     healing_hp_fraction: float = 0.0
 
 
+@dataclass
+class _RobotPenaltyState:
+    forbidden_elapsed: float = 0.0
+    next_yellow_at: float = 0.0
+    yellow_cards: int = 0
+    last_yellow_time: float | None = None
+    last_yellow_fraction: float = 0.0
+    disqualified: bool = False
+
+
 class RMUL2026Rules:
     def __init__(self, document: RuleDocument) -> None:
         if document.metadata.status != "official-partial":
@@ -104,6 +114,54 @@ class RMUL2026Rules:
         if len(set(self._supply_zone_ids.values())) != 2:
             raise ConfigError(f"{document.path}: red / blue 补给区必须使用不同的 zone id")
 
+        penalties = _mapping(document.data, "penalties", document)
+        forbidden_zone = _mapping(
+            penalties, "supply_forbidden_zone", document
+        )
+        self._first_yellow_after = _number(
+            forbidden_zone,
+            "first_yellow_after",
+            document,
+            "penalties.supply_forbidden_zone.first_yellow_after",
+        )
+        self._repeat_yellow_interval = _number(
+            forbidden_zone,
+            "repeat_yellow_interval",
+            document,
+            "penalties.supply_forbidden_zone.repeat_yellow_interval",
+        )
+        yellow_card = _mapping(penalties, "yellow_card", document)
+        self._offender_hp_fraction = _fraction(
+            yellow_card,
+            "offender_hp_fraction",
+            document,
+            "penalties.yellow_card.offender_hp_fraction",
+        )
+        self._teammate_hp_fraction = _fraction(
+            yellow_card,
+            "teammate_hp_fraction",
+            document,
+            "penalties.yellow_card.teammate_hp_fraction",
+        )
+        self._yellow_repeat_window = _number(
+            yellow_card,
+            "repeat_window",
+            document,
+            "penalties.yellow_card.repeat_window",
+        )
+        self._yellow_repeat_multiplier = _integer(
+            yellow_card,
+            "repeat_multiplier",
+            document,
+            "penalties.yellow_card.repeat_multiplier",
+        )
+        self._red_after_yellows = _integer(
+            yellow_card,
+            "red_after_count",
+            document,
+            "penalties.yellow_card.red_after_count",
+        )
+
         parameter_profile = _string(
             document.data, "lab_parameter_profile", document, "lab_parameter_profile"
         )
@@ -123,6 +181,9 @@ class RMUL2026Rules:
         self._previous_zone_teams: set[str] = set()
         self._robot_lifecycles: dict[str, _RobotLifecycle] = {}
         self._supply_zones: dict[str, Zone] = {}
+        self._forbidden_zones: dict[str, Zone] = {}
+        self._opposing_team: dict[str, str] = {}
+        self._robot_penalties: dict[str, _RobotPenaltyState] = {}
 
     @property
     def time_limit(self) -> float:
@@ -132,20 +193,28 @@ class RMUL2026Rules:
     def display_state(self) -> RuleSetDisplayState:
         robot_statuses = []
         for robot_id, lifecycle in sorted(self._robot_lifecycles.items()):
+            penalty = self._robot_penalties[robot_id]
+            parts = []
+            if penalty.disqualified:
+                parts.append("RED")
+            elif penalty.yellow_cards:
+                parts.append(f"Y{penalty.yellow_cards}")
+            if not penalty.disqualified and penalty.forbidden_elapsed > 0:
+                parts.append(f"FORB {penalty.forbidden_elapsed:.1f}s")
             if lifecycle.respawn_required is not None:
-                status = (
+                parts.append(
                     f"RESP {lifecycle.respawn_progress:.1f}/"
                     f"{lifecycle.respawn_required:g}"
                 )
             elif lifecycle.weak and lifecycle.invincible_remaining > 0:
-                status = f"WEAK INV {math.ceil(lifecycle.invincible_remaining)}s"
+                parts.append(f"WEAK INV {math.ceil(lifecycle.invincible_remaining)}s")
             elif lifecycle.weak:
-                status = "WEAK"
+                parts.append("WEAK")
             elif lifecycle.invincible_remaining > 0:
-                status = f"INV {math.ceil(lifecycle.invincible_remaining)}s"
-            else:
+                parts.append(f"INV {math.ceil(lifecycle.invincible_remaining)}s")
+            if not parts:
                 continue
-            robot_statuses.append((robot_id, status))
+            robot_statuses.append((robot_id, " ".join(parts)))
         return RuleSetDisplayState(
             victory_points=tuple(sorted(self.victory_points.items())),
             control_owner=self.control_owner,
@@ -188,8 +257,25 @@ class RMUL2026Rules:
             match.config.scenario.teams[side].team_id: zones_by_id[zone_id]
             for side, zone_id in self._supply_zone_ids.items()
         }
+        team_by_side = {
+            side: match.config.scenario.teams[side].team_id for side in ("red", "blue")
+        }
+        self._opposing_team = {
+            team_by_side["red"]: team_by_side["blue"],
+            team_by_side["blue"]: team_by_side["red"],
+        }
+        self._forbidden_zones = {
+            team_by_side["red"]: zones_by_id[self._supply_zone_ids["blue"]],
+            team_by_side["blue"]: zones_by_id[self._supply_zone_ids["red"]],
+        }
         self._robot_lifecycles = {
             robot.id: _RobotLifecycle() for robot in match.robots
+        }
+        self._robot_penalties = {
+            robot.id: _RobotPenaltyState(
+                next_yellow_at=self._first_yellow_after
+            )
+            for robot in match.robots
         }
         self.victory_points = {
             team.team_id: self._initial_victory_points
@@ -202,36 +288,19 @@ class RMUL2026Rules:
         self._previous_zone_teams = set()
 
     def update(self, match: "Match", dt: float) -> None:
-        # Apply every same-frame fact before Match asks this ruleset for a result.
-        newly_destroyed: set[str] = set()
-        for event in match.current_events:
-            if event.type == MatchEventType.ROBOT_DAMAGED:
-                if (
-                    event.attacker_team_id in self.attack_damage_by_team
-                    and event.damage > 0
-                ):
-                    self.attack_damage_by_team[event.attacker_team_id] += event.damage
-                continue
-            if event.type != MatchEventType.ROBOT_DESTROYED:
-                continue
-            lifecycle = self._robot_lifecycles.get(event.robot_id)
-            if lifecycle is not None:
-                lifecycle.death_count += 1
-                lifecycle.respawn_progress = 0.0
-                lifecycle.respawn_required = self._initial_respawn_progress + (
-                    lifecycle.death_count - 1
-                ) * self._additional_respawn_progress_per_death
-                lifecycle.weak = False
-                lifecycle.invincible_remaining = 0.0
-                newly_destroyed.add(event.robot_id)
-            if event.team_id in self.victory_points:
-                self.victory_points[event.team_id] = max(
-                    0,
-                    self.victory_points[event.team_id] - self._robot_destroyed_penalty,
-                )
+        # Consume each damage/death fact once, including facts emitted by a
+        # penalty later in this same update.
+        event_cursor = 0
+        newly_destroyed, event_cursor = self._consume_events(
+            match, event_cursor
+        )
 
         frame_start = match.elapsed_time - dt
         active_dt = max(0.0, min(dt, self._time_limit - frame_start))
+        self._advance_forbidden_zone_penalties(match, dt, active_dt)
+        more_destroyed, event_cursor = self._consume_events(match, event_cursor)
+        newly_destroyed.update(more_destroyed)
+
         alive_before_lifecycle = {robot.id: robot.alive for robot in match.robots}
         self._advance_robot_lifecycles(match, active_dt, newly_destroyed)
         newly_respawned = {
@@ -251,6 +320,124 @@ class RMUL2026Rules:
         self._advance_control(present_teams, entering_teams, active_dt)
         self._previous_zone_teams = present_teams
 
+    def _consume_events(
+        self, match: "Match", start: int
+    ) -> tuple[set[str], int]:
+        newly_destroyed: set[str] = set()
+        events = match.current_events
+        for event in events[start:]:
+            if event.type == MatchEventType.ROBOT_DAMAGED:
+                if (
+                    event.attacker_team_id in self.attack_damage_by_team
+                    and event.damage > 0
+                ):
+                    self.attack_damage_by_team[event.attacker_team_id] += event.damage
+                continue
+            if event.type != MatchEventType.ROBOT_DESTROYED:
+                continue
+            lifecycle = self._robot_lifecycles.get(event.robot_id)
+            if lifecycle is not None:
+                penalty = self._robot_penalties[event.robot_id]
+                penalty.forbidden_elapsed = 0.0
+                penalty.next_yellow_at = self._first_yellow_after
+                if not penalty.disqualified:
+                    lifecycle.death_count += 1
+                    lifecycle.respawn_progress = 0.0
+                    lifecycle.respawn_required = self._initial_respawn_progress + (
+                        lifecycle.death_count - 1
+                    ) * self._additional_respawn_progress_per_death
+                lifecycle.weak = False
+                lifecycle.invincible_remaining = 0.0
+                newly_destroyed.add(event.robot_id)
+            if event.team_id in self.victory_points:
+                self.victory_points[event.team_id] = max(
+                    0,
+                    self.victory_points[event.team_id] - self._robot_destroyed_penalty,
+                )
+        return newly_destroyed, len(events)
+
+    def _advance_forbidden_zone_penalties(
+        self, match: "Match", dt: float, active_dt: float
+    ) -> None:
+        active_end_time = match.elapsed_time - max(0.0, dt - active_dt)
+        for robot in match.robots:
+            penalty = self._robot_penalties[robot.id]
+            zone = self._forbidden_zones[robot.team]
+            if (
+                not robot.alive
+                or penalty.disqualified
+                or not zone.contains(robot.position)
+            ):
+                penalty.forbidden_elapsed = 0.0
+                penalty.next_yellow_at = self._first_yellow_after
+                continue
+
+            penalty.forbidden_elapsed += active_dt
+            while (
+                robot.alive
+                and not penalty.disqualified
+                and penalty.forbidden_elapsed > penalty.next_yellow_at + 1e-9
+            ):
+                threshold = penalty.next_yellow_at
+                card_time = active_end_time - max(
+                    0.0, penalty.forbidden_elapsed - threshold
+                )
+                self._issue_yellow_card(match, robot, card_time)
+                penalty.next_yellow_at += self._repeat_yellow_interval
+
+    def _issue_yellow_card(
+        self, match: "Match", offender: Robot, card_time: float
+    ) -> None:
+        penalty = self._robot_penalties[offender.id]
+        repeated = (
+            penalty.last_yellow_time is not None
+            and card_time - penalty.last_yellow_time <= self._yellow_repeat_window + 1e-9
+        )
+        fraction = (
+            penalty.last_yellow_fraction * self._yellow_repeat_multiplier
+            if repeated
+            else self._offender_hp_fraction
+        )
+        penalty.yellow_cards += 1
+        penalty.last_yellow_time = card_time
+        penalty.last_yellow_fraction = fraction
+        opponent_team = self._opposing_team[offender.team]
+
+        self._apply_yellow_hp_loss(
+            match, offender, fraction, opponent_team
+        )
+        for teammate in match.robots:
+            if teammate.team == offender.team and teammate is not offender and teammate.alive:
+                self._apply_yellow_hp_loss(
+                    match, teammate, self._teammate_hp_fraction, opponent_team
+                )
+
+        if penalty.yellow_cards >= self._red_after_yellows:
+            penalty.disqualified = True
+            match.apply_damage(
+                offender,
+                offender.hp,
+                source_team_id=opponent_team,
+                bypass_invincibility=True,
+            )
+
+    @staticmethod
+    def _apply_yellow_hp_loss(
+        match: "Match", robot: Robot, fraction: float, source_team_id: str
+    ) -> None:
+        if not robot.alive:
+            return
+        # The manual specifies whole-HP settlement with standard rounding.
+        nominal_damage = int(math.floor(robot.max_hp * fraction + 0.5))
+        damage = min(nominal_damage, max(0, robot.hp - 1))
+        if damage:
+            match.apply_damage(
+                robot,
+                damage,
+                source_team_id=source_team_id,
+                bypass_invincibility=True,
+            )
+
     def _advance_robot_lifecycles(
         self,
         match: "Match",
@@ -260,6 +447,10 @@ class RMUL2026Rules:
         for robot in match.robots:
             lifecycle = self._robot_lifecycles[robot.id]
             if not robot.alive:
+                if self._robot_penalties[robot.id].disqualified:
+                    lifecycle.respawn_progress = 0.0
+                    lifecycle.respawn_required = None
+                    continue
                 # The robot died during this frame. Start accumulating next frame.
                 if robot.id in newly_destroyed or lifecycle.respawn_required is None:
                     continue
