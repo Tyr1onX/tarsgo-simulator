@@ -1,0 +1,11 @@
+schema_version: 1
+id: training-v0
+status: synthetic
+match_duration: 150
+infantry:
+  max_hp: 100
+  move_speed: 190
+  collision_radius: 14
+  attack_range: 125
+  attack_interval: 0.75
+  damage: 10

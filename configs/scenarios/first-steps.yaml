@@ -1,8 +1,21 @@
 schema_version: 1
-id: first-steps
-title: 初次接触
-status: draft
-learning_goals: []
+rules: training-v0
+player_team: tarsgo
+learning_goals:
+  - 选择机器人并下达移动命令
+  - 观察机器人绕开障碍物
+  - 观察自动攻击与 HP 变化
 setup:
-  teams: []
-  robots: []
+  map:
+    width: 900
+    height: 520
+    obstacles:
+      - {x: 410, y: 125, width: 80, height: 270}
+      - {x: 235, y: 170, width: 110, height: 32}
+      - {x: 555, y: 318, width: 105, height: 32}
+  teams:
+    red: tarsgo
+    blue: opponent-balanced
+  spawns:
+    tarsgo-infantry: [120, 260]
+    opponent-infantry: [780, 260]
