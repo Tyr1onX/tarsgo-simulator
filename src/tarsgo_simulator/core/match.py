@@ -1,5 +1,6 @@
 """Single source of truth for the V0 match state."""
 
+import math
 from pathlib import Path
 
 from tarsgo_simulator.core.combat import update_combat
@@ -7,6 +8,9 @@ from tarsgo_simulator.core.config import MatchConfig, load_match_config
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import Robot
+
+
+_OPPONENT_REPLAN_INTERVAL = 0.5
 
 
 class Match:
@@ -50,6 +54,7 @@ class Match:
         self.elapsed_time = 0.0
         self.finished = False
         self.winner: str | None = None
+        self._opponent_replan_elapsed = 0.0
 
     def order_move(self, robot_id: str, goal: tuple[float, float]) -> bool:
         if self.finished:
@@ -57,6 +62,9 @@ class Match:
         robot = next((item for item in self.robots if item.id == robot_id), None)
         if robot is None or not robot.alive or robot.team != self.config.scenario.player_team:
             return False
+        return self._set_robot_destination(robot, goal)
+
+    def _set_robot_destination(self, robot: Robot, goal: tuple[float, float]) -> bool:
         path = find_path(self.map, robot.position, goal)
         if path is None:
             return False
@@ -69,11 +77,42 @@ class Match:
         if dt < 0:
             raise ValueError("dt 不能小于 0")
 
+        self._update_opponent_ai(dt)
         for robot in self.robots:
             robot.update(dt, self.map)
         update_combat(self.robots)
         self.elapsed_time += dt
         self._check_result()
+
+    def _update_opponent_ai(self, dt: float) -> None:
+        player_team = self.config.scenario.player_team
+        player = next(
+            (robot for robot in self.robots if robot.team == player_team and robot.alive),
+            None,
+        )
+        opponent = next(
+            (robot for robot in self.robots if robot.team != player_team and robot.alive),
+            None,
+        )
+        if player is None or opponent is None:
+            self._opponent_replan_elapsed = 0.0
+            if opponent is not None:
+                opponent.path.clear()
+            return
+
+        distance = math.hypot(
+            player.position[0] - opponent.position[0],
+            player.position[1] - opponent.position[1],
+        )
+        if distance <= opponent.attack_range:
+            opponent.path.clear()
+            self._opponent_replan_elapsed = 0.0
+            return
+
+        self._opponent_replan_elapsed += dt
+        if self._opponent_replan_elapsed >= _OPPONENT_REPLAN_INTERVAL:
+            self._opponent_replan_elapsed %= _OPPONENT_REPLAN_INTERVAL
+            self._set_robot_destination(opponent, player.position)
 
     def _check_result(self) -> None:
         living_teams = {robot.team for robot in self.robots if robot.alive}

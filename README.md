@@ -15,9 +15,9 @@
 
 ### Current playable slice
 
-- 单机 Infantry 1v1。
+- 玩家控制 TARS-Go 步兵，对手会主动追击。
 - 左键选择 TARS-Go 步兵，右键移动；路径会绕开障碍物。
-- 进入射程后自动攻击，HP 归零时结束并显示胜方。
+- 双方进入射程后自动交战；HP 归零时结束并显示胜方。
 - 按 `R` 重新开始，按 `Esc` 退出。
 
 `configs/rules/training-v0.yaml` 是内部合成训练参数，不代表官方比赛规则或 TARS-Go 实车参数。`configs/rules/2026-rmul-3v3.yaml` 继续作为待核实的官方规则占位文件。

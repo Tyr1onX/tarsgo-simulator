@@ -1,4 +1,5 @@
 from dataclasses import replace
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -158,10 +159,123 @@ def test_playable_vertical_slice_roundtrip() -> None:
     assert player.position != start
     assert not opponent.alive
     assert match.finished
-    assert match.winner == "tarsgo"
+    assert match.winner == ("tarsgo" if player.alive else None)
 
     match.reset()
     assert not match.finished
     assert match.winner is None
     assert all(robot.hp == robot.max_hp for robot in match.robots)
     assert match.robots[0].position == (120.0, 260.0)
+
+
+def test_opponent_moves_toward_stationary_player() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    opponent = next(robot for robot in match.robots if robot.team == "opponent-balanced")
+    spawn = opponent.position
+    assert not match.order_move(opponent.id, (400.0, 260.0))
+
+    for _ in range(100):
+        match.update(0.05)
+
+    assert opponent.position != spawn
+    assert opponent.position[0] < spawn[0]
+
+
+def test_opponent_routes_around_obstacle_in_match_updates() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    opponent = next(robot for robot in match.robots if robot.team == "opponent-balanced")
+    player = next(robot for robot in match.robots if robot.team == "tarsgo")
+    previous = opponent.position
+
+    for _ in range(100):
+        match.update(0.05)
+        assert match.map.is_passable(opponent.position)
+        assert match.map.can_traverse(previous, opponent.position)
+        previous = opponent.position
+
+    assert abs(opponent.position[1] - player.position[1]) > 1
+    assert abs(opponent.position[0] - player.position[0]) < 660
+
+
+def test_opponent_stops_near_player_to_attack() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    opponent = next(robot for robot in match.robots if robot.team == "opponent-balanced")
+    player = next(robot for robot in match.robots if robot.team == "tarsgo")
+
+    for _ in range(300):
+        match.update(0.02)
+        if not opponent.path and math.dist(opponent.position, player.position) <= opponent.attack_range:
+            break
+
+    distance = math.dist(opponent.position, player.position)
+    assert distance <= opponent.attack_range
+    assert distance > 20
+    assert not opponent.path
+
+
+def test_opponent_replans_toward_moving_player() -> None:
+    config = load_match_config(default_scenario_path())
+    scenario = replace(
+        config.scenario,
+        map_width=1000,
+        map_height=600,
+        obstacles=(),
+        spawns={"tarsgo-infantry": (120.0, 260.0), "opponent-infantry": (780.0, 260.0)},
+    )
+    match = Match(replace(config, scenario=scenario))
+    player = next(robot for robot in match.robots if robot.team == "tarsgo")
+    opponent = next(robot for robot in match.robots if robot.team == "opponent-balanced")
+
+    for _ in range(20):
+        match.update(0.05)
+    old_target_y = player.position[1]
+    assert opponent.position[0] < 780
+
+    assert match.order_move(player.id, (120.0, 100.0))
+    for _ in range(50):
+        match.update(0.05)
+
+    assert player.position[1] < old_target_y
+    assert opponent.position[1] < 260
+
+
+@pytest.mark.parametrize("reverse_robots", [False, True])
+def test_simultaneous_attacks_are_fair_independent_of_robot_order(
+    reverse_robots: bool,
+) -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    player, opponent = match.robots
+    player.position = (300.0, 260.0)
+    opponent.position = (360.0, 260.0)
+    player.hp = opponent.hp = 10
+    player.attack_cooldown = opponent.attack_cooldown = 0.0
+    if reverse_robots:
+        match.robots.reverse()
+
+    match.update(0.01)
+
+    assert not player.alive
+    assert not opponent.alive
+    assert match.finished
+    assert match.winner is None
+
+
+def test_reset_restores_opponent_ai_state() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    player, opponent = match.robots
+    for _ in range(15):
+        match.update(0.05)
+    assert opponent.position != (780.0, 260.0)
+    assert match._opponent_replan_elapsed > 0
+
+    match.reset()
+
+    player, opponent = match.robots
+    assert player.position == (120.0, 260.0)
+    assert opponent.position == (780.0, 260.0)
+    assert player.hp == player.max_hp
+    assert opponent.hp == opponent.max_hp
+    assert not player.path
+    assert not opponent.path
+    assert match._opponent_replan_elapsed == 0
+    assert not match.finished
