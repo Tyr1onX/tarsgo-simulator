@@ -51,6 +51,7 @@ class TeamDefinition:
 @dataclass(frozen=True)
 class ScenarioDefinition:
     player_team: str
+    player_controlled: frozenset[str]
     map_width: float
     map_height: float
     obstacles: tuple[Rectangle, ...]
@@ -115,10 +116,45 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     if player_team not in {team.team_id for team in teams.values()}:
         raise ConfigError(f"{scenario_file}: `player_team` 必须是 setup.teams 中的一支队伍")
 
+    player_controlled_values = _required(
+        scenario_data, "player_controlled", "player_controlled", scenario_file
+    )
+    if (
+        not isinstance(player_controlled_values, list)
+        or not player_controlled_values
+        or not all(
+            isinstance(robot_id, str) and robot_id.strip()
+            for robot_id in player_controlled_values
+        )
+    ):
+        raise ConfigError(f"{scenario_file}: `player_controlled` 必须是非空字符串列表")
+    player_controlled_list = [robot_id.strip() for robot_id in player_controlled_values]
+    if len(player_controlled_list) != len(set(player_controlled_list)):
+        raise ConfigError(f"{scenario_file}: `player_controlled` 中的机器人 id 必须唯一")
+
     spawn_data = _mapping(setup, "spawns", "setup.spawns", scenario_file)
     robot_ids = [robot.id for team in teams.values() for robot in team.robots]
+    robot_teams_by_id = {
+        robot.id: team.team_id
+        for team in teams.values()
+        for robot in team.robots
+    }
     if len(set(robot_ids)) != len(robot_ids):
         raise ConfigError(f"{scenario_file}: 比赛内所有机器人 id 必须全局唯一")
+    unknown_controlled = set(player_controlled_list) - set(robot_ids)
+    if unknown_controlled:
+        unknown = ", ".join(sorted(unknown_controlled))
+        raise ConfigError(f"{scenario_file}: `player_controlled` 引用了未配置的机器人：{unknown}")
+    wrong_team = sorted(
+        robot_id
+        for robot_id in player_controlled_list
+        if robot_teams_by_id[robot_id] != player_team
+    )
+    if wrong_team:
+        raise ConfigError(
+            f"{scenario_file}: `player_controlled` 只能包含 `player_team` 的机器人："
+            f"{', '.join(wrong_team)}"
+        )
     unknown_spawns = set(spawn_data) - set(robot_ids)
     if unknown_spawns:
         unknown = ", ".join(sorted(str(robot_id) for robot_id in unknown_spawns))
@@ -127,6 +163,7 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
 
     scenario = ScenarioDefinition(
         player_team=player_team,
+        player_controlled=frozenset(player_controlled_list),
         map_width=map_width,
         map_height=map_height,
         obstacles=obstacles,
@@ -338,8 +375,6 @@ def _load_team(path: Path) -> TeamDefinition:
         robot_type = _string(value, "type", f"{field}.type", path)
         if robot_id in robot_ids:
             raise ConfigError(f"{path}: 机器人 id `{robot_id}` 在同一队中重复")
-        if robot_type != "infantry":
-            raise ConfigError(f"{path}: `{field}.type` 当前只支持 `infantry`")
         robot_ids.add(robot_id)
         definitions.append(RobotDefinition(robot_id, robot_type))
 

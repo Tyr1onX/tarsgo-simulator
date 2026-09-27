@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING, Any, Mapping
 
-from tarsgo_simulator.core.config import ConfigError, RuleDocument, load_rule_document
+from tarsgo_simulator.core.config import ConfigError, RuleDocument
 from tarsgo_simulator.core.events import MatchEventType
 from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
@@ -13,7 +13,9 @@ from tarsgo_simulator.rules.protocol import (
     RobotParameters,
     RuleSetDisplayState,
 )
-from tarsgo_simulator.rules.training_v0 import TrainingV0Rules
+
+
+_RMUL_ROBOT_TYPES = ("hero", "infantry", "sentry")
 
 
 @dataclass
@@ -162,17 +164,56 @@ class RMUL2026Rules:
             "penalties.yellow_card.red_after_count",
         )
 
-        parameter_profile = _string(
-            document.data, "lab_parameter_profile", document, "lab_parameter_profile"
+        lab_parameters = _mapping(
+            document.data, "lab_robot_parameters", document
         )
-        if parameter_profile != "training-v0":
+        common = _mapping(lab_parameters, "common", document)
+        common_values = {
+            "move_speed": _number(
+                common, "move_speed", document, "lab_robot_parameters.common.move_speed"
+            ),
+            "collision_radius": _number(
+                common,
+                "collision_radius",
+                document,
+                "lab_robot_parameters.common.collision_radius",
+            ),
+            "attack_range": _number(
+                common,
+                "attack_range",
+                document,
+                "lab_robot_parameters.common.attack_range",
+            ),
+            "attack_interval": _number(
+                common,
+                "attack_interval",
+                document,
+                "lab_robot_parameters.common.attack_interval",
+            ),
+            "damage": _integer(
+                common, "damage", document, "lab_robot_parameters.common.damage"
+            ),
+        }
+        expected_parameter_keys = {"common", *_RMUL_ROBOT_TYPES}
+        if set(lab_parameters) != expected_parameter_keys:
             raise ConfigError(
-                f"{document.path}: rules lab currently requires `lab_parameter_profile: training-v0`"
+                f"{document.path}: `lab_robot_parameters` 必须只包含 common、hero、infantry、sentry"
             )
-        profile_document = load_rule_document(
-            document.path.with_name(f"{parameter_profile}.yaml"), parameter_profile
+        self._lab_parameters: dict[str, RobotParameters] = {}
+        for robot_type in _RMUL_ROBOT_TYPES:
+            type_data = _mapping(lab_parameters, robot_type, document)
+            self._lab_parameters[robot_type] = RobotParameters(
+                max_hp=_integer(
+                    type_data,
+                    "max_hp",
+                    document,
+                    f"lab_robot_parameters.{robot_type}.max_hp",
+                ),
+                **common_values,
+            )
+        self._lab_infantry_profile = _string(
+            document.data, "lab_infantry_profile", document, "lab_infantry_profile"
         )
-        self._lab_parameters = TrainingV0Rules(profile_document)
 
         self.victory_points: dict[str, int] = {}
         self.control_owner: str | None = None
@@ -223,8 +264,13 @@ class RMUL2026Rules:
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
-        """Use the explicitly synthetic infantry profile in the rules lab."""
-        return self._lab_parameters.robot_parameters(robot_type)
+        """Return the explicit rules-lab parameters for a supported robot type."""
+        try:
+            return self._lab_parameters[robot_type]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{self._document.path}: rmul-2026-3v3 不支持机器人类型 `{robot_type}`"
+            ) from exc
 
     def can_attack(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
@@ -237,6 +283,35 @@ class RMUL2026Rules:
         )
 
     def reset(self, match: "Match") -> None:
+        expected_roster = {robot_type: 1 for robot_type in _RMUL_ROBOT_TYPES}
+        for team in match.config.scenario.teams.values():
+            actual_roster = {
+                robot_type: sum(robot.type == robot_type for robot in team.robots)
+                for robot_type in _RMUL_ROBOT_TYPES
+            }
+            if actual_roster != expected_roster:
+                raise ConfigError(
+                    f"{self._document.path}: 队伍 `{team.team_id}` 必须恰好包含 "
+                    "1 hero、1 infantry、1 sentry"
+                )
+
+        player_team = match.config.scenario.player_team
+        player_robot_definitions = next(
+            team.robots
+            for team in match.config.scenario.teams.values()
+            if team.team_id == player_team
+        )
+        expected_player_controlled = {
+            robot.id
+            for robot in player_robot_definitions
+            if robot.type in {"hero", "infantry"}
+        }
+        if match.config.scenario.player_controlled != expected_player_controlled:
+            raise ConfigError(
+                f"{self._document.path}: player_controlled 必须只包含 player_team 的 hero 和 infantry；"
+                "sentry 必须由 AI 控制"
+            )
+
         zones = [zone for zone in match.map.zones if zone.id == self._control_zone_id]
         if len(zones) != 1:
             raise ConfigError(

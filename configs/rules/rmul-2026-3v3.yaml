@@ -36,4 +36,17 @@ penalties:
     repeat_window: 30
     repeat_multiplier: 2
     red_after_count: 3
-lab_parameter_profile: training-v0
+lab_infantry_profile: infantry-300hp-90w-chassis
+lab_robot_parameters:
+  common:
+    move_speed: 190
+    collision_radius: 18
+    attack_range: 125
+    attack_interval: 0.75
+    damage: 10
+  hero:
+    max_hp: 350
+  infantry:
+    max_hp: 300
+  sentry:
+    max_hp: 400

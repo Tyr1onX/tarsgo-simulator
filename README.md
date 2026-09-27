@@ -1,6 +1,6 @@
 # TARS-Go RoboMaster 战术训练模拟器
 
-面向 TARS-Go 队伍的新队员教学与战术推演项目。当前提供合成参数的步兵 2v2 训练沙盒，以及一个只实现部分规则的 RMUL 2026 实验场景。
+面向 TARS-Go 队伍的新队员教学与战术推演项目。当前提供合成参数的步兵 2v2 训练沙盒，以及具有 Hero、Infantry、Sentry 阵容结构的 RMUL 2026 部分规则实验场景。
 
 ## 已确定的技术路线
 
@@ -15,9 +15,10 @@
 
 ### Current playable slice
 
-- Infantry 2v2：玩家可左键选择、Shift 多选或拖框选择己方步兵。
+- Training-v0 Infantry 2v2：玩家可左键选择、Shift 多选或拖框选择两台己方步兵。
+- RMUL Rules Lab：双方各有 Hero、Infantry、Sentry；玩家控制己方 Hero 和 Infantry，Sentry 自动运行，对手三台由单机 AI 控制。
 - 右键下令时，单台按指定位置移动；多台保持当前相对队形分别移动，路径会绕开障碍物。
-- 敌方两台步兵独立追击。
+- Training-v0 中，对手两台步兵独立追击。
 - 机器人实体会互相阻挡，不能互相穿透或重叠。
 - 障碍物同时阻挡移动与攻击视线；双方获得视线并进入射程后自动交战。
 - RMUL 2026 rules lab 中，机器人在己方补给区按上限 HP 的 25%/秒回血；进入敌方补给禁区会按计时触发黄牌与累计红牌；超时同 VP 时依次比较实际累计伤害与全队剩余 HP。
@@ -26,7 +27,7 @@
 
 `training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于让不同规则并存；RMUL 2026 实验实现不会修改训练模式。参见 [规则架构](docs/rules/architecture.md)。
 
-`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 仍用合成 Infantry 2v2 配置，用于试验 VP、中央控制区、战亡扣分、自动复活、弱化 / 无敌、补给回血、敌方补给禁区 R45 定时黄/红牌、计时和胜负闭环；补给区是合成布局，不是官方地图。它不是完整 RMUL 2026 模式，也不使用官方阵容或场地图。经济、弹药、热量 / 缓冲能量及其战亡重置、主观裁判判罚和判罚 UI 效果仍未实现；回血按本方区域中心点检测，攻击伤害统计采用模拟器实际 HP 损失。启动实验场景：
+`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 使用 Hero + Infantry + 自动 Sentry 的 3V3 阵容结构，用于试验 VP、中央控制区、战亡扣分、自动复活、弱化 / 无敌、补给回血、敌方补给禁区 R45 定时黄/红牌、计时和胜负闭环。部分 HP 值采用手册参数，其余移动、射程、攻击间隔和直接伤害仍为实验抽象；补给区与地图为合成布局，不代表完整比赛规则或官方场地图。经济、弹药、热量 / 缓冲能量、弹丸和主观裁判判罚尚未实现；攻击仍是合成的直接扣 HP。回血按本方区域中心点检测，攻击伤害统计采用模拟器实际 HP 损失。启动实验场景：
 
 ```bash
 python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml

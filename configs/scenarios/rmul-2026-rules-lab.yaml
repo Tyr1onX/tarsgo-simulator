@@ -1,10 +1,13 @@
 schema_version: 1
 rules: rmul-2026-3v3
-player_team: tarsgo
+player_team: tarsgo-rmul-2026
+player_controlled:
+  - tarsgo-hero
+  - tarsgo-infantry
 learning_goals:
   - 在中央区域建立并维持控制
   - 观察控制区、Victory Point 和战亡扣分
-  - 这是规则实验场景，不代表 RMUL 官方阵容或地图
+  - 用 Hero、Infantry、Sentry 阵容观察 RMUL 部分规则；地图为合成布局
 setup:
   map:
     width: 900
@@ -15,10 +18,12 @@ setup:
       - {id: red-supply, x: 40, y: 150, width: 140, height: 220}
       - {id: blue-supply, x: 720, y: 150, width: 140, height: 220}
   teams:
-    red: tarsgo
-    blue: opponent-balanced
+    red: tarsgo-rmul-2026
+    blue: opponent-rmul-2026
   spawns:
-    tarsgo-infantry-1: [120, 210]
-    tarsgo-infantry-2: [120, 310]
-    opponent-infantry-1: [780, 210]
-    opponent-infantry-2: [780, 310]
+    tarsgo-hero: [120, 190]
+    tarsgo-infantry: [120, 260]
+    tarsgo-sentry: [120, 330]
+    opponent-hero: [780, 190]
+    opponent-infantry: [780, 260]
+    opponent-sentry: [780, 330]

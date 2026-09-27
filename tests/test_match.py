@@ -24,6 +24,14 @@ T1 = "tarsgo-infantry-1"
 T2 = "tarsgo-infantry-2"
 O1 = "opponent-infantry-1"
 O2 = "opponent-infantry-2"
+RMUL_HERO = "tarsgo-hero"
+RMUL_INFANTRY = "tarsgo-infantry"
+RMUL_SENTRY = "tarsgo-sentry"
+RMUL_OPPONENT_HERO = "opponent-hero"
+RMUL_OPPONENT_INFANTRY = "opponent-infantry"
+RMUL_OPPONENT_SENTRY = "opponent-sentry"
+RMUL_TARS_TEAM = "tarsgo-rmul-2026"
+RMUL_OPPONENT_TEAM = "opponent-rmul-2026"
 
 
 def _robot(match: Match, robot_id: str) -> Robot:
@@ -159,6 +167,63 @@ def test_training_config_loads_two_infantry_per_team() -> None:
     )
     assert match.ruleset.robot_parameters("infantry").max_hp > 0
     assert match.ruleset.robot_parameters("infantry").damage > 0
+    assert len(match.robots) == 4
+    assert config.scenario.player_controlled == frozenset({T1, T2})
+
+
+def test_generic_team_loader_accepts_robot_types_without_rule_knowledge(tmp_path: Path) -> None:
+    config_root = _copy_configs(tmp_path)
+    team_file = config_root / "teams" / "tarsgo.yaml"
+    team_data = yaml.safe_load(team_file.read_text(encoding="utf-8"))
+    team_data["robots"][0]["type"] = "hero"
+    team_data["robots"][1]["type"] = "sentry"
+    team_file.write_text(yaml.safe_dump(team_data, sort_keys=False), encoding="utf-8")
+
+    config = load_match_config(config_root / "scenarios" / "first-steps.yaml")
+
+    assert [robot.type for robot in config.scenario.teams["red"].robots] == [
+        "hero",
+        "sentry",
+    ]
+
+
+def test_training_v0_rejects_hero_through_its_ruleset(tmp_path: Path) -> None:
+    config_root = _copy_configs(tmp_path)
+    team_file = config_root / "teams" / "tarsgo.yaml"
+    team_data = yaml.safe_load(team_file.read_text(encoding="utf-8"))
+    team_data["robots"][0]["type"] = "hero"
+    team_file.write_text(yaml.safe_dump(team_data, sort_keys=False), encoding="utf-8")
+
+    config = load_match_config(config_root / "scenarios" / "first-steps.yaml")
+    with pytest.raises(ConfigError, match="training-v0 不支持机器人类型 `hero`"):
+        Match(config)
+
+
+@pytest.mark.parametrize(
+    ("controlled", "message"),
+    [
+        ([], "非空字符串列表"),
+        ([T1, T1], "必须唯一"),
+        (["missing-robot"], "未配置的机器人"),
+        ([O1], "只能包含 `player_team`"),
+    ],
+)
+def test_scenario_validates_player_controlled_ids(
+    tmp_path: Path, controlled: list[str], message: str
+) -> None:
+    scenario_file = _write_scenario(
+        tmp_path, lambda data: data.__setitem__("player_controlled", controlled)
+    )
+    with pytest.raises(ConfigError, match=message):
+        load_match_config(scenario_file)
+
+
+def test_scenario_requires_explicit_player_controlled_ids(tmp_path: Path) -> None:
+    scenario_file = _write_scenario(
+        tmp_path, lambda data: data.pop("player_controlled")
+    )
+    with pytest.raises(ConfigError, match="缺少必要字段 `player_controlled`"):
+        load_match_config(scenario_file)
 
 
 def test_unknown_ruleset_id_fails_explicitly_without_fallback(tmp_path: Path) -> None:
@@ -777,9 +842,9 @@ def test_both_opponent_robots_move_with_independent_timers() -> None:
     for _ in range(20):
         match.update(0.05)
 
-    assert set(match._opponent_replan_elapsed) == {O1, O2}
+    assert set(match._ai_replan_elapsed) == {O1, O2}
     assert all(_robot(match, robot_id).position != starts[robot_id] for robot_id in (O1, O2))
-    assert all(0 <= elapsed < 0.5 for elapsed in match._opponent_replan_elapsed.values())
+    assert all(0 <= elapsed < 0.5 for elapsed in match._ai_replan_elapsed.values())
 
 
 def test_opponent_ai_timer_for_each_robot_advances_independently() -> None:
@@ -791,8 +856,8 @@ def test_opponent_ai_timer_for_each_robot_advances_independently() -> None:
 
     match.update(0.2)
 
-    assert match._opponent_replan_elapsed[O1] == 0.0
-    assert match._opponent_replan_elapsed[O2] == pytest.approx(0.2)
+    assert match._ai_replan_elapsed[O1] == 0.0
+    assert match._ai_replan_elapsed[O2] == pytest.approx(0.2)
 
 
 def test_opponent_ai_routes_around_obstacles_in_match_updates() -> None:
@@ -929,7 +994,7 @@ def test_reset_restores_all_robots_and_ai_state() -> None:
         assert robot.hp == robot.max_hp
         assert robot.alive
         assert not robot.path
-    assert match._opponent_replan_elapsed == {O1: 0.0, O2: 0.0}
+    assert match._ai_replan_elapsed == {O1: 0.0, O2: 0.0}
 
 
 def test_zone_contains_interior_exterior_and_inclusive_edges() -> None:
@@ -1030,19 +1095,236 @@ def test_rmul_rules_lab_initializes_victory_points_and_time_from_yaml() -> None:
     assert match.time_limit == rules_yaml["match_duration"] == 300
     assert match.ruleset.victory_points == {
         team_id: rules_yaml["victory_points"]["initial"]
-        for team_id in ("tarsgo", "opponent-balanced")
+        for team_id in (RMUL_TARS_TEAM, RMUL_OPPONENT_TEAM)
     }
     assert match.ruleset.control_owner is None
 
 
+def _write_rmul_configs(
+    tmp_path: Path,
+    *,
+    mutate_scenario=None,
+    mutate_tarsgo_team=None,
+) -> Path:
+    config_root = _copy_configs(tmp_path)
+    scenario_file = config_root / "scenarios" / "rmul-2026-rules-lab.yaml"
+    if mutate_scenario is not None:
+        data = yaml.safe_load(scenario_file.read_text(encoding="utf-8"))
+        mutate_scenario(data)
+        scenario_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    if mutate_tarsgo_team is not None:
+        team_file = config_root / "teams" / "tarsgo-rmul-2026.yaml"
+        data = yaml.safe_load(team_file.read_text(encoding="utf-8"))
+        mutate_tarsgo_team(data)
+        team_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return scenario_file
+
+
+def test_rmul_rules_lab_uses_six_robot_hero_infantry_sentry_rosters() -> None:
+    match = _rules_lab_match()
+    expected = {"hero": 1, "infantry": 1, "sentry": 1}
+
+    assert len(match.robots) == 6
+    for team in match.config.scenario.teams.values():
+        assert {
+            robot_type: sum(robot.type == robot_type for robot in match.robots if robot.team == team.team_id)
+            for robot_type in expected
+        } == expected
+    assert match.ruleset.robot_parameters("hero").max_hp == 350
+    assert match.ruleset.robot_parameters("infantry").max_hp == 300
+    assert match.ruleset.robot_parameters("sentry").max_hp == 400
+    assert match.ruleset.robot_parameters("sentry").move_speed == 190
+
+
+@pytest.mark.parametrize("roster_error", ["missing-hero", "two-infantry", "missing-sentry"])
+def test_rmul_ruleset_rejects_incomplete_or_duplicate_rosters(
+    tmp_path: Path, roster_error: str
+) -> None:
+    def mutate_team(data: dict) -> None:
+        robots = data["robots"]
+        if roster_error == "missing-hero":
+            robots[:] = [robot for robot in robots if robot["type"] != "hero"]
+        elif roster_error == "two-infantry":
+            robots[0]["type"] = "infantry"
+        else:
+            robots[:] = [robot for robot in robots if robot["type"] != "sentry"]
+
+    def mutate_scenario(data: dict) -> None:
+        if roster_error == "missing-hero":
+            data["player_controlled"].remove(RMUL_HERO)
+            data["setup"]["spawns"].pop(RMUL_HERO)
+        elif roster_error == "missing-sentry":
+            data["setup"]["spawns"].pop(RMUL_SENTRY)
+
+    scenario_file = _write_rmul_configs(
+        tmp_path,
+        mutate_scenario=mutate_scenario,
+        mutate_tarsgo_team=mutate_team,
+    )
+    config = load_match_config(scenario_file)
+
+    with pytest.raises(ConfigError, match="恰好包含 1 hero、1 infantry、1 sentry"):
+        Match(config)
+
+
+def test_rmul_sentry_must_remain_ai_controlled(tmp_path: Path) -> None:
+    scenario_file = _write_rmul_configs(
+        tmp_path,
+        mutate_scenario=lambda data: data["player_controlled"].append(RMUL_SENTRY),
+    )
+    with pytest.raises(ConfigError, match="sentry 必须由 AI 控制"):
+        Match(load_match_config(scenario_file))
+
+
+def test_rmul_direct_control_and_group_move_permissions() -> None:
+    match = _rules_lab_match()
+    assert match.config.scenario.player_controlled == frozenset(
+        {RMUL_HERO, RMUL_INFANTRY}
+    )
+    assert match.is_player_controlled(RMUL_HERO)
+    assert match.is_player_controlled(RMUL_INFANTRY)
+    assert not match.is_player_controlled(RMUL_SENTRY)
+    assert not match.is_player_controlled(RMUL_OPPONENT_HERO)
+
+    assert match.order_move(RMUL_HERO, (180.0, 190.0))
+    assert match.order_move(RMUL_INFANTRY, (180.0, 260.0))
+    assert not match.order_move(RMUL_SENTRY, (180.0, 330.0))
+
+    assert match.order_group_move([RMUL_HERO, RMUL_INFANTRY], (220.0, 225.0))
+    hero_path = [(300.0, 300.0)]
+    sentry_path = [(320.0, 330.0)]
+    _robot(match, RMUL_HERO).path = list(hero_path)
+    _robot(match, RMUL_SENTRY).path = list(sentry_path)
+    assert not match.order_group_move([RMUL_HERO, RMUL_SENTRY], (260.0, 260.0))
+    assert _robot(match, RMUL_HERO).path == hero_path
+    assert _robot(match, RMUL_SENTRY).path == sentry_path
+
+
+def test_rmul_ai_controls_sentry_and_each_opponent_independently() -> None:
+    match = _rules_lab_match()
+    starts = {robot.id: robot.position for robot in match.robots}
+
+    assert set(match._ai_replan_elapsed) == {
+        RMUL_SENTRY,
+        RMUL_OPPONENT_HERO,
+        RMUL_OPPONENT_INFANTRY,
+        RMUL_OPPONENT_SENTRY,
+    }
+    for robot in match.robots:
+        robot.speed = match.ruleset.robot_parameters(robot.type).move_speed
+    match.update(0.5)
+
+    for robot_id in match._ai_replan_elapsed:
+        assert _robot(match, robot_id).position != starts[robot_id]
+        assert match._ai_replan_elapsed[robot_id] == 0.0
+
+
+def test_ai_robot_targets_nearest_enemy_and_never_a_teammate() -> None:
+    match = _rules_lab_match()
+    sentry = _robot(match, RMUL_SENTRY)
+    sentry.position = (350.0, 260.0)
+    _robot(match, RMUL_HERO).position = (340.0, 260.0)
+    nearest_enemy = _robot(match, RMUL_OPPONENT_SENTRY)
+    nearest_enemy.position = (600.0, 260.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (800.0, 130.0)
+    _robot(match, RMUL_OPPONENT_INFANTRY).position = (800.0, 390.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+
+    match.update(0.5)
+
+    assert sentry.path[-1] == nearest_enemy.position
+
+    _robot(match, RMUL_OPPONENT_HERO).position = (550.0, 260.0)
+    _robot(match, RMUL_OPPONENT_INFANTRY).position = (150.0, 260.0)
+    _robot(match, RMUL_OPPONENT_SENTRY).position = (800.0, 390.0)
+    match.update(0.5)
+
+    assert sentry.path[-1] == _robot(match, RMUL_OPPONENT_HERO).position
+
+
+def test_opponent_ai_can_target_autonomous_player_sentry() -> None:
+    match = _rules_lab_match()
+    opponent = _robot(match, RMUL_OPPONENT_HERO)
+    sentry = _robot(match, RMUL_SENTRY)
+    opponent.position = (600.0, 260.0)
+    sentry.position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = (100.0, 100.0)
+    _robot(match, RMUL_INFANTRY).position = (100.0, 430.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+
+    match.update(0.5)
+
+    assert opponent.path[-1] == sentry.position
+
+
+def test_desktop_selection_excludes_sentry_and_opponents() -> None:
+    pygame = pytest.importorskip("pygame")
+    from tarsgo_simulator.desktop.app import (
+        _select_player_robot,
+        _select_player_robots_in_rectangle,
+    )
+
+    match = _rules_lab_match()
+    hero = _robot(match, RMUL_HERO)
+    sentry = _robot(match, RMUL_SENTRY)
+    assert _select_player_robot(hero.position, match) == RMUL_HERO
+    assert _select_player_robot(sentry.position, match) is None
+    all_map = pygame.Rect(0, 0, 1200, 1000)
+    assert _select_player_robots_in_rectangle(all_map, match) == {
+        RMUL_HERO,
+        RMUL_INFANTRY,
+    }
+
+
+def test_rmul_sentry_respawn_uses_shared_lifecycle_and_supply_release() -> None:
+    match = _rules_lab_match()
+    sentry = _robot(match, RMUL_SENTRY)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+
+    _complete_rmul_respawn(match, RMUL_SENTRY)
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_SENTRY]
+
+    assert sentry.alive
+    assert sentry.hp == 80
+    assert lifecycle.death_count == 1
+    assert lifecycle.weak
+    assert lifecycle.invincible_remaining == 30
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 180
+    match.update(0.01)
+    assert not lifecycle.weak
+    assert lifecycle.invincible_remaining == 0
+
+
+def test_rmul_sentry_red_card_prevents_respawn() -> None:
+    match = _rules_lab_match()
+    sentry, _ = _prepare_rmul_forbidden_zone(match, RMUL_SENTRY)
+
+    match.update(23.1)
+
+    penalty = match.ruleset._robot_penalties[RMUL_SENTRY]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_SENTRY]
+    assert penalty.disqualified
+    assert not sentry.alive
+    assert lifecycle.respawn_required is None
+    match.update(30.0)
+    assert not sentry.alive
+    assert lifecycle.respawn_required is None
+
+
 def _prepare_rmul_forbidden_zone(
-    match: Match, offender_id: str = T1
+    match: Match, offender_id: str = RMUL_HERO
 ) -> tuple[Robot, Robot]:
     offender = _robot(match, offender_id)
     teammate = next(
         robot for robot in _team_robots(match, offender.team) if robot is not offender
     )
-    offender.position = (790.0, 210.0) if offender.team == "tarsgo" else (120.0, 210.0)
+    offender.position = (790.0, 210.0) if offender.team == RMUL_TARS_TEAM else (120.0, 210.0)
     teammate.position = (300.0, 450.0)
     for robot in match.robots:
         robot.speed = 0.0
@@ -1056,19 +1338,21 @@ def test_rmul_yellow_card_requires_more_than_three_seconds_and_attributes_damage
     offender, teammate = _prepare_rmul_forbidden_zone(match)
 
     match.update(3.0)
-    assert match.ruleset._robot_penalties[T1].yellow_cards == 0
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 0
     assert offender.hp == offender.max_hp
 
     match.update(0.01)
 
-    assert match.ruleset._robot_penalties[T1].yellow_cards == 1
-    assert offender.hp == 85
-    assert teammate.hp == 95
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 1
+    assert offender.hp == 297
+    assert teammate.hp == 285
+    sentry = _robot(match, RMUL_SENTRY)
+    assert sentry.hp == 381
     assert match.ruleset.attack_damage_by_team == {
-        "tarsgo": 0,
-        "opponent-balanced": 20,
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 88,
     }
-    assert dict(match.ruleset.display_state.robot_statuses)[T1].startswith(
+    assert dict(match.ruleset.display_state.robot_statuses)[RMUL_HERO].startswith(
         "Y1 FORB"
     )
     damage = [
@@ -1076,8 +1360,9 @@ def test_rmul_yellow_card_requires_more_than_three_seconds_and_attributes_damage
         if event.type == MatchEventType.ROBOT_DAMAGED
     ]
     assert {(event.robot_id, event.attacker_team_id, event.damage) for event in damage} == {
-        (T1, "opponent-balanced", 15),
-        (T2, "opponent-balanced", 5),
+        (RMUL_HERO, RMUL_OPPONENT_TEAM, 53),
+        (RMUL_INFANTRY, RMUL_OPPONENT_TEAM, 15),
+        (RMUL_SENTRY, RMUL_OPPONENT_TEAM, 20),
     }
 
 
@@ -1086,30 +1371,30 @@ def test_rmul_yellow_cards_repeat_every_ten_seconds_then_third_is_red() -> None:
     offender, teammate = _prepare_rmul_forbidden_zone(match)
 
     match.update(3.01)
-    assert offender.hp == 85
+    assert offender.hp == 297
     match.update(9.99)
-    assert match.ruleset._robot_penalties[T1].yellow_cards == 1
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 1
     match.update(0.01)
-    assert match.ruleset._robot_penalties[T1].yellow_cards == 2
-    assert offender.hp == 55
-    assert teammate.hp == 90
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 2
+    assert offender.hp == 192
+    assert teammate.hp == 270
 
     match.update(10.0)
 
-    penalty = match.ruleset._robot_penalties[T1]
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    penalty = match.ruleset._robot_penalties[RMUL_HERO]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     assert penalty.yellow_cards == 3
     assert penalty.disqualified
-    assert dict(match.ruleset.display_state.robot_statuses)[T1] == "RED"
+    assert dict(match.ruleset.display_state.robot_statuses)[RMUL_HERO] == "RED"
     assert not offender.alive
     assert offender.hp == 0
     assert not offender.path
     assert lifecycle.respawn_required is None
-    assert match.ruleset.victory_points["tarsgo"] == 180
-    assert teammate.hp == 85
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 180
+    assert teammate.hp == 255
     assert match.ruleset.attack_damage_by_team == {
-        "tarsgo": 0,
-        "opponent-balanced": 115,
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 455,
     }
 
 
@@ -1128,24 +1413,24 @@ def test_rmul_yellow_damage_leaves_low_hp_robots_at_one_and_alive() -> None:
         and event.robot_id in {offender.id, teammate.id}
         for event in match.current_events
     )
-    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 10
+    assert match.ruleset.attack_damage_by_team[RMUL_OPPONENT_TEAM] == 30
 
 
 def test_rmul_yellow_repeat_percentage_returns_to_base_after_thirty_seconds() -> None:
     match = _rules_lab_match()
     offender, teammate = _prepare_rmul_forbidden_zone(match)
     match.update(3.01)
-    assert offender.hp == 85
+    assert offender.hp == 297
 
     offender.position = (500.0, 450.0)
     match.update(30.1)
     offender.position = (790.0, 210.0)
     match.update(3.01)
 
-    assert match.ruleset._robot_penalties[T1].yellow_cards == 2
-    assert offender.hp == 70
-    assert teammate.hp == 90
-    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 40
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 2
+    assert offender.hp == 244
+    assert teammate.hp == 270
+    assert match.ruleset.attack_damage_by_team[RMUL_OPPONENT_TEAM] == 176
 
 
 def test_rmul_large_update_and_small_updates_apply_same_forbidden_zone_cards() -> None:
@@ -1158,29 +1443,29 @@ def test_rmul_large_update_and_small_updates_apply_same_forbidden_zone_cards() -
     for _ in range(231):
         small.update(0.1)
 
-    assert large.ruleset._robot_penalties[T1] == small.ruleset._robot_penalties[T1]
+    assert large.ruleset._robot_penalties[RMUL_HERO] == small.ruleset._robot_penalties[RMUL_HERO]
     assert (large_offender.hp, large_teammate.hp) == (
         small_offender.hp,
         small_teammate.hp,
-    ) == (0, 85)
+    ) == (0, 255)
     assert large.ruleset.attack_damage_by_team == small.ruleset.attack_damage_by_team
     assert large.ruleset.victory_points == small.ruleset.victory_points
 
 
 def test_rmul_red_card_disables_opponent_ai_and_respawn() -> None:
     match = _rules_lab_match()
-    opponent, _ = _prepare_rmul_forbidden_zone(match, O1)
-    _robot(match, T1).position = (500.0, 450.0)
+    opponent, _ = _prepare_rmul_forbidden_zone(match, RMUL_OPPONENT_HERO)
+    _robot(match, RMUL_HERO).position = (500.0, 450.0)
 
     match.update(23.1)
-    assert match.ruleset._robot_penalties[O1].disqualified
+    assert match.ruleset._robot_penalties[RMUL_OPPONENT_HERO].disqualified
     assert not opponent.alive
     assert not opponent.path
     assert not any(
-        event.type == MatchEventType.ROBOT_DAMAGED and event.attacker_id == O1
+        event.type == MatchEventType.ROBOT_DAMAGED and event.attacker_id == RMUL_OPPONENT_HERO
         for event in match.current_events
     )
-    assert match.ruleset.victory_points["opponent-balanced"] == 180
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 180
 
     position_after_red = opponent.position
     match.update(6.0)
@@ -1188,15 +1473,15 @@ def test_rmul_red_card_disables_opponent_ai_and_respawn() -> None:
     assert not opponent.alive
     assert opponent.position == position_after_red
     assert not opponent.path
-    assert match.ruleset._robot_lifecycles[O1].respawn_required is None
-    assert match.ruleset.victory_points["opponent-balanced"] == 180
+    assert match.ruleset._robot_lifecycles[RMUL_OPPONENT_HERO].respawn_required is None
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 180
 
 
 def test_rmul_leaving_enemy_supply_resets_only_continuous_violation_timer() -> None:
     match = _rules_lab_match()
     offender, _ = _prepare_rmul_forbidden_zone(match)
     match.update(2.0)
-    state = match.ruleset._robot_penalties[T1]
+    state = match.ruleset._robot_penalties[RMUL_HERO]
     assert state.forbidden_elapsed == pytest.approx(2.0)
 
     offender.position = (500.0, 450.0)
@@ -1215,16 +1500,16 @@ def test_rmul_death_stops_violation_timer_but_keeps_yellow_count() -> None:
     match = _rules_lab_match()
     offender, _ = _prepare_rmul_forbidden_zone(match)
     match.update(3.01)
-    state = match.ruleset._robot_penalties[T1]
+    state = match.ruleset._robot_penalties[RMUL_HERO]
     assert state.yellow_cards == 1
 
-    match.apply_damage(offender, offender.hp, source_team_id="opponent-balanced")
+    match.apply_damage(offender, offender.hp, source_team_id=RMUL_OPPONENT_TEAM)
     match.update(0.01)
     assert not offender.alive
     assert state.forbidden_elapsed == 0.0
     assert state.yellow_cards == 1
 
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     match.update(lifecycle.respawn_required or 5.0)
     assert offender.alive
     assert state.forbidden_elapsed == 0.0
@@ -1235,14 +1520,14 @@ def test_rmul_death_stops_violation_timer_but_keeps_yellow_count() -> None:
 
 def test_rmul_enemy_supply_zone_remains_pathable_and_robot_can_enter() -> None:
     match = _rules_lab_match()
-    robot = _robot(match, T1)
+    robot = _robot(match, RMUL_HERO)
     robot.position = (600.0, 260.0)
     robot.speed = 100.0
-    _robot(match, T2).position = (100.0, 450.0)
-    _robot(match, O1).position = (850.0, 500.0)
-    _robot(match, O2).position = (900.0, 400.0)
+    _robot(match, RMUL_INFANTRY).position = (100.0, 450.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (850.0, 500.0)
+    _robot(match, RMUL_OPPONENT_INFANTRY).position = (900.0, 400.0)
 
-    assert match.order_move(T1, (790.0, 260.0))
+    assert match.order_move(RMUL_HERO, (790.0, 260.0))
     assert robot.path
     assert robot.path[-1] == (790.0, 260.0)
     assert match.map.is_passable((790.0, 260.0))
@@ -1251,7 +1536,7 @@ def test_rmul_enemy_supply_zone_remains_pathable_and_robot_can_enter() -> None:
         if match.ruleset._forbidden_zones[robot.team].contains(robot.position):
             break
     assert match.ruleset._forbidden_zones[robot.team].contains(robot.position)
-    assert match.ruleset._robot_penalties[T1].forbidden_elapsed > 0
+    assert match.ruleset._robot_penalties[RMUL_HERO].forbidden_elapsed > 0
 
 
 def test_rmul_player_red_card_cannot_be_moved_or_group_moved_and_reset_clears_state() -> None:
@@ -1259,18 +1544,18 @@ def test_rmul_player_red_card_cannot_be_moved_or_group_moved_and_reset_clears_st
     offender, _ = _prepare_rmul_forbidden_zone(match)
     match.update(23.1)
 
-    state = match.ruleset._robot_penalties[T1]
+    state = match.ruleset._robot_penalties[RMUL_HERO]
     assert state.disqualified
     assert not offender.alive
     assert offender.hp == 0
     assert not offender.path
-    assert not match.order_move(T1, (400.0, 260.0))
-    assert not match.order_group_move([T1, T2], (400.0, 260.0))
+    assert not match.order_move(RMUL_HERO, (400.0, 260.0))
+    assert not match.order_group_move([RMUL_HERO, RMUL_INFANTRY], (400.0, 260.0))
 
     match.reset()
 
-    reset_offender = _robot(match, T1)
-    reset_state = match.ruleset._robot_penalties[T1]
+    reset_offender = _robot(match, RMUL_HERO)
+    reset_state = match.ruleset._robot_penalties[RMUL_HERO]
     assert reset_offender.alive
     assert reset_offender.hp == reset_offender.max_hp
     assert not reset_offender.path
@@ -1281,8 +1566,8 @@ def test_rmul_player_red_card_cannot_be_moved_or_group_moved_and_reset_clears_st
     assert reset_state.forbidden_elapsed == 0.0
     assert reset_state.next_yellow_at == 3.0
     assert match.ruleset.attack_damage_by_team == {
-        "tarsgo": 0,
-        "opponent-balanced": 0,
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 0,
     }
 
 
@@ -1302,69 +1587,69 @@ def test_training_rules_do_not_apply_rmul_supply_zone_penalties() -> None:
 
 def test_rmul_robot_destroyed_penalty_applies_to_owning_team() -> None:
     match = _rules_lab_match()
-    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
+    match.apply_damage(_robot(match, RMUL_HERO), _robot(match, RMUL_HERO).hp)
 
     match.update(0.01)
 
-    assert match.ruleset.victory_points == {"tarsgo": 180, "opponent-balanced": 200}
+    assert match.ruleset.victory_points == {RMUL_TARS_TEAM: 180, RMUL_OPPONENT_TEAM: 200}
 
 
 def test_rmul_multiple_robot_deaths_apply_each_penalty_in_same_frame() -> None:
     match = _rules_lab_match()
-    for robot_id in (T1, T2, O1):
+    for robot_id in (RMUL_HERO, RMUL_INFANTRY, RMUL_OPPONENT_HERO):
         robot = _robot(match, robot_id)
         match.apply_damage(robot, robot.hp)
 
     match.update(0.01)
 
-    assert match.ruleset.victory_points == {"tarsgo": 160, "opponent-balanced": 180}
+    assert match.ruleset.victory_points == {RMUL_TARS_TEAM: 160, RMUL_OPPONENT_TEAM: 180}
     assert len(match.current_events) == 6
 
 
 def test_rmul_simultaneous_deaths_penalize_both_teams() -> None:
     match = _rules_lab_match()
-    for robot_id in (T1, O1):
+    for robot_id in (RMUL_HERO, RMUL_OPPONENT_HERO):
         robot = _robot(match, robot_id)
         match.apply_damage(robot, robot.hp)
 
     match.update(0.01)
 
-    assert match.ruleset.victory_points == {"tarsgo": 180, "opponent-balanced": 180}
+    assert match.ruleset.victory_points == {RMUL_TARS_TEAM: 180, RMUL_OPPONENT_TEAM: 180}
     assert len(match.current_events) == 4
 
 
 def test_rmul_reaching_zero_vp_ends_match_immediately() -> None:
     match = _rules_lab_match()
-    match.ruleset.victory_points["tarsgo"] = 20
-    match.apply_damage(_robot(match, T1), _robot(match, T1).hp)
+    match.ruleset.victory_points[RMUL_TARS_TEAM] = 20
+    match.apply_damage(_robot(match, RMUL_HERO), _robot(match, RMUL_HERO).hp)
 
     match.update(0.01)
 
-    assert match.ruleset.victory_points["tarsgo"] == 0
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 0
     assert match.finished
-    assert match.winner == "opponent-balanced"
+    assert match.winner == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_control_capture_and_integer_second_scoring() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = (450.0, 260.0)
 
     match.update(0.0)
-    assert match.ruleset.control_owner == "tarsgo"
-    assert match.ruleset.victory_points["opponent-balanced"] == 200
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 200
 
     match.update(0.99)
-    assert match.ruleset.victory_points["opponent-balanced"] == 200
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 200
     match.update(0.02)
-    assert match.ruleset.victory_points["opponent-balanced"] == 199
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 199
     match.update(2.4)
-    assert match.ruleset.victory_points["opponent-balanced"] == 197
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 197
 
 
 def _simultaneous_zone_claim(reverse_robots: bool) -> tuple[str | None, dict[str, int]]:
     match = _rules_lab_match()
-    _robot(match, T1).position = (420.0, 220.0)
-    _robot(match, O1).position = (480.0, 300.0)
+    _robot(match, RMUL_HERO).position = (420.0, 220.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (480.0, 300.0)
     if reverse_robots:
         match.robots.reverse()
 
@@ -1381,73 +1666,124 @@ def test_rmul_simultaneous_zone_claim_is_deterministic_and_order_independent() -
     reverse = _simultaneous_zone_claim(True)
 
     assert forward == reverse
-    assert forward[0] == "opponent-balanced"
+    assert forward[0] == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_owner_keeps_zone_during_two_second_loss_delay_then_opponent_claims() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = (450.0, 260.0)
     match.update(0.01)
-    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
 
-    _robot(match, T1).position = (300.0, 260.0)
+    _robot(match, RMUL_HERO).position = (300.0, 260.0)
     match.update(1.5)
-    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
     match.update(0.49)
-    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
     match.update(0.02)
     assert match.ruleset.control_owner is None
 
-    _robot(match, O1).position = (450.0, 260.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (450.0, 260.0)
     match.update(0.01)
-    assert match.ruleset.control_owner == "opponent-balanced"
+    assert match.ruleset.control_owner == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_reset_restores_victory_points_and_control_state() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = (450.0, 260.0)
     match.update(0.01)
     match.update(1.0)
-    assert match.ruleset.control_owner == "tarsgo"
-    assert match.ruleset.victory_points["opponent-balanced"] == 199
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
+    assert match.ruleset.victory_points[RMUL_OPPONENT_TEAM] == 199
 
     match.reset()
 
     assert match.elapsed_time == 0
     assert not match.finished
     assert match.ruleset.control_owner is None
-    assert match.ruleset.victory_points == {"tarsgo": 200, "opponent-balanced": 200}
+    assert match.ruleset.victory_points == {RMUL_TARS_TEAM: 200, RMUL_OPPONENT_TEAM: 200}
+
+
+def test_rmul_reset_restores_all_six_robot_and_ai_rule_states() -> None:
+    match = _rules_lab_match()
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    match.update(0.01)
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
+
+    _prepare_rmul_forbidden_zone(match, RMUL_HERO)
+    match.update(3.01)
+    assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 1
+    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    match.update(0.01)
+    sentry = _robot(match, RMUL_SENTRY)
+    match.apply_damage(sentry, sentry.hp)
+    match.update(0.01)
+    match.update(1.0)
+    assert match.ruleset._robot_lifecycles[RMUL_SENTRY].respawn_progress == 1
+    assert match.order_move(RMUL_INFANTRY, (180.0, 260.0))
+
+    match.reset()
+
+    assert len(match.robots) == 6
+    for robot_id, spawn in match.config.scenario.spawns.items():
+        robot = _robot(match, robot_id)
+        assert robot.position == spawn
+        assert robot.hp == robot.max_hp
+        assert robot.alive
+        assert robot.path == []
+    assert match._ai_replan_elapsed == {
+        RMUL_SENTRY: 0.0,
+        RMUL_OPPONENT_HERO: 0.0,
+        RMUL_OPPONENT_INFANTRY: 0.0,
+        RMUL_OPPONENT_SENTRY: 0.0,
+    }
+    assert set(match.ruleset._robot_lifecycles) == set(match.config.scenario.spawns)
+    assert set(match.ruleset._robot_penalties) == set(match.config.scenario.spawns)
+    assert all(state.yellow_cards == 0 for state in match.ruleset._robot_penalties.values())
+    assert all(state.death_count == 0 for state in match.ruleset._robot_lifecycles.values())
+    assert match.ruleset.victory_points == {
+        RMUL_TARS_TEAM: 200,
+        RMUL_OPPONENT_TEAM: 200,
+    }
+    assert match.ruleset.control_owner is None
+    assert match.ruleset.attack_damage_by_team == {
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 0,
+    }
 
 
 def test_rmul_timeout_vp_and_damage_tie_uses_total_remaining_hp() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).hp = 1
-    _robot(match, T2).hp = 1
-    _robot(match, O1).hp = 100
-    _robot(match, O2).hp = 100
+    _robot(match, RMUL_HERO).hp = 1
+    _robot(match, RMUL_INFANTRY).hp = 1
+    _robot(match, RMUL_OPPONENT_HERO).hp = 100
+    _robot(match, RMUL_OPPONENT_INFANTRY).hp = 100
     match.elapsed_time = match.time_limit - 0.01
 
     match.update(0.02)
 
     assert match.finished
-    assert match.winner == "opponent-balanced"
+    assert match.winner == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_timeout_attack_damage_breaks_vp_tie_before_hp() -> None:
     match = _rules_lab_match()
-    _robot(match, T1).hp = 1
-    _robot(match, T2).hp = 1
-    _robot(match, O1).hp = 100
-    _robot(match, O2).hp = 100
+    _robot(match, RMUL_HERO).hp = 1
+    _robot(match, RMUL_INFANTRY).hp = 1
+    _robot(match, RMUL_OPPONENT_HERO).hp = 100
+    _robot(match, RMUL_OPPONENT_INFANTRY).hp = 100
     match.ruleset.attack_damage_by_team.update(
-        {"tarsgo": 12, "opponent-balanced": 11}
+        {RMUL_TARS_TEAM: 12, RMUL_OPPONENT_TEAM: 11}
     )
     match.elapsed_time = match.time_limit - 0.01
 
     match.update(0.02)
 
     assert match.finished
-    assert match.winner == "tarsgo"
+    assert match.winner == RMUL_TARS_TEAM
 
 
 def test_rmul_timeout_draws_when_vp_damage_and_total_hp_all_tie() -> None:
@@ -1464,54 +1800,54 @@ def test_rmul_timeout_draws_when_vp_damage_and_total_hp_all_tie() -> None:
 
 def test_rmul_timeout_vp_takes_priority_over_damage_and_hp() -> None:
     match = _rules_lab_match()
-    match.ruleset.victory_points.update({"tarsgo": 150, "opponent-balanced": 151})
+    match.ruleset.victory_points.update({RMUL_TARS_TEAM: 150, RMUL_OPPONENT_TEAM: 151})
     match.ruleset.attack_damage_by_team.update(
-        {"tarsgo": 100, "opponent-balanced": 1}
+        {RMUL_TARS_TEAM: 100, RMUL_OPPONENT_TEAM: 1}
     )
-    _robot(match, T1).hp = _robot(match, T2).hp = 1
+    _robot(match, RMUL_HERO).hp = _robot(match, RMUL_INFANTRY).hp = 1
     match.elapsed_time = match.time_limit - 0.01
 
     match.update(0.02)
 
     assert match.finished
-    assert match.winner == "opponent-balanced"
+    assert match.winner == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_supply_healing_is_per_robot_and_slice_invariant() -> None:
     whole = _rules_lab_match()
     sliced = _rules_lab_match()
     for match in (whole, sliced):
-        _robot(match, T1).position = (70.0, 170.0)
-        _robot(match, T2).position = (150.0, 350.0)
-        _robot(match, T1).hp = 50
-        _robot(match, T2).hp = 50
+        _robot(match, RMUL_HERO).position = (70.0, 170.0)
+        _robot(match, RMUL_INFANTRY).position = (150.0, 350.0)
+        _robot(match, RMUL_HERO).hp = 50
+        _robot(match, RMUL_INFANTRY).hp = 50
 
     whole.update(1.0)
     for _ in range(10):
         sliced.update(0.1)
 
     for match in (whole, sliced):
-        assert _robot(match, T1).hp == 75
-        assert _robot(match, T2).hp == 75
+        assert _robot(match, RMUL_HERO).hp == 137
+        assert _robot(match, RMUL_INFANTRY).hp == 125
     assert [robot.hp for robot in whole.robots] == [robot.hp for robot in sliced.robots]
 
 
 def test_rmul_supply_healing_clears_fraction_on_leaving_and_at_full_hp() -> None:
     match = _rules_lab_match()
-    robot = _robot(match, T1)
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    robot = _robot(match, RMUL_HERO)
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     robot.position = (110.0, 210.0)
     robot.hp = 50
     match.update(0.01)
-    assert lifecycle.healing_hp_fraction == pytest.approx(0.25)
+    assert lifecycle.healing_hp_fraction == pytest.approx(0.875)
 
     robot.position = (450.0, 260.0)
     match.update(0.0)
     assert lifecycle.healing_hp_fraction == 0
     robot.position = (110.0, 210.0)
     match.update(0.03)
-    assert robot.hp == 50
-    assert lifecycle.healing_hp_fraction == pytest.approx(0.75)
+    assert robot.hp == 52
+    assert lifecycle.healing_hp_fraction == pytest.approx(0.625)
 
     robot.hp = robot.max_hp - 1
     lifecycle.healing_hp_fraction = 0
@@ -1520,13 +1856,13 @@ def test_rmul_supply_healing_clears_fraction_on_leaving_and_at_full_hp() -> None
     assert lifecycle.healing_hp_fraction == 0
     robot.hp -= 1
     match.update(0.02)
-    assert robot.hp == robot.max_hp - 1
-    assert lifecycle.healing_hp_fraction == pytest.approx(0.5)
+    assert robot.hp == robot.max_hp
+    assert lifecycle.healing_hp_fraction == 0
 
 
 def test_rmul_counts_only_actual_hp_lost_as_attack_damage() -> None:
     match = _rules_lab_match()
-    attacker, target = _robot(match, T1), _robot(match, O1)
+    attacker, target = _robot(match, RMUL_HERO), _robot(match, RMUL_OPPONENT_HERO)
     attacker.position = (450.0, 260.0)
     target.position = (550.0, 260.0)
     target.hp = 5
@@ -1540,20 +1876,20 @@ def test_rmul_counts_only_actual_hp_lost_as_attack_damage() -> None:
         if event.type == MatchEventType.ROBOT_DAMAGED
     ]
     assert len(damage_events) == 1
-    assert damage_events[0].attacker_id == T1
-    assert damage_events[0].attacker_team_id == "tarsgo"
-    assert damage_events[0].robot_id == O1
+    assert damage_events[0].attacker_id == RMUL_HERO
+    assert damage_events[0].attacker_team_id == RMUL_TARS_TEAM
+    assert damage_events[0].robot_id == RMUL_OPPONENT_HERO
     assert damage_events[0].damage == 5
     assert match.ruleset.attack_damage_by_team == {
-        "tarsgo": 5,
-        "opponent-balanced": 0,
+        RMUL_TARS_TEAM: 5,
+        RMUL_OPPONENT_TEAM: 0,
     }
-    assert dict(match.ruleset.display_state.attack_damage)["tarsgo"] == 5
+    assert dict(match.ruleset.display_state.attack_damage)[RMUL_TARS_TEAM] == 5
 
 
 def test_rmul_first_death_read_progress_and_respawn_position() -> None:
     match = _rules_lab_match()
-    robot = _robot(match, T1)
+    robot = _robot(match, RMUL_HERO)
     death_position = (250.0, 220.0)
     robot.position = death_position
     robot.path = [(290.0, 220.0)]
@@ -1562,17 +1898,17 @@ def test_rmul_first_death_read_progress_and_respawn_position() -> None:
     # The full five-second death frame starts the read bar at zero.
     match.update(5.0)
 
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     assert len([
         event for event in match.current_events
-        if event.robot_id == T1 and event.type == MatchEventType.ROBOT_DESTROYED
+        if event.robot_id == RMUL_HERO and event.type == MatchEventType.ROBOT_DESTROYED
     ]) == 1
-    assert match.ruleset.victory_points["tarsgo"] == 180
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 180
     assert not robot.alive
     assert lifecycle.death_count == 1
     assert lifecycle.respawn_progress == 0
     assert lifecycle.respawn_required == 5
-    assert dict(match.ruleset.display_state.robot_statuses)[T1] == "RESP 0.0/5"
+    assert dict(match.ruleset.display_state.robot_statuses)[RMUL_HERO] == "RESP 0.0/5"
 
     match.update(4.0)
     assert not robot.alive
@@ -1580,7 +1916,7 @@ def test_rmul_first_death_read_progress_and_respawn_position() -> None:
     match.update(1.0)
 
     assert robot.alive
-    assert robot.hp == int(robot.max_hp * 0.2) == 20
+    assert robot.hp == int(robot.max_hp * 0.2) == 70
     assert robot.position == death_position
     assert robot.path == []
     assert lifecycle.weak
@@ -1589,7 +1925,7 @@ def test_rmul_first_death_read_progress_and_respawn_position() -> None:
 
 def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None:
     match = _rules_lab_match()
-    robot = _robot(match, T1)
+    robot = _robot(match, RMUL_HERO)
     match.apply_damage(robot, robot.hp)
     match.update(0.01)
     match.update(5.0)
@@ -1599,11 +1935,11 @@ def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None
     match.apply_damage(robot, robot.hp, bypass_invincibility=True)
     match.update(3.0)
 
-    lifecycle = match.ruleset._robot_lifecycles[T1]
-    assert match.ruleset.victory_points["tarsgo"] == 160
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 160
     assert len([
         event for event in match.current_events
-        if event.robot_id == T1 and event.type == MatchEventType.ROBOT_DESTROYED
+        if event.robot_id == RMUL_HERO and event.type == MatchEventType.ROBOT_DESTROYED
     ]) == 1
     assert lifecycle.death_count == 2
     assert lifecycle.respawn_progress == 0
@@ -1616,19 +1952,19 @@ def test_rmul_repeat_death_increases_only_that_robots_read_requirement() -> None
     assert robot.alive
     assert lifecycle.weak
 
-    other = _robot(match, T2)
+    other = _robot(match, RMUL_INFANTRY)
     match.apply_damage(other, other.hp)
     match.update(0.01)
-    other_lifecycle = match.ruleset._robot_lifecycles[T2]
+    other_lifecycle = match.ruleset._robot_lifecycles[RMUL_INFANTRY]
     assert other_lifecycle.death_count == 1
     assert other_lifecycle.respawn_required == 5
-    assert match.ruleset.victory_points["tarsgo"] == 140
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 140
 
 
 def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() -> None:
     match = _rules_lab_match()
-    player = _complete_rmul_respawn(match, T1)
-    opponent = _robot(match, O1)
+    player = _complete_rmul_respawn(match, RMUL_HERO)
+    opponent = _robot(match, RMUL_OPPONENT_HERO)
     player.position = (450.0, 260.0)
     opponent.position = (550.0, 260.0)
     player.attack_cooldown = 0
@@ -1636,18 +1972,18 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
 
     match.update(0.01)
 
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     assert lifecycle.weak
     assert not match.ruleset.can_attack(player)
     assert player.attack_cooldown == 0
     assert opponent.attack_cooldown == opponent.attack_interval
-    assert player.hp == 20
+    assert player.hp == 70
     assert opponent.hp == opponent.max_hp
     assert not any(
         event.type == MatchEventType.ROBOT_DAMAGED
         for event in match.current_events
     )
-    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 0
+    assert match.ruleset.attack_damage_by_team[RMUL_OPPONENT_TEAM] == 0
     assert match.ruleset.control_owner is None
 
     # Invincibility expires after 30 seconds; weak remains until supply detection.
@@ -1659,13 +1995,13 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
 
     opponent.attack_cooldown = 0
     match.update(0.01)
-    assert player.hp < 20
+    assert player.hp < 70
     assert player.attack_cooldown == 0
 
 
 def test_match_damage_entry_enforces_invincibility_unless_penalty_bypasses_it() -> None:
     match = _rules_lab_match()
-    robot = _complete_rmul_respawn(match, T1)
+    robot = _complete_rmul_respawn(match, RMUL_HERO)
     robot.position = (400.0, 300.0)
     match.update(0.0)
     hp_before = robot.hp
@@ -1683,18 +2019,18 @@ def test_match_damage_entry_enforces_invincibility_unless_penalty_bypasses_it() 
 
 def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     match = _rules_lab_match()
-    robot = _complete_rmul_respawn(match, T1)
+    robot = _complete_rmul_respawn(match, RMUL_HERO)
     robot.position = (450.0, 260.0)
 
     match.update(0.0)
     assert match.ruleset.control_owner is None
-    assert match.ruleset._robot_lifecycles[T1].weak
+    assert match.ruleset._robot_lifecycles[RMUL_HERO].weak
 
     # Supply zones only release state; they do not heal.
     robot.hp = 15
     robot.position = (110.0, 260.0)
     match.update(0.0)
-    lifecycle = match.ruleset._robot_lifecycles[T1]
+    lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
     assert not lifecycle.weak
     assert lifecycle.invincible_remaining == 0
     assert robot.hp == 15
@@ -1702,81 +2038,81 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     assert match.ruleset.can_receive_damage(robot)
 
     robot.position = (450.0, 260.0)
-    opponent = _robot(match, O1)
+    opponent = _robot(match, RMUL_OPPONENT_HERO)
     opponent.position = (550.0, 260.0)
     robot.attack_cooldown = 0
     opponent.attack_cooldown = 0
     match.update(0.01)
 
-    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
     assert robot.hp == 5
     assert opponent.hp < opponent.max_hp
 
 
 def test_rmul_only_each_teams_own_supply_zone_releases_states() -> None:
     match = _rules_lab_match()
-    t1, o1 = _robot(match, T1), _robot(match, O1)
+    t1, o1 = _robot(match, RMUL_HERO), _robot(match, RMUL_OPPONENT_HERO)
     match.apply_damage(t1, t1.hp)
     match.apply_damage(o1, o1.hp)
     match.update(0.01)
     match.update(5.0)
     rules = match.ruleset
 
-    assert rules._supply_zones["tarsgo"].id == "red-supply"
-    assert rules._supply_zones["opponent-balanced"].id == "blue-supply"
+    assert rules._supply_zones[RMUL_TARS_TEAM].id == "red-supply"
+    assert rules._supply_zones[RMUL_OPPONENT_TEAM].id == "blue-supply"
     assert t1.alive and o1.alive
-    assert rules._robot_lifecycles[T1].weak
-    assert rules._robot_lifecycles[O1].weak
+    assert rules._robot_lifecycles[RMUL_HERO].weak
+    assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].weak
 
     # Put each revived robot in the other team's supply zone.
     t1.position = (790.0, 210.0)
     o1.position = (110.0, 210.0)
     match.update(0.1)
-    assert rules._robot_lifecycles[T1].weak
-    assert rules._robot_lifecycles[T1].invincible_remaining > 0
-    assert rules._robot_lifecycles[O1].weak
-    assert rules._robot_lifecycles[O1].invincible_remaining > 0
+    assert rules._robot_lifecycles[RMUL_HERO].weak
+    assert rules._robot_lifecycles[RMUL_HERO].invincible_remaining > 0
+    assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].weak
+    assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].invincible_remaining > 0
 
     t1.position = (110.0, 210.0)
     o1.position = (790.0, 210.0)
     match.update(0.0)
-    assert not rules._robot_lifecycles[T1].weak
-    assert rules._robot_lifecycles[T1].invincible_remaining == 0
-    assert not rules._robot_lifecycles[O1].weak
-    assert rules._robot_lifecycles[O1].invincible_remaining == 0
+    assert not rules._robot_lifecycles[RMUL_HERO].weak
+    assert rules._robot_lifecycles[RMUL_HERO].invincible_remaining == 0
+    assert not rules._robot_lifecycles[RMUL_OPPONENT_HERO].weak
+    assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].invincible_remaining == 0
 
 
 def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> None:
     match = _rules_lab_match()
-    robot = _robot(match, T1)
+    robot = _robot(match, RMUL_HERO)
     match.apply_damage(robot, robot.hp)
     match.update(0.01)
     match.update(5.0)
     robot.position = (300.0, 260.0)
     match.apply_damage(robot, robot.hp, bypass_invincibility=True)
     match.update(0.01)
-    assert match.ruleset._robot_lifecycles[T1].respawn_required == 10
+    assert match.ruleset._robot_lifecycles[RMUL_HERO].respawn_required == 10
     match.update(10.0)
-    assert match.ruleset._robot_lifecycles[T1].weak
-    assert match.ruleset._robot_lifecycles[T1].invincible_remaining == 30
+    assert match.ruleset._robot_lifecycles[RMUL_HERO].weak
+    assert match.ruleset._robot_lifecycles[RMUL_HERO].invincible_remaining == 30
 
-    _robot(match, T2).position = (450.0, 260.0)
+    _robot(match, RMUL_INFANTRY).position = (450.0, 260.0)
     match.update(0.01)
-    assert match.ruleset.control_owner == "tarsgo"
-    assert match.ruleset.victory_points["tarsgo"] == 160
-    match.ruleset.attack_damage_by_team["tarsgo"] = 25
-    match.ruleset._robot_lifecycles[T1].healing_hp_fraction = 0.5
+    assert match.ruleset.control_owner == RMUL_TARS_TEAM
+    assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 160
+    match.ruleset.attack_damage_by_team[RMUL_TARS_TEAM] = 25
+    match.ruleset._robot_lifecycles[RMUL_HERO].healing_hp_fraction = 0.5
 
     match.reset()
 
     assert match.ruleset.victory_points == {
-        "tarsgo": 200,
-        "opponent-balanced": 200,
+        RMUL_TARS_TEAM: 200,
+        RMUL_OPPONENT_TEAM: 200,
     }
     assert match.ruleset.control_owner is None
     assert match.ruleset.attack_damage_by_team == {
-        "tarsgo": 0,
-        "opponent-balanced": 0,
+        RMUL_TARS_TEAM: 0,
+        RMUL_OPPONENT_TEAM: 0,
     }
     for robot_id, spawn in match.config.scenario.spawns.items():
         reset_robot = _robot(match, robot_id)

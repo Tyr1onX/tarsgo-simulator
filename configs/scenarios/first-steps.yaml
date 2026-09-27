@@ -1,6 +1,9 @@
 schema_version: 1
 rules: training-v0
 player_team: tarsgo
+player_controlled:
+  - tarsgo-infantry-1
+  - tarsgo-infantry-2
 learning_goals:
   - 选择机器人并下达移动命令
   - 观察机器人绕开障碍物
