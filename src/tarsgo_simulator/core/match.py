@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import MatchConfig, load_match_config
+from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import MovementProposal, Robot
@@ -38,6 +39,7 @@ class Match:
             scenario.map_height,
             scenario.obstacles,
             initial_parameters.collision_radius,
+            scenario.zones,
         )
         self.robots: list[Robot] = []
         for team, definition in definitions:
@@ -63,6 +65,8 @@ class Match:
         self.elapsed_time = 0.0
         self.finished = False
         self.winner: str | None = None
+        self.current_events: list[MatchEvent] = []
+        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
         player_team = scenario.player_team
         self._opponent_replan_elapsed = {
             robot.id: 0.0 for robot in self.robots if robot.team != player_team
@@ -133,12 +137,14 @@ class Match:
         if dt < 0:
             raise ValueError("dt 不能小于 0")
 
+        self.current_events.clear()
         self._update_opponent_ai(dt)
         for robot in self.robots:
             robot.update_cooldown(dt)
         self._move_robots(dt)
         update_combat(self.robots, self.map)
         self.elapsed_time += dt
+        self._collect_robot_destroyed_events()
         self.ruleset.update(self, dt)
         result = self.ruleset.evaluate_result(self)
         if result is not None:
@@ -228,6 +234,20 @@ class Match:
     def _apply_result(self, result: MatchResult) -> None:
         self.finished = True
         self.winner = result.winner
+
+    def _collect_robot_destroyed_events(self) -> None:
+        for robot in sorted(self.robots, key=lambda item: item.id):
+            was_alive = self._alive_at_last_update.get(robot.id, robot.alive)
+            if was_alive and not robot.alive:
+                self.current_events.append(
+                    MatchEvent(
+                        type=MatchEventType.ROBOT_DESTROYED,
+                        time=self.elapsed_time,
+                        robot_id=robot.id,
+                        team_id=robot.team,
+                    )
+                )
+        self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
 
     def team_name(self, team_id: str) -> str:
         for team in self.config.scenario.teams.values():

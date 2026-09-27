@@ -1,0 +1,22 @@
+schema_version: 1
+rules: rmul-2026-3v3
+player_team: tarsgo
+learning_goals:
+  - 在中央区域建立并维持控制
+  - 观察控制区、Victory Point 和战亡扣分
+  - 这是规则实验场景，不代表 RMUL 官方阵容或地图
+setup:
+  map:
+    width: 900
+    height: 520
+    obstacles: []
+    zones:
+      - {id: center-control, x: 400, y: 210, width: 100, height: 100}
+  teams:
+    red: tarsgo
+    blue: opponent-balanced
+  spawns:
+    tarsgo-infantry-1: [120, 210]
+    tarsgo-infantry-2: [120, 310]
+    opponent-infantry-1: [780, 210]
+    opponent-infantry-2: [780, 310]

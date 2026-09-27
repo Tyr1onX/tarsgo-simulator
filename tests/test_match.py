@@ -5,10 +5,12 @@ import shutil
 import sys
 
 import pytest
+import yaml
 
 from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import ConfigError, default_scenario_path, load_match_config
-from tarsgo_simulator.core.map import GameMap, Rectangle
+from tarsgo_simulator.core.events import MatchEventType
+from tarsgo_simulator.core.map import GameMap, Rectangle, Zone
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import Robot
@@ -17,6 +19,7 @@ from tarsgo_simulator.rules.training_v0 import TrainingV0Rules
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+RULES_LAB_PATH = REPOSITORY_ROOT / "configs" / "scenarios" / "rmul-2026-rules-lab.yaml"
 T1 = "tarsgo-infantry-1"
 T2 = "tarsgo-infantry-2"
 O1 = "opponent-infantry-1"
@@ -73,6 +76,23 @@ def _open_field_match() -> Match:
         },
     )
     return Match(replace(config, scenario=scenario))
+
+
+def _rules_lab_match() -> Match:
+    match = Match(load_match_config(RULES_LAB_PATH))
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 999.0
+    return match
+
+
+def _write_scenario(tmp_path: Path, mutate) -> Path:
+    config_root = _copy_configs(tmp_path)
+    scenario_file = config_root / "scenarios" / "first-steps.yaml"
+    data = yaml.safe_load(scenario_file.read_text(encoding="utf-8"))
+    mutate(data)
+    scenario_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return scenario_file
 
 
 def _short_wall_match() -> Match:
@@ -884,3 +904,227 @@ def test_reset_restores_all_robots_and_ai_state() -> None:
         assert robot.alive
         assert not robot.path
     assert match._opponent_replan_elapsed == {O1: 0.0, O2: 0.0}
+
+
+def test_zone_contains_interior_exterior_and_inclusive_edges() -> None:
+    zone = Zone("center", 10, 20, 30, 40)
+
+    assert zone.contains((25, 40))
+    assert zone.contains((10, 20))
+    assert zone.contains((40, 60))
+    assert not zone.contains((9.99, 40))
+    assert not zone.contains((40, 60.01))
+
+
+def test_training_scenario_without_zones_still_loads() -> None:
+    config = load_match_config(default_scenario_path())
+
+    assert config.scenario.zones == ()
+
+
+def test_scenario_rejects_duplicate_zone_ids(tmp_path: Path) -> None:
+    def add_duplicate_zones(data: dict) -> None:
+        data["setup"]["map"]["zones"] = [
+            {"id": "center", "x": 10, "y": 10, "width": 20, "height": 20},
+            {"id": "center", "x": 40, "y": 10, "width": 20, "height": 20},
+        ]
+
+    with pytest.raises(ConfigError, match="区域 id `center` 重复"):
+        load_match_config(_write_scenario(tmp_path, add_duplicate_zones))
+
+
+def test_scenario_rejects_zone_outside_map(tmp_path: Path) -> None:
+    def add_outside_zone(data: dict) -> None:
+        map_width = data["setup"]["map"]["width"]
+        data["setup"]["map"]["zones"] = [
+            {"id": "outside", "x": map_width - 10, "y": 10, "width": 20, "height": 20}
+        ]
+
+    with pytest.raises(ConfigError, match="超出地图边界"):
+        load_match_config(_write_scenario(tmp_path, add_outside_zone))
+
+
+def test_match_emits_one_robot_destroyed_event_only_once() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    _robot(match, T1).take_damage(_robot(match, T1).hp)
+
+    match.update(0.01)
+    assert [(event.type, event.robot_id, event.team_id) for event in match.current_events] == [
+        (MatchEventType.ROBOT_DESTROYED, T1, "tarsgo")
+    ]
+
+    match.update(0.01)
+    assert match.current_events == []
+
+
+def test_match_emits_all_same_frame_robot_destroyed_events() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    _robot(match, O1).take_damage(_robot(match, O1).hp)
+
+    match.update(0.01)
+
+    assert {(event.robot_id, event.team_id) for event in match.current_events} == {
+        (T1, "tarsgo"),
+        (O1, "opponent-balanced"),
+    }
+
+
+def test_match_reset_clears_current_events() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    _robot(match, T1).take_damage(_robot(match, T1).hp)
+    match.update(0.01)
+    assert match.current_events
+
+    match.reset()
+
+    assert match.current_events == []
+
+
+def test_rmul_rules_lab_initializes_victory_points_and_time_from_yaml() -> None:
+    match = _rules_lab_match()
+    rules_yaml = yaml.safe_load(
+        (REPOSITORY_ROOT / "configs" / "rules" / "rmul-2026-3v3.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert match.time_limit == rules_yaml["match_duration"] == 300
+    assert match.ruleset.victory_points == {
+        team_id: rules_yaml["victory_points"]["initial"]
+        for team_id in ("tarsgo", "opponent-balanced")
+    }
+    assert match.ruleset.control_owner is None
+
+
+def test_rmul_robot_destroyed_penalty_applies_to_owning_team() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).take_damage(_robot(match, T1).hp)
+
+    match.update(0.01)
+
+    assert match.ruleset.victory_points == {"tarsgo": 180, "opponent-balanced": 200}
+
+
+def test_rmul_multiple_robot_deaths_apply_each_penalty_in_same_frame() -> None:
+    match = _rules_lab_match()
+    for robot_id in (T1, T2, O1):
+        robot = _robot(match, robot_id)
+        robot.take_damage(robot.hp)
+
+    match.update(0.01)
+
+    assert match.ruleset.victory_points == {"tarsgo": 160, "opponent-balanced": 180}
+    assert len(match.current_events) == 3
+
+
+def test_rmul_simultaneous_deaths_penalize_both_teams() -> None:
+    match = _rules_lab_match()
+    for robot_id in (T1, O1):
+        robot = _robot(match, robot_id)
+        robot.take_damage(robot.hp)
+
+    match.update(0.01)
+
+    assert match.ruleset.victory_points == {"tarsgo": 180, "opponent-balanced": 180}
+    assert len(match.current_events) == 2
+
+
+def test_rmul_reaching_zero_vp_ends_match_immediately() -> None:
+    match = _rules_lab_match()
+    match.ruleset.victory_points["tarsgo"] = 20
+    _robot(match, T1).take_damage(_robot(match, T1).hp)
+
+    match.update(0.01)
+
+    assert match.ruleset.victory_points["tarsgo"] == 0
+    assert match.finished
+    assert match.winner == "opponent-balanced"
+
+
+def test_rmul_control_capture_and_integer_second_scoring() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).position = (450.0, 260.0)
+
+    match.update(0.0)
+    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.victory_points["opponent-balanced"] == 200
+
+    match.update(0.99)
+    assert match.ruleset.victory_points["opponent-balanced"] == 200
+    match.update(0.02)
+    assert match.ruleset.victory_points["opponent-balanced"] == 199
+    match.update(2.4)
+    assert match.ruleset.victory_points["opponent-balanced"] == 197
+
+
+def _simultaneous_zone_claim(reverse_robots: bool) -> tuple[str | None, dict[str, int]]:
+    match = _rules_lab_match()
+    _robot(match, T1).position = (420.0, 220.0)
+    _robot(match, O1).position = (480.0, 300.0)
+    if reverse_robots:
+        match.robots.reverse()
+
+    match.update(0.0)
+    first_owner = match.ruleset.control_owner
+    match.update(0.1)
+
+    assert match.ruleset.control_owner == first_owner
+    return match.ruleset.control_owner, dict(match.ruleset.victory_points)
+
+
+def test_rmul_simultaneous_zone_claim_is_deterministic_and_order_independent() -> None:
+    forward = _simultaneous_zone_claim(False)
+    reverse = _simultaneous_zone_claim(True)
+
+    assert forward == reverse
+    assert forward[0] == "opponent-balanced"
+
+
+def test_rmul_owner_keeps_zone_during_two_second_loss_delay_then_opponent_claims() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).position = (450.0, 260.0)
+    match.update(0.01)
+    assert match.ruleset.control_owner == "tarsgo"
+
+    _robot(match, T1).position = (300.0, 260.0)
+    match.update(1.5)
+    assert match.ruleset.control_owner == "tarsgo"
+    match.update(0.49)
+    assert match.ruleset.control_owner == "tarsgo"
+    match.update(0.02)
+    assert match.ruleset.control_owner is None
+
+    _robot(match, O1).position = (450.0, 260.0)
+    match.update(0.01)
+    assert match.ruleset.control_owner == "opponent-balanced"
+
+
+def test_rmul_reset_restores_victory_points_and_control_state() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).position = (450.0, 260.0)
+    match.update(0.01)
+    match.update(1.0)
+    assert match.ruleset.control_owner == "tarsgo"
+    assert match.ruleset.victory_points["opponent-balanced"] == 199
+
+    match.reset()
+
+    assert match.elapsed_time == 0
+    assert not match.finished
+    assert match.ruleset.control_owner is None
+    assert match.ruleset.victory_points == {"tarsgo": 200, "opponent-balanced": 200}
+
+
+def test_rmul_timeout_vp_tie_draws_without_using_hp_as_fake_tiebreak() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).hp = 1
+    _robot(match, T2).hp = 1
+    _robot(match, O1).hp = 100
+    _robot(match, O2).hp = 100
+    match.elapsed_time = match.time_limit - 0.01
+
+    match.update(0.02)
+
+    assert match.finished
+    assert match.winner is None

@@ -8,7 +8,7 @@
 
 规则实现位于 `src/tarsgo_simulator/rules/`。`RuleSet` 是一组小型 Python 方法：提供机器人参数和时间限制，接收 Match 的 reset/update 调用，并返回比赛结果。RuleSet 读取或修改同一个 Match，不持有第二份机器人列表。
 
-`registry.py` 是唯一的规则 ID 选择入口。目前只注册 `training-v0`。未知 ID 显式报错，不回退到默认规则；新增规则时显式添加一项，不扫描模块或加载插件。
+`registry.py` 是唯一的规则 ID 选择入口，显式注册 `training-v0` 和 `rmul-2026-3v3`。后者是部分、实验性规则集，不代表完整赛季支持。未知 ID 显式报错，不回退到默认规则；新增规则时显式添加一项，不扫描模块或加载插件。
 
 ## YAML 与 Python
 
@@ -22,4 +22,8 @@ YAML 保存适合核对和调整的数据参数；胜负、复活、区域计分
 
 ## 比赛事件
 
-本轮没有加入 `MatchEvent`。当前伤害由 combat 直接调用 `Robot.take_damage()`，死亡也在该对象中完成；要可靠记录 `robot_destroyed` 就需要改造伤害路径。本轮优先建立 RuleSet 边界，后续若出现回放或规则消费事实事件的实际需求，再把事件接到单一伤害/死亡入口。
+`Match.current_events` 只保存当前更新帧的事实。目前仅有 `robot_destroyed`：Match 对比更新前后的存活状态，在统一的 True→False 边缘产生一次事件，然后调用 RuleSet。没有 EventBus、订阅者或历史队列；重置会清空事件状态。RMUL 规则使用该事件扣除所属队伍 VP。
+
+## 区域
+
+Core 的 `Zone` 只表达带 ID 的矩形，边缘包含在区域内；机器人中心点由 RuleSet 查询。区域命名含义、占领状态、计分和控制延迟均由对应规则集负责。无区域的 training-v0 场景保持兼容。

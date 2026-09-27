@@ -20,6 +20,29 @@ class Rectangle:
         return self.y + self.height
 
 
+@dataclass(frozen=True)
+class Zone:
+    """A named rectangular map area; its bounds are inclusive."""
+
+    id: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @property
+    def right(self) -> float:
+        return self.x + self.width
+
+    @property
+    def bottom(self) -> float:
+        return self.y + self.height
+
+    def contains(self, point: tuple[float, float]) -> bool:
+        x, y = point
+        return self.x <= x <= self.right and self.y <= y <= self.bottom
+
+
 class GameMap:
     def __init__(
         self,
@@ -27,11 +50,13 @@ class GameMap:
         height: float,
         obstacles: Iterable[Rectangle],
         collision_radius: float,
+        zones: Iterable[Zone] = (),
     ) -> None:
         self.width = float(width)
         self.height = float(height)
         self.obstacles = tuple(obstacles)
         self.collision_radius = float(collision_radius)
+        self.zones = tuple(zones)
 
     def contains(self, point: tuple[float, float]) -> bool:
         x, y = point

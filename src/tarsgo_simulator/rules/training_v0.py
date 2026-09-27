@@ -4,7 +4,7 @@ import math
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
-from tarsgo_simulator.rules.protocol import MatchResult, RobotParameters
+from tarsgo_simulator.rules.protocol import MatchResult, RobotParameters, RuleSetDisplayState
 
 
 class TrainingV0Rules:
@@ -29,6 +29,10 @@ class TrainingV0Rules:
     @property
     def time_limit(self) -> float:
         return self._time_limit
+
+    @property
+    def display_state(self) -> RuleSetDisplayState | None:
+        return None
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
         if robot_type != "infantry":

@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from tarsgo_simulator.core.map import Rectangle
+from tarsgo_simulator.core.map import Rectangle, Zone
 
 
 class ConfigError(ValueError):
@@ -54,6 +54,7 @@ class ScenarioDefinition:
     map_width: float
     map_height: float
     obstacles: tuple[Rectangle, ...]
+    zones: tuple[Zone, ...]
     teams: dict[str, TeamDefinition]
     spawns: dict[str, tuple[float, float]]
 
@@ -91,14 +92,14 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     rules_file = config_root / "rules" / f"{_safe_name(rules_id, 'rules', scenario_file)}.yaml"
     if not rules_file.is_file():
         raise ConfigError(f"Unknown RuleSet id `{rules_id}`: 找不到规则配置文件 {rules_file}")
-    rules_data = _read_yaml(rules_file)
-    rule_document = _load_rule_document(rules_data, rules_file, rules_id)
+    rule_document = load_rule_document(rules_file, rules_id)
 
     setup = _mapping(scenario_data, "setup", "setup", scenario_file)
     map_data = _mapping(setup, "map", "setup.map", scenario_file)
     map_width = _number(map_data, "width", "setup.map.width", scenario_file)
     map_height = _number(map_data, "height", "setup.map.height", scenario_file)
     obstacles = _obstacles(map_data, scenario_file, map_width, map_height)
+    zones = _zones(map_data, scenario_file, map_width, map_height)
 
     team_refs = _mapping(setup, "teams", "setup.teams", scenario_file)
     teams: dict[str, TeamDefinition] = {}
@@ -129,10 +130,19 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         map_width=map_width,
         map_height=map_height,
         obstacles=obstacles,
+        zones=zones,
         teams=teams,
         spawns=spawns,
     )
     return MatchConfig(rule_document, scenario)
+
+
+def load_rule_document(rule_path: str | Path, expected_id: str | None = None) -> RuleDocument:
+    """Load one shared rule document for explicit RuleSet composition."""
+    path = Path(rule_path).resolve()
+    data = _read_yaml(path)
+    rule_id = expected_id or _string(data, "id", "id", path)
+    return _load_rule_document(data, path, rule_id)
 
 
 def _load_rule_document(
@@ -273,6 +283,39 @@ def _obstacles(
         if obstacle.right > map_width or obstacle.bottom > map_height:
             raise ConfigError(f"{path}: `{field}` 超出地图边界")
         result.append(obstacle)
+    return tuple(result)
+
+
+def _zones(
+    map_data: dict[str, Any],
+    path: Path,
+    map_width: float,
+    map_height: float,
+) -> tuple[Zone, ...]:
+    values = map_data.get("zones", [])
+    if not isinstance(values, list):
+        raise ConfigError(f"{path}: `setup.map.zones` 必须是列表")
+
+    result = []
+    zone_ids: set[str] = set()
+    for index, value in enumerate(values):
+        field = f"setup.map.zones[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path}: `{field}` 必须是 YAML 字典")
+        zone_id = _string(value, "id", f"{field}.id", path)
+        if zone_id in zone_ids:
+            raise ConfigError(f"{path}: 区域 id `{zone_id}` 重复")
+        zone = Zone(
+            id=zone_id,
+            x=_number(value, "x", f"{field}.x", path, allow_zero=True),
+            y=_number(value, "y", f"{field}.y", path, allow_zero=True),
+            width=_number(value, "width", f"{field}.width", path),
+            height=_number(value, "height", f"{field}.height", path),
+        )
+        if zone.right > map_width or zone.bottom > map_height:
+            raise ConfigError(f"{path}: `{field}` 超出地图边界")
+        zone_ids.add(zone_id)
+        result.append(zone)
     return tuple(result)
 
 
