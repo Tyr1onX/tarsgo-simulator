@@ -34,27 +34,31 @@ class Match:
         self.robots: list[Robot] = []
         for side in ("red", "blue"):
             team = scenario.teams[side]
-            position = scenario.spawns[team.robot_id]
-            if not self.map.is_passable(position):
-                raise ValueError(f"机器人出生点不可通行：{team.robot_id} at {position}")
-            self.robots.append(
-                Robot(
-                    id=team.robot_id,
-                    team=team.team_id,
-                    position=position,
-                    hp=infantry.max_hp,
-                    max_hp=infantry.max_hp,
-                    speed=infantry.move_speed,
-                    attack_range=infantry.attack_range,
-                    attack_interval=infantry.attack_interval,
-                    damage=infantry.damage,
-                    type=team.robot_type,
+            for definition in team.robots:
+                position = scenario.spawns[definition.id]
+                if not self.map.is_passable(position):
+                    raise ValueError(f"机器人出生点不可通行：{definition.id} at {position}")
+                self.robots.append(
+                    Robot(
+                        id=definition.id,
+                        team=team.team_id,
+                        position=position,
+                        hp=infantry.max_hp,
+                        max_hp=infantry.max_hp,
+                        speed=infantry.move_speed,
+                        attack_range=infantry.attack_range,
+                        attack_interval=infantry.attack_interval,
+                        damage=infantry.damage,
+                        type=definition.type,
+                    )
                 )
-            )
         self.elapsed_time = 0.0
         self.finished = False
         self.winner: str | None = None
-        self._opponent_replan_elapsed = 0.0
+        player_team = scenario.player_team
+        self._opponent_replan_elapsed = {
+            robot.id: 0.0 for robot in self.robots if robot.team != player_team
+        }
 
     def order_move(self, robot_id: str, goal: tuple[float, float]) -> bool:
         if self.finished:
@@ -86,35 +90,35 @@ class Match:
 
     def _update_opponent_ai(self, dt: float) -> None:
         player_team = self.config.scenario.player_team
-        player = next(
-            (robot for robot in self.robots if robot.team == player_team and robot.alive),
-            None,
-        )
-        opponent = next(
-            (robot for robot in self.robots if robot.team != player_team and robot.alive),
-            None,
-        )
-        if player is None or opponent is None:
-            self._opponent_replan_elapsed = 0.0
-            if opponent is not None:
+        players = [robot for robot in self.robots if robot.team == player_team and robot.alive]
+        for opponent in self.robots:
+            if opponent.team == player_team:
+                continue
+            if not opponent.alive or not players:
                 opponent.path.clear()
-            return
+                self._opponent_replan_elapsed[opponent.id] = 0.0
+                continue
 
-        distance = math.hypot(
-            player.position[0] - opponent.position[0],
-            player.position[1] - opponent.position[1],
-        )
-        if distance <= opponent.attack_range and self.map.has_line_of_sight(
-            opponent.position, player.position
-        ):
-            opponent.path.clear()
-            self._opponent_replan_elapsed = 0.0
-            return
+            target = min(
+                players,
+                key=lambda robot: (
+                    math.dist(opponent.position, robot.position),
+                    robot.id,
+                ),
+            )
+            distance = math.dist(opponent.position, target.position)
+            if distance <= opponent.attack_range and self.map.has_line_of_sight(
+                opponent.position, target.position
+            ):
+                opponent.path.clear()
+                self._opponent_replan_elapsed[opponent.id] = 0.0
+                continue
 
-        self._opponent_replan_elapsed += dt
-        if self._opponent_replan_elapsed >= _OPPONENT_REPLAN_INTERVAL:
-            self._opponent_replan_elapsed %= _OPPONENT_REPLAN_INTERVAL
-            self._set_robot_destination(opponent, player.position)
+            elapsed = self._opponent_replan_elapsed[opponent.id] + dt
+            if elapsed >= _OPPONENT_REPLAN_INTERVAL:
+                elapsed %= _OPPONENT_REPLAN_INTERVAL
+                self._set_robot_destination(opponent, target.position)
+            self._opponent_replan_elapsed[opponent.id] = elapsed
 
     def _check_result(self) -> None:
         living_teams = {robot.team for robot in self.robots if robot.alive}
