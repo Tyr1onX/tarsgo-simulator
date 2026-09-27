@@ -69,6 +69,24 @@ class GameMap:
             for obstacle in self.obstacles
         )
 
+    def has_line_of_sight(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> bool:
+        """Return whether the segment avoids every obstacle's actual bounds."""
+        return not any(
+            _segment_intersects_rectangle(
+                start,
+                end,
+                obstacle.x,
+                obstacle.y,
+                obstacle.right,
+                obstacle.bottom,
+            )
+            for obstacle in self.obstacles
+        )
+
 
 def _segment_intersects_rectangle(
     start: tuple[float, float],
