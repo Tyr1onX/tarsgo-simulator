@@ -28,6 +28,7 @@ class RuleSetDisplayState:
     victory_points: tuple[tuple[str, int], ...]
     control_owner: str | None
     robot_statuses: tuple[tuple[str, str], ...] = ()
+    attack_damage: tuple[tuple[str, int], ...] = ()
 
 
 class RuleSet(Protocol):

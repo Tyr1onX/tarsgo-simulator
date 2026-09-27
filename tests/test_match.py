@@ -1136,7 +1136,7 @@ def test_rmul_reset_restores_victory_points_and_control_state() -> None:
     assert match.ruleset.victory_points == {"tarsgo": 200, "opponent-balanced": 200}
 
 
-def test_rmul_timeout_vp_tie_draws_without_using_hp_as_fake_tiebreak() -> None:
+def test_rmul_timeout_vp_and_damage_tie_uses_total_remaining_hp() -> None:
     match = _rules_lab_match()
     _robot(match, T1).hp = 1
     _robot(match, T2).hp = 1
@@ -1147,7 +1147,125 @@ def test_rmul_timeout_vp_tie_draws_without_using_hp_as_fake_tiebreak() -> None:
     match.update(0.02)
 
     assert match.finished
+    assert match.winner == "opponent-balanced"
+
+
+def test_rmul_timeout_attack_damage_breaks_vp_tie_before_hp() -> None:
+    match = _rules_lab_match()
+    _robot(match, T1).hp = 1
+    _robot(match, T2).hp = 1
+    _robot(match, O1).hp = 100
+    _robot(match, O2).hp = 100
+    match.ruleset.attack_damage_by_team.update(
+        {"tarsgo": 12, "opponent-balanced": 11}
+    )
+    match.elapsed_time = match.time_limit - 0.01
+
+    match.update(0.02)
+
+    assert match.finished
+    assert match.winner == "tarsgo"
+
+
+def test_rmul_timeout_draws_when_vp_damage_and_total_hp_all_tie() -> None:
+    match = _rules_lab_match()
+    for robot in match.robots:
+        robot.hp = 50
+    match.elapsed_time = match.time_limit - 0.01
+
+    match.update(0.02)
+
+    assert match.finished
     assert match.winner is None
+
+
+def test_rmul_timeout_vp_takes_priority_over_damage_and_hp() -> None:
+    match = _rules_lab_match()
+    match.ruleset.victory_points.update({"tarsgo": 150, "opponent-balanced": 151})
+    match.ruleset.attack_damage_by_team.update(
+        {"tarsgo": 100, "opponent-balanced": 1}
+    )
+    _robot(match, T1).hp = _robot(match, T2).hp = 1
+    match.elapsed_time = match.time_limit - 0.01
+
+    match.update(0.02)
+
+    assert match.finished
+    assert match.winner == "opponent-balanced"
+
+
+def test_rmul_supply_healing_is_per_robot_and_slice_invariant() -> None:
+    whole = _rules_lab_match()
+    sliced = _rules_lab_match()
+    for match in (whole, sliced):
+        _robot(match, T1).position = (70.0, 170.0)
+        _robot(match, T2).position = (150.0, 350.0)
+        _robot(match, T1).hp = 50
+        _robot(match, T2).hp = 50
+
+    whole.update(1.0)
+    for _ in range(10):
+        sliced.update(0.1)
+
+    for match in (whole, sliced):
+        assert _robot(match, T1).hp == 75
+        assert _robot(match, T2).hp == 75
+    assert [robot.hp for robot in whole.robots] == [robot.hp for robot in sliced.robots]
+
+
+def test_rmul_supply_healing_clears_fraction_on_leaving_and_at_full_hp() -> None:
+    match = _rules_lab_match()
+    robot = _robot(match, T1)
+    lifecycle = match.ruleset._robot_lifecycles[T1]
+    robot.position = (110.0, 210.0)
+    robot.hp = 50
+    match.update(0.01)
+    assert lifecycle.healing_hp_fraction == pytest.approx(0.25)
+
+    robot.position = (450.0, 260.0)
+    match.update(0.0)
+    assert lifecycle.healing_hp_fraction == 0
+    robot.position = (110.0, 210.0)
+    match.update(0.03)
+    assert robot.hp == 50
+    assert lifecycle.healing_hp_fraction == pytest.approx(0.75)
+
+    robot.hp = robot.max_hp - 1
+    lifecycle.healing_hp_fraction = 0
+    match.update(0.1)
+    assert robot.hp == robot.max_hp
+    assert lifecycle.healing_hp_fraction == 0
+    robot.hp -= 1
+    match.update(0.02)
+    assert robot.hp == robot.max_hp - 1
+    assert lifecycle.healing_hp_fraction == pytest.approx(0.5)
+
+
+def test_rmul_counts_only_actual_hp_lost_as_attack_damage() -> None:
+    match = _rules_lab_match()
+    attacker, target = _robot(match, T1), _robot(match, O1)
+    attacker.position = (450.0, 260.0)
+    target.position = (550.0, 260.0)
+    target.hp = 5
+    attacker.attack_cooldown = 0
+    target.attack_cooldown = 999
+
+    match.update(0.01)
+
+    damage_events = [
+        event for event in match.current_events
+        if event.type == MatchEventType.ROBOT_DAMAGED
+    ]
+    assert len(damage_events) == 1
+    assert damage_events[0].attacker_id == T1
+    assert damage_events[0].attacker_team_id == "tarsgo"
+    assert damage_events[0].robot_id == O1
+    assert damage_events[0].damage == 5
+    assert match.ruleset.attack_damage_by_team == {
+        "tarsgo": 5,
+        "opponent-balanced": 0,
+    }
+    assert dict(match.ruleset.display_state.attack_damage)["tarsgo"] == 5
 
 
 def test_rmul_first_death_read_progress_and_respawn_position() -> None:
@@ -1236,6 +1354,11 @@ def test_rmul_weak_robot_cannot_attack_and_invincibility_expires_separately() ->
     assert opponent.attack_cooldown == opponent.attack_interval
     assert player.hp == 20
     assert opponent.hp == opponent.max_hp
+    assert not any(
+        event.type == MatchEventType.ROBOT_DAMAGED
+        for event in match.current_events
+    )
+    assert match.ruleset.attack_damage_by_team["opponent-balanced"] == 0
     assert match.ruleset.control_owner is None
 
     # Invincibility expires after 30 seconds; weak remains until supply detection.
@@ -1334,6 +1457,8 @@ def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> Non
     match.update(0.01)
     assert match.ruleset.control_owner == "tarsgo"
     assert match.ruleset.victory_points["tarsgo"] == 160
+    match.ruleset.attack_damage_by_team["tarsgo"] = 25
+    match.ruleset._robot_lifecycles[T1].healing_hp_fraction = 0.5
 
     match.reset()
 
@@ -1342,6 +1467,10 @@ def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> Non
         "opponent-balanced": 200,
     }
     assert match.ruleset.control_owner is None
+    assert match.ruleset.attack_damage_by_team == {
+        "tarsgo": 0,
+        "opponent-balanced": 0,
+    }
     for robot_id, spawn in match.config.scenario.spawns.items():
         reset_robot = _robot(match, robot_id)
         lifecycle = match.ruleset._robot_lifecycles[robot_id]
@@ -1354,6 +1483,7 @@ def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> Non
         assert lifecycle.respawn_required is None
         assert not lifecycle.weak
         assert lifecycle.invincible_remaining == 0
+        assert lifecycle.healing_hp_fraction == 0
 
 
 def test_training_v0_keeps_dead_robots_permanently_dead() -> None:
