@@ -12,6 +12,8 @@ from tarsgo_simulator.core.map import GameMap, Rectangle
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.rules.registry import UnknownRuleSetError
+from tarsgo_simulator.rules.training_v0 import TrainingV0Rules
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -111,8 +113,10 @@ def _combat_robot(
 
 def test_training_config_loads_two_infantry_per_team() -> None:
     config = load_match_config(default_scenario_path())
+    match = Match(config)
 
-    assert config.rules_id == "training-v0"
+    assert config.rule_document.metadata.id == "training-v0"
+    assert isinstance(match.ruleset, TrainingV0Rules)
     assert [robot.id for robot in config.scenario.teams["red"].robots] == [T1, T2]
     assert [robot.id for robot in config.scenario.teams["blue"].robots] == [O1, O2]
     assert all(
@@ -120,8 +124,46 @@ def test_training_config_loads_two_infantry_per_team() -> None:
         for team in config.scenario.teams.values()
         for robot in team.robots
     )
-    assert config.infantry.max_hp > 0
-    assert config.infantry.damage > 0
+    assert match.ruleset.robot_parameters("infantry").max_hp > 0
+    assert match.ruleset.robot_parameters("infantry").damage > 0
+
+
+def test_unknown_ruleset_id_fails_explicitly_without_fallback(tmp_path: Path) -> None:
+    config_root = _copy_configs(tmp_path)
+    scenario_file = config_root / "scenarios" / "first-steps.yaml"
+    scenario_file.write_text(
+        scenario_file.read_text(encoding="utf-8").replace(
+            "rules: training-v0", "rules: unknown-ruleset"
+        ),
+        encoding="utf-8",
+    )
+    unsupported_rules = config_root / "rules" / "unknown-ruleset.yaml"
+    unsupported_rules.write_text(
+        (config_root / "rules" / "training-v0.yaml")
+        .read_text(encoding="utf-8")
+        .replace("id: training-v0", "id: unknown-ruleset"),
+        encoding="utf-8",
+    )
+
+    config = load_match_config(scenario_file)
+    with pytest.raises(UnknownRuleSetError, match=r"Unknown RuleSet id `unknown-ruleset`"):
+        Match(config)
+
+
+def test_generic_rule_loader_accepts_non_synthetic_status(tmp_path: Path) -> None:
+    config_root = _copy_configs(tmp_path)
+    rules_file = config_root / "rules" / "training-v0.yaml"
+    rules_file.write_text(
+        rules_file.read_text(encoding="utf-8").replace(
+            "status: synthetic", "status: official"
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_match_config(config_root / "scenarios" / "first-steps.yaml")
+    assert config.rule_document.metadata.status == "official"
+    with pytest.raises(ConfigError, match=r"training-v0 requires `status: synthetic`"):
+        Match(config)
 
 
 def test_core_imports_without_pygame() -> None:
@@ -137,7 +179,7 @@ def test_missing_required_rule_field_has_clear_error(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigError, match=r"infantry\.attack_range"):
-        load_match_config(config_root / "scenarios" / "first-steps.yaml")
+        Match(load_match_config(config_root / "scenarios" / "first-steps.yaml"))
 
 
 def test_team_rejects_duplicate_robot_ids(tmp_path: Path) -> None:
@@ -584,7 +626,7 @@ def test_match_time_winner_uses_total_remaining_team_hp() -> None:
     _robot(match, T2).hp = 40
     _robot(match, O1).hp = 50
     _robot(match, O2).hp = 60
-    match.elapsed_time = match.config.match_duration - 0.01
+    match.elapsed_time = match.time_limit - 0.01
 
     match.update(0.02)
 
@@ -629,6 +671,23 @@ def test_match_move_fight_and_reset_roundtrip() -> None:
     match.reset()
     assert len(match.robots) == 4
     assert _robot(match, T1).position == (120.0, 210.0)
+
+
+def test_training_ruleset_restarts_with_match_reset() -> None:
+    match = Match(load_match_config(default_scenario_path()))
+    ruleset = match.ruleset
+    _robot(match, T1).take_damage(100)
+    _robot(match, T2).take_damage(100)
+    match.update(0.01)
+    assert match.finished
+
+    match.reset()
+
+    assert match.ruleset is ruleset
+    assert not match.finished
+    assert match.winner is None
+    assert match.elapsed_time == 0.0
+    assert all(robot.hp == robot.max_hp for robot in match.robots)
 
 
 @pytest.mark.parametrize("reverse_robots", [False, True])

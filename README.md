@@ -23,7 +23,7 @@
 - HP 归零时结束并显示胜方。
 - 按 `R` 重新开始，按 `Esc` 退出。
 
-`configs/rules/training-v0.yaml` 是内部合成训练参数，不代表官方比赛规则或 TARS-Go 实车参数。`configs/rules/2026-rmul-3v3.yaml` 继续作为待核实的官方规则占位文件。
+`training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于以后并存不同赛季规则；RMUL 2026 3V3 目前仍在研究，尚未实现。参见 [规则架构](docs/rules/architecture.md)、[RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
 
 ## 本地运行
 

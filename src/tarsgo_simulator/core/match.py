@@ -1,4 +1,4 @@
-"""Single source of truth for the V0 match state."""
+"""Single source of truth for the current match state."""
 
 import math
 from pathlib import Path
@@ -8,6 +8,8 @@ from tarsgo_simulator.core.config import MatchConfig, load_match_config
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import MovementProposal, Robot
+from tarsgo_simulator.rules.protocol import MatchResult, RuleSet
+from tarsgo_simulator.rules.registry import create_ruleset
 
 
 _OPPONENT_REPLAN_INTERVAL = 0.5
@@ -16,6 +18,7 @@ _OPPONENT_REPLAN_INTERVAL = 0.5
 class Match:
     def __init__(self, config: MatchConfig) -> None:
         self.config = config
+        self.ruleset: RuleSet = create_ruleset(config.rule_document)
         self.reset()
 
     @classmethod
@@ -24,34 +27,38 @@ class Match:
 
     def reset(self) -> None:
         scenario = self.config.scenario
-        infantry = self.config.infantry
+        definitions = [
+            (scenario.teams[side], definition)
+            for side in ("red", "blue")
+            for definition in scenario.teams[side].robots
+        ]
+        initial_parameters = self.ruleset.robot_parameters(definitions[0][1].type)
         self.map = GameMap(
             scenario.map_width,
             scenario.map_height,
             scenario.obstacles,
-            infantry.collision_radius,
+            initial_parameters.collision_radius,
         )
         self.robots: list[Robot] = []
-        for side in ("red", "blue"):
-            team = scenario.teams[side]
-            for definition in team.robots:
-                position = scenario.spawns[definition.id]
-                if not self.map.is_passable(position):
-                    raise ValueError(f"机器人出生点不可通行：{definition.id} at {position}")
-                self.robots.append(
-                    Robot(
-                        id=definition.id,
-                        team=team.team_id,
-                        position=position,
-                        hp=infantry.max_hp,
-                        max_hp=infantry.max_hp,
-                        speed=infantry.move_speed,
-                        attack_range=infantry.attack_range,
-                        attack_interval=infantry.attack_interval,
-                        damage=infantry.damage,
-                        type=definition.type,
-                    )
+        for team, definition in definitions:
+            parameters = self.ruleset.robot_parameters(definition.type)
+            position = scenario.spawns[definition.id]
+            if not self.map.is_passable(position):
+                raise ValueError(f"机器人出生点不可通行：{definition.id} at {position}")
+            self.robots.append(
+                Robot(
+                    id=definition.id,
+                    team=team.team_id,
+                    position=position,
+                    hp=parameters.max_hp,
+                    max_hp=parameters.max_hp,
+                    speed=parameters.move_speed,
+                    attack_range=parameters.attack_range,
+                    attack_interval=parameters.attack_interval,
+                    damage=parameters.damage,
+                    type=definition.type,
                 )
+            )
         self._validate_spawn_separation()
         self.elapsed_time = 0.0
         self.finished = False
@@ -60,6 +67,11 @@ class Match:
         self._opponent_replan_elapsed = {
             robot.id: 0.0 for robot in self.robots if robot.team != player_team
         }
+        self.ruleset.reset(self)
+
+    @property
+    def time_limit(self) -> float:
+        return self.ruleset.time_limit
 
     def order_move(self, robot_id: str, goal: tuple[float, float]) -> bool:
         if self.finished:
@@ -127,7 +139,10 @@ class Match:
         self._move_robots(dt)
         update_combat(self.robots, self.map)
         self.elapsed_time += dt
-        self._check_result()
+        self.ruleset.update(self, dt)
+        result = self.ruleset.evaluate_result(self)
+        if result is not None:
+            self._apply_result(result)
 
     def _validate_spawn_separation(self) -> None:
         minimum_distance = self.map.collision_radius * 2
@@ -210,22 +225,9 @@ class Match:
                 self._set_robot_destination(opponent, target.position)
             self._opponent_replan_elapsed[opponent.id] = elapsed
 
-    def _check_result(self) -> None:
-        living_teams = {robot.team for robot in self.robots if robot.alive}
-        if len(living_teams) <= 1:
-            self.finished = True
-            self.winner = next(iter(living_teams), None)
-            return
-
-        if self.elapsed_time >= self.config.match_duration:
-            self.finished = True
-            hp_by_team = {
-                team.team_id: sum(robot.hp for robot in self.robots if robot.team == team.team_id)
-                for team in self.config.scenario.teams.values()
-            }
-            highest_hp = max(hp_by_team.values())
-            leaders = [team_id for team_id, hp in hp_by_team.items() if hp == highest_hp]
-            self.winner = leaders[0] if len(leaders) == 1 else None
+    def _apply_result(self, result: MatchResult) -> None:
+        self.finished = True
+        self.winner = result.winner
 
     def team_name(self, team_id: str) -> str:
         for team in self.config.scenario.teams.values():
