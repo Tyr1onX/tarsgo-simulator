@@ -1,6 +1,8 @@
-"""Minimal Pygame front end for the infantry training match."""
+"""Minimal Pygame front end for training and partial rules-lab matches."""
 
+import argparse
 import math
+from pathlib import Path
 
 import pygame
 
@@ -12,6 +14,7 @@ BACKGROUND = (18, 24, 32)
 FIELD_COLOR = (49, 66, 61)
 FIELD_BORDER = (137, 157, 145)
 OBSTACLE_COLOR = (112, 119, 126)
+ZONE_COLOR = (79, 156, 166)
 TEXT_COLOR = (236, 240, 244)
 MUTED_COLOR = (166, 178, 187)
 PLAYER_COLOR = (66, 190, 167)
@@ -24,8 +27,8 @@ HUD_HEIGHT = 68
 WINDOW_MARGIN = 32
 
 
-def main() -> None:
-    match = Match.from_scenario(default_scenario_path())
+def main(scenario_path: str | Path | None = None) -> None:
+    match = Match.from_scenario(scenario_path or default_scenario_path())
     pygame.init()
     try:
         window_size = (
@@ -33,7 +36,7 @@ def main() -> None:
             round(match.map.height) + HUD_HEIGHT + WINDOW_MARGIN,
         )
         screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("TARS-Go Infantry Training")
+        pygame.display.set_caption(_window_caption(match))
         font = pygame.font.Font(None, 25)
         small_font = pygame.font.Font(None, 18)
         clock = pygame.time.Clock()
@@ -127,6 +130,23 @@ def main() -> None:
             pygame.display.flip()
     finally:
         pygame.quit()
+
+
+def cli() -> None:
+    parser = argparse.ArgumentParser(description="Run a TARS-Go simulator scenario.")
+    parser.add_argument(
+        "--scenario",
+        type=Path,
+        help="YAML scenario path (defaults to the training-v0 tutorial)",
+    )
+    arguments = parser.parse_args()
+    main(arguments.scenario)
+
+
+def _window_caption(match: Match) -> str:
+    if match.ruleset.display_state is not None:
+        return "TARS-Go RMUL 2026 Rules Lab (Partial / Experimental)"
+    return "TARS-Go Infantry Training"
 
 
 def _screen_to_world(position: tuple[int, int], match: Match) -> tuple[float, float] | None:
@@ -223,8 +243,14 @@ def _draw(
     opponent_hp = sum(robot.hp for robot in opponent_robots)
     player_max_hp = sum(robot.max_hp for robot in player_robots)
     opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
-    left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
-    right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
+    display_state = match.ruleset.display_state
+    if display_state is None:
+        left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
+        right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
+    else:
+        victory_points = dict(display_state.victory_points)
+        left = f"{match.team_name(player_team)} VP {victory_points[player_team]}"
+        right = f"{match.team_name(opponent_team)} VP {victory_points[opponent_team]}"
     timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
         status = f"{match.team_name(match.winner)} WINS" if match.winner else "DRAW"
@@ -233,9 +259,21 @@ def _draw(
 
     screen.blit(font.render(left, True, PLAYER_COLOR), (WINDOW_MARGIN, 22))
     status_surface = font.render(status, True, TEXT_COLOR)
-    screen.blit(status_surface, status_surface.get_rect(center=(screen.get_width() // 2, 34)))
+    status_y = 26 if display_state is not None else 34
+    screen.blit(status_surface, status_surface.get_rect(center=(screen.get_width() // 2, status_y)))
     right_surface = font.render(right, True, OPPONENT_COLOR)
     screen.blit(right_surface, (screen.get_width() - WINDOW_MARGIN - right_surface.get_width(), 22))
+    if display_state is not None:
+        control_owner = (
+            match.team_name(display_state.control_owner)
+            if display_state.control_owner is not None
+            else "Neutral"
+        )
+        control_surface = small_font.render(f"Control: {control_owner}", True, TEXT_COLOR)
+        screen.blit(
+            control_surface,
+            control_surface.get_rect(center=(screen.get_width() // 2, 52)),
+        )
 
     field_rect = pygame.Rect(MAP_ORIGIN, (round(match.map.width), round(match.map.height)))
     pygame.draw.rect(screen, FIELD_COLOR, field_rect)
@@ -248,6 +286,14 @@ def _draw(
             round(obstacle.height),
         )
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
+    for zone in match.map.zones:
+        zone_rect = pygame.Rect(
+            round(MAP_ORIGIN[0] + zone.x),
+            round(MAP_ORIGIN[1] + zone.y),
+            round(zone.width),
+            round(zone.height),
+        )
+        pygame.draw.rect(screen, ZONE_COLOR, zone_rect, width=2)
 
     labels = {}
     for team_id, prefix in ((player_team, "T"), (opponent_team, "O")):
@@ -280,4 +326,4 @@ def _draw(
 
 
 if __name__ == "__main__":
-    main()
+    cli()

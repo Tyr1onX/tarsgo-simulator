@@ -1,6 +1,6 @@
 # TARS-Go RoboMaster 战术训练模拟器
 
-面向 TARS-Go 队伍的新队员教学与战术推演项目。当前版本提供一局单机步兵 2v2 教学对战；官方比赛规则和实车参数仍在独立核验中。
+面向 TARS-Go 队伍的新队员教学与战术推演项目。当前提供合成参数的步兵 2v2 训练沙盒，以及一个只实现部分规则的 RMUL 2026 实验场景。
 
 ## 已确定的技术路线
 
@@ -23,7 +23,15 @@
 - HP 归零时结束并显示胜方。
 - 按 `R` 重新开始，按 `Esc` 退出。
 
-`training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于以后并存不同赛季规则；RMUL 2026 3V3 目前仍在研究，尚未实现。参见 [规则架构](docs/rules/architecture.md)、[RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
+`training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于让不同规则并存；RMUL 2026 实验实现不会修改训练模式。参见 [规则架构](docs/rules/architecture.md)。
+
+`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 仍用合成 Infantry 2v2 配置，仅用于试验 VP、中央控制区、战亡扣分、计时和胜负闭环；它不是完整 RMUL 2026 模式，也不使用官方阵容或场地图。复活、经济、弹药、热量、补给、裁判系统，以及 VP 平局时的正式伤害判定均未实现。启动实验场景：
+
+```bash
+python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml
+```
+
+完整规则边界见 [RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
 
 ## 本地运行
 
@@ -50,6 +58,7 @@ Windows PowerShell 激活虚拟环境的命令为：
 - `configs/teams/`：队伍机器人参数 YAML。
 - `configs/scenarios/`：教学场景 YAML。
 - `docs/upstream-audit.md`：固定上游 commit 的代码审计和迁移建议。
+- `docs/simulator-references.md`：华南虎公开仿真资料的基准、许可与工程参考边界。
 - `tests/`：轻量测试入口。
 - `.github/workflows/`：自动测试，以及 Windows/macOS 桌面构建。
 

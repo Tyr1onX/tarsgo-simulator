@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from tarsgo_simulator.core.config import RuleDocument
 from tarsgo_simulator.rules.protocol import RuleSet
+from tarsgo_simulator.rules.rmul_2026_3v3 import RMUL2026Rules
 from tarsgo_simulator.rules.training_v0 import TrainingV0Rules
 
 
@@ -13,6 +14,7 @@ class UnknownRuleSetError(ValueError):
 
 RULESETS: dict[str, Callable[[RuleDocument], RuleSet]] = {
     "training-v0": TrainingV0Rules,
+    "rmul-2026-3v3": RMUL2026Rules,
 }
 
 

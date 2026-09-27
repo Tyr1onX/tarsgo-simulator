@@ -22,6 +22,12 @@ class MatchResult:
     winner: str | None
 
 
+@dataclass(frozen=True)
+class RuleSetDisplayState:
+    victory_points: tuple[tuple[str, int], ...]
+    control_owner: str | None
+
+
 class RuleSet(Protocol):
     @property
     def time_limit(self) -> float: ...
@@ -33,3 +39,6 @@ class RuleSet(Protocol):
     def update(self, match: "Match", dt: float) -> None: ...
 
     def evaluate_result(self, match: "Match") -> MatchResult | None: ...
+
+    @property
+    def display_state(self) -> RuleSetDisplayState | None: ...
