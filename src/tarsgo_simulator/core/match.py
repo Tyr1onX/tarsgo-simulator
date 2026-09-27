@@ -69,6 +69,45 @@ class Match:
             return False
         return self._set_robot_destination(robot, goal)
 
+    def order_group_move(
+        self,
+        robot_ids: list[str],
+        anchor_goal: tuple[float, float],
+    ) -> bool:
+        """Keep the selected robots' offsets and commit paths only if all can move."""
+        if self.finished or not robot_ids or len(robot_ids) != len(set(robot_ids)):
+            return False
+
+        robots_by_id = {robot.id: robot for robot in self.robots}
+        selected = [robots_by_id.get(robot_id) for robot_id in robot_ids]
+        if any(
+            robot is None
+            or not robot.alive
+            or robot.team != self.config.scenario.player_team
+            for robot in selected
+        ):
+            return False
+
+        ordered_robots = sorted(selected, key=lambda robot: robot.id)
+        centroid = (
+            math.fsum(robot.position[0] for robot in ordered_robots) / len(ordered_robots),
+            math.fsum(robot.position[1] for robot in ordered_robots) / len(ordered_robots),
+        )
+        planned_paths = []
+        for robot in ordered_robots:
+            goal = (
+                anchor_goal[0] + robot.position[0] - centroid[0],
+                anchor_goal[1] + robot.position[1] - centroid[1],
+            )
+            path = find_path(self.map, robot.position, goal)
+            if path is None:
+                return False
+            planned_paths.append((robot, path))
+
+        for robot, path in planned_paths:
+            robot.set_path(path)
+        return True
+
     def _set_robot_destination(self, robot: Robot, goal: tuple[float, float]) -> bool:
         path = find_path(self.map, robot.position, goal)
         if path is None:
