@@ -13,7 +13,7 @@ def update_combat(
     *,
     can_attack: Callable[[Robot], bool],
     can_receive_damage: Callable[[Robot], bool],
-) -> None:
+) -> list[tuple[Robot, Robot, int]]:
     """Let each robot attack its nearest visible living enemy in range."""
     attacks: list[tuple[Robot, Robot, int]] = []
     for attacker in robots:
@@ -38,9 +38,16 @@ def update_combat(
         attacker.attack_cooldown = attacker.attack_interval
         attacks.append((attacker, target, attacker.damage))
 
-    for _, target, damage in attacks:
+    # All attacks are chosen before damage is applied. Stable ordering keeps
+    # attribution deterministic when multiple attacks overkill one target.
+    attacks.sort(key=lambda attack: (attack[1].id, attack[0].id))
+    damage_records = []
+    for attacker, target, damage in attacks:
         if can_receive_damage(target):
-            target.take_damage(damage)
+            actual_damage = target.take_damage(damage)
+            if actual_damage:
+                damage_records.append((attacker, target, actual_damage))
+    return damage_records
 
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:

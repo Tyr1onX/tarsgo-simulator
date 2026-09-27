@@ -30,13 +30,15 @@ class Robot:
         if self.path and _distance(self.position, self.path[0]) < 0.001:
             self.path.pop(0)
 
-    def take_damage(self, amount: int) -> None:
+    def take_damage(self, amount: int) -> int:
         if not self.alive:
-            return
+            return 0
+        previous_hp = self.hp
         self.hp = max(0, self.hp - amount)
         if self.hp == 0:
             self.alive = False
             self.path.clear()
+        return previous_hp - self.hp
 
     def update_cooldown(self, dt: float) -> None:
         if not self.alive:

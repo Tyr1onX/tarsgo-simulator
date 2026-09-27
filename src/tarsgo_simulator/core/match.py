@@ -142,13 +142,14 @@ class Match:
         for robot in self.robots:
             robot.update_cooldown(dt)
         self._move_robots(dt)
-        update_combat(
+        damage_records = update_combat(
             self.robots,
             self.map,
             can_attack=self.ruleset.can_attack,
             can_receive_damage=self.ruleset.can_receive_damage,
         )
         self.elapsed_time += dt
+        self._collect_robot_damaged_events(damage_records)
         self._collect_robot_destroyed_events()
         self.ruleset.update(self, dt)
         # A RuleSet may bring a robot back to life after death events are
@@ -256,6 +257,23 @@ class Match:
                     )
                 )
         self._alive_at_last_update = {robot.id: robot.alive for robot in self.robots}
+
+    def _collect_robot_damaged_events(
+        self,
+        damage_records: list[tuple[Robot, Robot, int]],
+    ) -> None:
+        for attacker, target, amount in damage_records:
+            self.current_events.append(
+                MatchEvent(
+                    type=MatchEventType.ROBOT_DAMAGED,
+                    time=self.elapsed_time,
+                    robot_id=target.id,
+                    team_id=target.team,
+                    attacker_id=attacker.id,
+                    attacker_team_id=attacker.team,
+                    damage=amount,
+                )
+            )
 
     def team_name(self, team_id: str) -> str:
         for team in self.config.scenario.teams.values():

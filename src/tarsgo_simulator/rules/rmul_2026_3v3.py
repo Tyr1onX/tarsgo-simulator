@@ -23,6 +23,7 @@ class _RobotLifecycle:
     respawn_required: float | None = None
     weak: bool = False
     invincible_remaining: float = 0.0
+    healing_hp_fraction: float = 0.0
 
 
 class RMUL2026Rules:
@@ -88,6 +89,13 @@ class RMUL2026Rules:
             document,
             "respawn.invincibility_duration",
         )
+        supply = _mapping(document.data, "supply", document)
+        self._supply_heal_fraction_per_second = _fraction(
+            supply,
+            "heal_fraction_per_second",
+            document,
+            "supply.heal_fraction_per_second",
+        )
         supply_zones = _mapping(document.data, "supply_zones", document)
         self._supply_zone_ids = {
             side: _string(supply_zones, side, document, f"supply_zones.{side}")
@@ -142,6 +150,7 @@ class RMUL2026Rules:
             victory_points=tuple(sorted(self.victory_points.items())),
             control_owner=self.control_owner,
             robot_statuses=tuple(robot_statuses),
+            attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -186,6 +195,7 @@ class RMUL2026Rules:
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
         }
+        self.attack_damage_by_team = dict.fromkeys(self.victory_points, 0)
         self.control_owner = None
         self._control_loss_elapsed = 0.0
         self._control_tick_accumulator = 0.0
@@ -195,6 +205,13 @@ class RMUL2026Rules:
         # Apply every same-frame fact before Match asks this ruleset for a result.
         newly_destroyed: set[str] = set()
         for event in match.current_events:
+            if event.type == MatchEventType.ROBOT_DAMAGED:
+                if (
+                    event.attacker_team_id in self.attack_damage_by_team
+                    and event.damage > 0
+                ):
+                    self.attack_damage_by_team[event.attacker_team_id] += event.damage
+                continue
             if event.type != MatchEventType.ROBOT_DESTROYED:
                 continue
             lifecycle = self._robot_lifecycles.get(event.robot_id)
@@ -215,7 +232,14 @@ class RMUL2026Rules:
 
         frame_start = match.elapsed_time - dt
         active_dt = max(0.0, min(dt, self._time_limit - frame_start))
+        alive_before_lifecycle = {robot.id: robot.alive for robot in match.robots}
         self._advance_robot_lifecycles(match, active_dt, newly_destroyed)
+        newly_respawned = {
+            robot.id
+            for robot in match.robots
+            if robot.alive and not alive_before_lifecycle[robot.id]
+        }
+        self._advance_supply_healing(match, active_dt, newly_respawned)
         present_teams = {
             robot.team
             for robot in match.robots
@@ -260,6 +284,40 @@ class RMUL2026Rules:
             if lifecycle.weak and supply_zone.contains(robot.position):
                 lifecycle.weak = False
                 lifecycle.invincible_remaining = 0.0
+
+    def _advance_supply_healing(
+        self,
+        match: "Match",
+        dt: float,
+        newly_respawned: set[str],
+    ) -> None:
+        for robot in match.robots:
+            lifecycle = self._robot_lifecycles[robot.id]
+            supply_zone = self._supply_zones[robot.team]
+            if robot.id in newly_respawned:
+                lifecycle.healing_hp_fraction = 0.0
+                continue
+            if not robot.alive or not supply_zone.contains(robot.position):
+                lifecycle.healing_hp_fraction = 0.0
+                continue
+            if robot.hp >= robot.max_hp:
+                lifecycle.healing_hp_fraction = 0.0
+                continue
+
+            lifecycle.healing_hp_fraction += (
+                dt * robot.max_hp * self._supply_heal_fraction_per_second
+            )
+            healing_points = math.floor(lifecycle.healing_hp_fraction + 1e-9)
+            if healing_points <= 0:
+                continue
+
+            robot.hp = min(robot.max_hp, robot.hp + healing_points)
+            if robot.hp >= robot.max_hp:
+                lifecycle.healing_hp_fraction = 0.0
+            else:
+                lifecycle.healing_hp_fraction = max(
+                    0.0, lifecycle.healing_hp_fraction - healing_points
+                )
 
     def _advance_control(
         self,
@@ -335,9 +393,29 @@ class RMUL2026Rules:
         leaders = [
             team_id for team_id, points in self.victory_points.items() if points == highest
         ]
-        # V1.2.0 next compares team damage, then total HP. Damage statistics do
-        # not exist in the Engine yet, so this partial ruleset reports a draw.
-        return MatchResult(leaders[0] if len(leaders) == 1 else None)
+        if len(leaders) == 1:
+            return MatchResult(leaders[0])
+
+        highest_damage = max(self.attack_damage_by_team.values())
+        damage_leaders = [
+            team_id
+            for team_id, damage in self.attack_damage_by_team.items()
+            if damage == highest_damage
+        ]
+        if len(damage_leaders) == 1:
+            return MatchResult(damage_leaders[0])
+
+        remaining_hp = {
+            team.team_id: sum(
+                robot.hp for robot in match.robots if robot.team == team.team_id
+            )
+            for team in match.config.scenario.teams.values()
+        }
+        highest_hp = max(remaining_hp.values())
+        hp_leaders = [
+            team_id for team_id, hp in remaining_hp.items() if hp == highest_hp
+        ]
+        return MatchResult(hp_leaders[0] if len(hp_leaders) == 1 else None)
 
 
 def _mapping(data: Mapping[str, Any], key: str, document: RuleDocument) -> Mapping[str, Any]:

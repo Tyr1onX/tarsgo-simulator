@@ -250,8 +250,15 @@ def _draw(
         right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
     else:
         victory_points = dict(display_state.victory_points)
-        left = f"{match.team_name(player_team)} VP {victory_points[player_team]}"
-        right = f"{match.team_name(opponent_team)} VP {victory_points[opponent_team]}"
+        attack_damage = dict(display_state.attack_damage)
+        left = (
+            f"{match.team_name(player_team)} VP {victory_points[player_team]} "
+            f"DMG {attack_damage.get(player_team, 0)}"
+        )
+        right = (
+            f"{match.team_name(opponent_team)} VP {victory_points[opponent_team]} "
+            f"DMG {attack_damage.get(opponent_team, 0)}"
+        )
     timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
         status = f"{match.team_name(match.winner)} WINS" if match.winner else "DRAW"
