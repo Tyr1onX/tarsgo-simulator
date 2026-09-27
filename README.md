@@ -25,7 +25,7 @@
 
 `training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于让不同规则并存；RMUL 2026 实验实现不会修改训练模式。参见 [规则架构](docs/rules/architecture.md)。
 
-`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 仍用合成 Infantry 2v2 配置，仅用于试验 VP、中央控制区、战亡扣分、计时和胜负闭环；它不是完整 RMUL 2026 模式，也不使用官方阵容或场地图。复活、经济、弹药、热量、补给、裁判系统，以及 VP 平局时的正式伤害判定均未实现。启动实验场景：
+`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 仍用合成 Infantry 2v2 配置，仅用于试验 VP、中央控制区、战亡扣分、自动复活、弱化 / 无敌及补给区状态解除、计时和胜负闭环；补给区是合成布局，不是官方地图。它不是完整 RMUL 2026 模式，也不使用官方阵容或场地图。补给回血、经济、弹药、热量 / 缓冲能量及其战亡重置、裁判系统，以及 VP 平局时的正式伤害判定均未实现。启动实验场景：
 
 ```bash
 python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml

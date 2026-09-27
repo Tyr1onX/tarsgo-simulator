@@ -244,6 +244,7 @@ def _draw(
     player_max_hp = sum(robot.max_hp for robot in player_robots)
     opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
     display_state = match.ruleset.display_state
+    robot_statuses = dict(display_state.robot_statuses) if display_state is not None else {}
     if display_state is None:
         left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
         right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
@@ -320,6 +321,13 @@ def _draw(
             pygame.draw.rect(screen, HP_COLOR, (bar_x, bar_y, hp_width, bar_height))
         label_surface = small_font.render(labels[robot.id], True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
+        robot_status = robot_statuses.get(robot.id)
+        if robot_status:
+            status_surface = small_font.render(robot_status, True, MUTED_COLOR)
+            screen.blit(
+                status_surface,
+                status_surface.get_rect(center=(center[0], center[1] + radius + 27)),
+            )
 
     if selection_rect is not None:
         pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)

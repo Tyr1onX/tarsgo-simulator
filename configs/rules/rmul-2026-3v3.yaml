@@ -15,4 +15,13 @@ victory_points:
 control_zone:
   id: center-control
   loss_delay: 2
+respawn:
+  initial_progress_required: 5
+  additional_progress_per_death: 5
+  progress_per_second: 1
+  hp_fraction: 0.2
+  invincibility_duration: 30
+supply_zones:
+  red: red-supply
+  blue: blue-supply
 lab_parameter_profile: training-v0
