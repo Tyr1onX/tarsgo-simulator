@@ -1,4 +1,4 @@
-"""Partial RMUC 2026 Regional V1.4.0 rules for structures and match result."""
+"""Partial RMUC 2026 Regional V1.4.0 rules including Experience/Performance."""
 
 from dataclasses import dataclass, field
 import math
@@ -20,6 +20,21 @@ from tarsgo_simulator.rules.protocol import (
 
 _RMUC_ROBOT_TYPES = ("hero", "engineer", "infantry", "sentry")
 _REBUILD_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
+_EXPERIENCE_ROBOT_TYPES = {"hero", "infantry"}
+
+
+@dataclass
+class _RobotProgressionState:
+    experience: float = 0.0
+    level: int = 1
+
+
+@dataclass(frozen=True)
+class _EffectivePerformance:
+    max_hp: int
+    chassis_power_limit: int
+    heat_limit: int
+    cooling_per_second: int
 
 
 @dataclass
@@ -114,6 +129,210 @@ class RMUC2026RegionalRules:
         if len(set(self._rebuild_zone_ids.values())) != 2:
             raise ConfigError(
                 f"{document.path}: red / blue 前哨站重建区必须使用不同 zone id"
+            )
+
+        experience = _mapping(document.data, "experience", document)
+        expected_experience_keys = {
+            "level_thresholds",
+            "initial_level_cap",
+            "shot",
+            "damage",
+            "kill",
+        }
+        if set(experience) != expected_experience_keys:
+            raise ConfigError(
+                f"{document.path}: `experience` 字段不完整或包含未知字段"
+            )
+        self._level_thresholds = _parse_level_thresholds(
+            experience.get("level_thresholds"), document
+        )
+        self._initial_level_cap = _positive_integer(
+            experience,
+            "initial_level_cap",
+            document,
+            "experience.initial_level_cap",
+        )
+        if self._initial_level_cap not in self._level_thresholds:
+            raise ConfigError(
+                f"{document.path}: `experience.initial_level_cap` 必须对应有效等级"
+            )
+
+        shot = _mapping(experience, "shot", document)
+        if set(shot) != {"hero", "infantry"}:
+            raise ConfigError(
+                f"{document.path}: `experience.shot` 必须只包含 hero、infantry"
+            )
+        self._shot_experience = {
+            robot_type: float(
+                _positive_integer(
+                    shot,
+                    robot_type,
+                    document,
+                    f"experience.shot.{robot_type}",
+                )
+            )
+            for robot_type in ("hero", "infantry")
+        }
+
+        damage = _mapping(experience, "damage", document)
+        if set(damage) != {
+            "robot_per_hp",
+            "outpost_per_hp",
+            "base_hp_per_experience",
+        }:
+            raise ConfigError(
+                f"{document.path}: `experience.damage` 字段不完整或包含未知字段"
+            )
+        self._robot_damage_experience_per_hp = float(
+            _positive_integer(
+                damage,
+                "robot_per_hp",
+                document,
+                "experience.damage.robot_per_hp",
+            )
+        )
+        self._outpost_damage_experience_per_hp = float(
+            _positive_integer(
+                damage,
+                "outpost_per_hp",
+                document,
+                "experience.damage.outpost_per_hp",
+            )
+        )
+        self._base_hp_per_experience = _positive_integer(
+            damage,
+            "base_hp_per_experience",
+            document,
+            "experience.damage.base_hp_per_experience",
+        )
+
+        kill = _mapping(experience, "kill", document)
+        if set(kill) != {"base_factor", "level_difference_factor"}:
+            raise ConfigError(
+                f"{document.path}: `experience.kill` 字段不完整或包含未知字段"
+            )
+        self._kill_base_factor = float(
+            _positive_integer(
+                kill,
+                "base_factor",
+                document,
+                "experience.kill.base_factor",
+            )
+        )
+        self._kill_level_difference_factor = _number(
+            kill,
+            "level_difference_factor",
+            document,
+            "experience.kill.level_difference_factor",
+        )
+
+        performance = _mapping(document.data, "performance", document)
+        if set(performance) != {"lab_selection", "hero", "infantry"}:
+            raise ConfigError(
+                f"{document.path}: `performance` 必须只包含 lab_selection、hero、infantry"
+            )
+        hero_performance = _mapping(performance, "hero", document)
+        expected_hero_profiles = {"close-range-priority", "long-range-priority"}
+        if set(hero_performance) != expected_hero_profiles:
+            raise ConfigError(
+                f"{document.path}: `performance.hero` 必须包含完整的近战/远程优先表"
+            )
+        self._hero_performance = {
+            profile: _parse_performance_rows(
+                hero_performance.get(profile),
+                ("max_hp", "chassis_power_limit", "heat_limit", "cooling_per_second"),
+                document,
+                f"performance.hero.{profile}",
+            )
+            for profile in sorted(expected_hero_profiles)
+        }
+
+        infantry_performance = _mapping(performance, "infantry", document)
+        if set(infantry_performance) != {"chassis", "launcher"}:
+            raise ConfigError(
+                f"{document.path}: `performance.infantry` 必须只包含 chassis、launcher"
+            )
+        chassis_profiles = _mapping(infantry_performance, "chassis", document)
+        expected_chassis_profiles = {"power-priority", "hp-priority"}
+        if set(chassis_profiles) != expected_chassis_profiles:
+            raise ConfigError(
+                f"{document.path}: `performance.infantry.chassis` "
+                "必须包含 power-priority、hp-priority"
+            )
+        self._infantry_chassis_performance = {
+            profile: _parse_performance_rows(
+                chassis_profiles.get(profile),
+                ("max_hp", "chassis_power_limit"),
+                document,
+                f"performance.infantry.chassis.{profile}",
+            )
+            for profile in sorted(expected_chassis_profiles)
+        }
+
+        launcher_profiles = _mapping(infantry_performance, "launcher", document)
+        expected_launcher_profiles = {"burst-priority", "cooling-priority"}
+        if set(launcher_profiles) != expected_launcher_profiles:
+            raise ConfigError(
+                f"{document.path}: `performance.infantry.launcher` "
+                "必须包含 burst-priority、cooling-priority"
+            )
+        self._infantry_launcher_performance = {
+            profile: _parse_performance_rows(
+                launcher_profiles.get(profile),
+                ("heat_limit", "cooling_per_second"),
+                document,
+                f"performance.infantry.launcher.{profile}",
+            )
+            for profile in sorted(expected_launcher_profiles)
+        }
+
+        lab_selection = _mapping(performance, "lab_selection", document)
+        if set(lab_selection) != {"hero", "infantry"}:
+            raise ConfigError(
+                f"{document.path}: `performance.lab_selection` 必须包含 hero、infantry"
+            )
+        hero_selection = _mapping(lab_selection, "hero", document)
+        infantry_selection = _mapping(lab_selection, "infantry", document)
+        if set(hero_selection) != {"profile"}:
+            raise ConfigError(
+                f"{document.path}: `performance.lab_selection.hero` 只能包含 profile"
+            )
+        if set(infantry_selection) != {"chassis", "launcher"}:
+            raise ConfigError(
+                f"{document.path}: `performance.lab_selection.infantry` "
+                "必须包含 chassis、launcher"
+            )
+        self._hero_profile = _string(
+            hero_selection,
+            "profile",
+            document,
+            "performance.lab_selection.hero.profile",
+        )
+        self._infantry_chassis_profile = _string(
+            infantry_selection,
+            "chassis",
+            document,
+            "performance.lab_selection.infantry.chassis",
+        )
+        self._infantry_launcher_profile = _string(
+            infantry_selection,
+            "launcher",
+            document,
+            "performance.lab_selection.infantry.launcher",
+        )
+        if self._hero_profile not in self._hero_performance:
+            raise ConfigError(
+                f"{document.path}: 未知 Hero performance profile `{self._hero_profile}`"
+            )
+        if self._infantry_chassis_profile not in self._infantry_chassis_performance:
+            raise ConfigError(
+                f"{document.path}: 未知 Infantry chassis profile "
+                f"`{self._infantry_chassis_profile}`"
+            )
+        if self._infantry_launcher_profile not in self._infantry_launcher_performance:
+            raise ConfigError(
+                f"{document.path}: 未知 Infantry launcher profile "
+                f"`{self._infantry_launcher_profile}`"
             )
 
         lab_parameters = _mapping(document.data, "lab_robot_parameters", document)
