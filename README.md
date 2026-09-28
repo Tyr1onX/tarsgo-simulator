@@ -17,7 +17,7 @@
 
 - Training-v0 Infantry 2v2：玩家可左键选择、Shift 多选或拖框选择两台己方步兵。
 - RMUL Rules Lab：双方各有 Hero、Infantry、Sentry；玩家控制己方 Hero 和 Infantry，Sentry 自动运行，对手三台由单机 AI 控制。战场使用 V1.2.0 已确认的 12 m × 8 m footprint（100 world units/m），并以二维 approximation 表示 supply/control/high-ground 语义区域。
-- RMUC 2026 Regional Rules Lab：双方各有 Hero、Engineer、Infantry ×2、Sentry，以及可受伤的 Base / Outpost。当前实现 V1.4.0 的 Base 5000 HP、Outpost 1500 HP、Outpost 存活时 Base 无敌、Base 累计损伤产生重建次数、Engineer 5 秒/其他地面机器人 10 秒独立重建、300 秒重建截止和 420 秒胜负链。Drone / Radar / Dart、Experience / Performance、完整经济与 projectile physics 均未实现。
+- RMUC 2026 Regional Rules Lab：双方各有 Hero、Engineer、Infantry ×2、Sentry，以及可受伤的 Base / Outpost。当前实现 V1.4.0 的 Base / Outpost 生命周期、420 秒胜负链，以及 Hero / Infantry 的 Experience / Levels 与 Performance：Hero 使用 long-range-priority，Infantry 使用 hp-priority chassis + cooling-priority launcher；当前无 Tech Core，因此等级上限为 Lv5 / 2200 XP。Power / Heat Limit / Cooling 会随等级计算并展示为规则参数，但 RMUC Heat / Buffer gameplay 尚未实现。Drone / Radar / Dart、Tech Core、完整经济与 projectile physics 仍未实现。
 - 右键下令时，单台按指定位置移动；多台保持当前相对队形分别移动，路径会绕开障碍物。
 - Training-v0 中，对手两台步兵独立追击。
 - 机器人实体会互相阻挡，不能互相穿透或重叠。
@@ -37,7 +37,7 @@ python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml
 
 完整规则边界见 [RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md)、[场地二维表示](docs/rules/rmul-2026-field.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
 
-`rmuc-2026-region-v1.4.0` 同样处于 **partial / experimental** 状态。当前 2800 × 1500 Rules Lab 仅放置 synthetic start areas、Base、Outpost 与 rebuild zones；内部坐标和矩形 footprint 不代表官方完整场地。射击仍是 direct-damage approximation：17 mm 为 20 damage、42 mm 为 200 damage，没有装甲模块命中或实体弹丸。启动场景：
+`rmuc-2026-region-v1.4.0` 同样处于 **partial / experimental** 状态。当前 Experience 只覆盖 Hero / Infantry 的 deterministic committed-shot、actual-damage 和 known-killer 路径；Hero 与 Infantry 的完整 Lv1～Lv10 Performance 表已经录入，但本轮只允许升级至 Lv5。Unknown-source Experience redistribution、非战斗 Experience、Tech Core 5→7→10 解锁，以及动态 Heat / Buffer gameplay 仍未实现。当前 2800 × 1500 Rules Lab 仅放置 synthetic start areas、Base、Outpost 与 rebuild zones；内部坐标和矩形 footprint 不代表官方完整场地。射击仍是 direct-damage approximation：17 mm 为 20 damage、42 mm 为 200 damage，没有装甲模块命中或实体弹丸。启动场景：
 
 ```bash
 python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
