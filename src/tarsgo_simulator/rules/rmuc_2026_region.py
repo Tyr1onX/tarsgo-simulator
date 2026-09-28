@@ -110,7 +110,7 @@ class _TeamEconomyState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D4."""
+    """V1.4.0 Regional Rules Lab with progression, Tech Core, and income economy."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
@@ -232,6 +232,13 @@ class RMUC2026RegionalRules:
                     "必须是 S/A/B/C/D"
                 )
             self._economy_lab_rating[category] = rating
+        if self._economy_lab_rating != {
+            "project_document": "B",
+            "technical_solution": "B",
+        }:
+            raise ConfigError(
+                f"{document.path}: Rules Lab 默认完整形态考核评级必须显式为 B/B"
+            )
 
         raw_timed_grants = economy.get("timed_grants")
         if not isinstance(raw_timed_grants, list) or not raw_timed_grants:
@@ -1148,7 +1155,7 @@ class RMUC2026RegionalRules:
             self._grant_experience(robot.id, shot_experience)
 
     def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
-        """RMUC economy is intentionally outside this slice."""
+        """RMUC spending is intentionally outside this income-only economy slice."""
         return False
 
     def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
