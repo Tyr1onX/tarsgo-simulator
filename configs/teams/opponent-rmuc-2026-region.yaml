@@ -1,0 +1,9 @@
+schema_version: 1
+team_id: opponent-rmuc-2026-region
+display_name: Opponent
+robots:
+  - {id: opponent-hero, type: hero}
+  - {id: opponent-engineer, type: engineer}
+  - {id: opponent-infantry-1, type: infantry}
+  - {id: opponent-infantry-2, type: infantry}
+  - {id: opponent-sentry, type: sentry}

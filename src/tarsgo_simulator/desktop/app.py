@@ -43,6 +43,10 @@ ZONE_STYLE = {
     "center-control": (CONTROL_ZONE_COLOR, "CONTROL"),
     "red-high-ground": (HIGH_GROUND_COLOR, "HIGH GROUND"),
     "blue-high-ground": (HIGH_GROUND_COLOR, "HIGH GROUND"),
+    "red-start": (RED_SUPPLY_COLOR, "RED START"),
+    "blue-start": (BLUE_SUPPLY_COLOR, "BLUE START"),
+    "red-outpost-rebuild": (RED_SUPPLY_COLOR, "OUTPOST REBUILD"),
+    "blue-outpost-rebuild": (BLUE_SUPPLY_COLOR, "OUTPOST REBUILD"),
 }
 
 
@@ -162,7 +166,10 @@ def cli() -> None:
 
 
 def _window_caption(match: Match) -> str:
-    if match.ruleset.display_state is not None:
+    display_state = match.ruleset.display_state
+    if display_state is not None and display_state.structure_statuses:
+        return "TARS-Go RMUC 2026 Regional Rules Lab (Partial / Experimental)"
+    if display_state is not None:
         return "TARS-Go RMUL 2026 Rules Lab (Partial / Experimental)"
     return "TARS-Go Infantry Training"
 
@@ -283,6 +290,27 @@ def _draw(
     if display_state is None:
         left = f"{match.team_name(player_team)}  {player_alive}/{len(player_robots)} alive  HP {player_hp}/{player_max_hp}"
         right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
+    elif display_state.structure_statuses:
+        attack_damage = dict(display_state.attack_damage)
+        rebuild_opportunities = dict(display_state.rebuild_opportunities)
+        structures = {
+            (structure.team, structure.type): structure
+            for structure in match.structures
+        }
+        player_base = structures[(player_team, "base")]
+        player_outpost = structures[(player_team, "outpost")]
+        opponent_base = structures[(opponent_team, "base")]
+        opponent_outpost = structures[(opponent_team, "outpost")]
+        left = (
+            f"{match.team_name(player_team)} B {player_base.hp} O {player_outpost.hp} "
+            f"R {rebuild_opportunities.get(player_team, 0)} "
+            f"DMG {attack_damage.get(player_team, 0)}"
+        )
+        right = (
+            f"{match.team_name(opponent_team)} B {opponent_base.hp} O {opponent_outpost.hp} "
+            f"R {rebuild_opportunities.get(opponent_team, 0)} "
+            f"DMG {attack_damage.get(opponent_team, 0)}"
+        )
     else:
         victory_points = dict(display_state.victory_points)
         attack_damage = dict(display_state.attack_damage)
@@ -308,15 +336,24 @@ def _draw(
     right_surface = font.render(right, True, OPPONENT_COLOR)
     screen.blit(right_surface, (screen.get_width() - WINDOW_MARGIN - right_surface.get_width(), 22))
     if display_state is not None:
-        control_owner = (
-            match.team_name(display_state.control_owner)
-            if display_state.control_owner is not None
-            else "Neutral"
-        )
-        control_surface = small_font.render(f"Control: {control_owner}", True, TEXT_COLOR)
+        if display_state.structure_statuses:
+            progress_parts = [
+                f"{robot_id} {progress:.1f}/{required:g}s"
+                for _team_id, robot_id, progress, required
+                in display_state.rebuild_progress
+            ]
+            detail = "Rebuild: " + ", ".join(progress_parts) if progress_parts else "Rebuild: idle"
+        else:
+            control_owner = (
+                match.team_name(display_state.control_owner)
+                if display_state.control_owner is not None
+                else "Neutral"
+            )
+            detail = f"Control: {control_owner}"
+        detail_surface = small_font.render(detail, True, TEXT_COLOR)
         screen.blit(
-            control_surface,
-            control_surface.get_rect(center=(screen.get_width() // 2, 52)),
+            detail_surface,
+            detail_surface.get_rect(center=(screen.get_width() // 2, 52)),
         )
 
     field_left, field_top = viewport.origin
@@ -351,6 +388,32 @@ def _draw(
         label_surface = small_font.render(zone_label, True, zone_color)
         screen.blit(label_surface, label_surface.get_rect(center=zone_rect.center))
 
+    structure_statuses = (
+        {
+            structure_id: (hp, max_hp, status)
+            for structure_id, hp, max_hp, status in display_state.structure_statuses
+        }
+        if display_state is not None
+        else {}
+    )
+    for structure in match.structures:
+        center = tuple(round(value) for value in viewport.world_to_screen(structure.position))
+        size = max(13, round(viewport.world_length_to_screen(34)))
+        color = PLAYER_COLOR if structure.team == player_team else OPPONENT_COLOR
+        rect = pygame.Rect(center[0] - size, center[1] - size, size * 2, size * 2)
+        pygame.draw.rect(screen, color if structure.alive else MUTED_COLOR, rect, width=3)
+        hp, max_hp, structure_status = structure_statuses.get(
+            structure.id, (structure.hp, structure.max_hp, "")
+        )
+        label = f"{'B' if structure.type == 'base' else 'O'} {hp}/{max_hp}"
+        if structure_status:
+            label = f"{label} {structure_status}"
+        label_surface = small_font.render(label, True, TEXT_COLOR)
+        screen.blit(
+            label_surface,
+            label_surface.get_rect(center=(center[0], center[1] + size + 12)),
+        )
+
     if all(robot.type == "infantry" for robot in match.robots):
         labels = {}
         for team_id, prefix in ((player_team, "T"), (opponent_team, "O")):
@@ -359,7 +422,7 @@ def _draw(
             ):
                 labels[robot.id] = f"{prefix}{index + 1}"
     else:
-        type_labels = {"hero": "H", "infantry": "I", "sentry": "S"}
+        type_labels = {"hero": "H", "engineer": "E", "infantry": "I", "sentry": "S"}
         labels = {
             robot.id: type_labels.get(robot.type, robot.type[:1].upper())
             for robot in match.robots

@@ -1,0 +1,44 @@
+schema_version: 1
+rules: rmuc-2026-region-v1.4.0
+player_team: tarsgo-rmuc-2026-region
+player_controlled:
+  - tarsgo-hero
+  - tarsgo-engineer
+  - tarsgo-infantry-1
+  - tarsgo-infantry-2
+learning_goals:
+  - 验证 RMUC 2026 区域赛 V1.4.0 的基地与前哨站核心生命周期
+  - 观察基地累计损伤带来的前哨站重建机会与 5 秒/10 秒独立占领进度
+  - 验证七分钟比赛结束与基地被毁后的胜负链
+setup:
+  map:
+    width: 2800
+    height: 1500
+    obstacles: []
+    zones:
+      # Rules Lab approximation. Only semantic start/rebuild areas are represented.
+      - {id: red-start, x: 80, y: 450, width: 520, height: 600}
+      - {id: blue-start, x: 2200, y: 450, width: 520, height: 600}
+      - {id: red-outpost-rebuild, x: 720, y: 600, width: 260, height: 300}
+      - {id: blue-outpost-rebuild, x: 1820, y: 600, width: 260, height: 300}
+  teams:
+    red: tarsgo-rmuc-2026-region
+    blue: opponent-rmuc-2026-region
+  structures:
+    # All positions are synthetic Rules Lab approximations, not official coordinates.
+    - {id: red-base, type: base, side: red, position: [220, 750]}
+    - {id: red-outpost, type: outpost, side: red, position: [850, 750]}
+    - {id: blue-outpost, type: outpost, side: blue, position: [1950, 750]}
+    - {id: blue-base, type: base, side: blue, position: [2580, 750]}
+  spawns:
+    # Synthetic placements inside the start areas.
+    tarsgo-hero: [360, 540]
+    tarsgo-engineer: [360, 650]
+    tarsgo-infantry-1: [360, 750]
+    tarsgo-infantry-2: [360, 850]
+    tarsgo-sentry: [360, 960]
+    opponent-hero: [2440, 960]
+    opponent-engineer: [2440, 850]
+    opponent-infantry-1: [2440, 750]
+    opponent-infantry-2: [2440, 650]
+    opponent-sentry: [2440, 540]

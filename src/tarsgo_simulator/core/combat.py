@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.core.structure import Structure
 
 
 def update_combat(
@@ -12,28 +13,31 @@ def update_combat(
     game_map: GameMap,
     *,
     can_attack: Callable[[Robot], bool],
-    apply_damage: Callable[[Robot, int, Robot], int],
+    apply_damage: Callable[[Robot | Structure, int, Robot], int],
+    structures: list[Structure] | None = None,
+    can_target: Callable[[Robot | Structure], bool] | None = None,
     on_attack_committed: Callable[[Robot], None] | None = None,
 ) -> None:
-    """Let each robot attack its nearest visible living enemy in range."""
-    attacks: list[tuple[Robot, Robot, int]] = []
+    """Let each robot attack its nearest visible legal enemy target in range."""
+    attacks: list[tuple[Robot, Robot | Structure, int]] = []
     for attacker in robots:
         if not can_attack(attacker) or attacker.attack_cooldown > 0:
             continue
 
         targets = [
-            robot
-            for robot in robots
-            if robot.alive
-            and robot.team != attacker.team
-            and _distance(attacker.position, robot.position) <= attacker.attack_range
-            and game_map.has_line_of_sight(attacker.position, robot.position)
+            target
+            for target in [*robots, *(structures or [])]
+            if target.alive
+            and target.team != attacker.team
+            and (can_target is None or can_target(target))
+            and _distance(attacker.position, target.position) <= attacker.attack_range
+            and game_map.has_line_of_sight(attacker.position, target.position)
         ]
         if not targets:
             continue
         target = min(
             targets,
-            key=lambda robot: (_distance(attacker.position, robot.position), robot.id),
+            key=lambda target: (_distance(attacker.position, target.position), target.id),
         )
 
         attacker.attack_cooldown = attacker.attack_interval

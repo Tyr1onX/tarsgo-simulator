@@ -1,0 +1,598 @@
+"""Partial RMUC 2026 Regional V1.4.0 rules for structures and match result."""
+
+from dataclasses import dataclass, field
+import math
+from typing import TYPE_CHECKING, Any, Mapping
+
+from tarsgo_simulator.core.config import ConfigError, RuleDocument
+from tarsgo_simulator.core.events import MatchEventType
+from tarsgo_simulator.core.map import Zone
+from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.rules.protocol import (
+    DamageableTarget,
+    MatchResult,
+    RobotParameters,
+    RuleSetDisplayState,
+    StructureParameters,
+)
+
+
+_RMUC_ROBOT_TYPES = ("hero", "engineer", "infantry", "sentry")
+_REBUILD_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
+
+
+@dataclass
+class _TeamStructureState:
+    outpost_ever_destroyed: bool = False
+    base_damage_lost: int = 0
+    outpost_rebuild_opportunities: int = 0
+    rebuild_progress_by_robot: dict[str, float] = field(default_factory=dict)
+    base_armor_deployed: bool = False
+
+
+class RMUC2026RegionalRules:
+    """V1.4.0 regional rules slice without experience/performance or full economy."""
+
+    def __init__(self, document: RuleDocument) -> None:
+        metadata = document.metadata
+        if metadata.status != "official-partial":
+            raise ConfigError(
+                f"{document.path}: rmuc-2026-region-v1.4.0 requires "
+                "`status: official-partial`"
+            )
+        if metadata.competition != "RMUC":
+            raise ConfigError(f"{document.path}: `competition` 必须是 RMUC")
+        if metadata.season != 2026:
+            raise ConfigError(f"{document.path}: `season` 必须是 2026")
+        if metadata.stage != "regional":
+            raise ConfigError(f"{document.path}: `stage` 必须是 regional")
+        if metadata.official_version != "1.4.0":
+            raise ConfigError(
+                f"{document.path}: this implementation is verified against manual V1.4.0"
+            )
+
+        self._document = document
+        self._time_limit = _number(
+            document.data, "match_duration", document, "match_duration"
+        )
+
+        structures = _mapping(document.data, "structures", document)
+        if set(structures) != {"base", "outpost"}:
+            raise ConfigError(
+                f"{document.path}: `structures` 必须只包含 base、outpost"
+            )
+        self._structure_parameters = {
+            structure_type: StructureParameters(
+                max_hp=_positive_integer(
+                    _mapping(structures, structure_type, document),
+                    "max_hp",
+                    document,
+                    f"structures.{structure_type}.max_hp",
+                )
+            )
+            for structure_type in ("base", "outpost")
+        }
+
+        rebuild = _mapping(document.data, "outpost_rebuild", document)
+        self._base_damage_threshold = _positive_integer(
+            rebuild,
+            "base_damage_threshold",
+            document,
+            "outpost_rebuild.base_damage_threshold",
+        )
+        self._rebuilt_outpost_hp = _positive_integer(
+            rebuild,
+            "restored_hp",
+            document,
+            "outpost_rebuild.restored_hp",
+        )
+        self._rebuild_cutoff = _number(
+            rebuild,
+            "cutoff_seconds",
+            document,
+            "outpost_rebuild.cutoff_seconds",
+        )
+        durations = _mapping(rebuild, "durations", document)
+        self._default_rebuild_duration = _number(
+            durations,
+            "default",
+            document,
+            "outpost_rebuild.durations.default",
+        )
+        self._engineer_rebuild_duration = _number(
+            durations,
+            "engineer",
+            document,
+            "outpost_rebuild.durations.engineer",
+        )
+        zones = _mapping(rebuild, "zones", document)
+        self._rebuild_zone_ids = {
+            side: _string(zones, side, document, f"outpost_rebuild.zones.{side}")
+            for side in ("red", "blue")
+        }
+        if len(set(self._rebuild_zone_ids.values())) != 2:
+            raise ConfigError(
+                f"{document.path}: red / blue 前哨站重建区必须使用不同 zone id"
+            )
+
+        lab_parameters = _mapping(document.data, "lab_robot_parameters", document)
+        common = _mapping(lab_parameters, "common", document)
+        common_values = {
+            "move_speed": _number(
+                common,
+                "move_speed",
+                document,
+                "lab_robot_parameters.common.move_speed",
+            ),
+            "collision_radius": _number(
+                common,
+                "collision_radius",
+                document,
+                "lab_robot_parameters.common.collision_radius",
+            ),
+            "attack_range": _number(
+                common,
+                "attack_range",
+                document,
+                "lab_robot_parameters.common.attack_range",
+            ),
+            "attack_interval": _number(
+                common,
+                "attack_interval",
+                document,
+                "lab_robot_parameters.common.attack_interval",
+            ),
+        }
+        if set(lab_parameters) != {"common", *_RMUC_ROBOT_TYPES}:
+            raise ConfigError(
+                f"{document.path}: `lab_robot_parameters` 必须只包含 "
+                "common、hero、engineer、infantry、sentry"
+            )
+        self._lab_parameters: dict[str, RobotParameters] = {}
+        self._projectile_by_type: dict[str, str | None] = {}
+        self._chassis_power_limit_by_type: dict[str, int] = {}
+        for robot_type in _RMUC_ROBOT_TYPES:
+            profile = _mapping(lab_parameters, robot_type, document)
+            expected = {"max_hp", "damage", "projectile", "chassis_power_limit"}
+            if set(profile) != expected:
+                raise ConfigError(
+                    f"{document.path}: `lab_robot_parameters.{robot_type}` "
+                    "字段不完整或包含未知字段"
+                )
+            projectile = profile.get("projectile")
+            if projectile is not None and (
+                not isinstance(projectile, str) or not projectile.strip()
+            ):
+                raise ConfigError(
+                    f"{document.path}: `lab_robot_parameters.{robot_type}.projectile` "
+                    "必须是字符串或 null"
+                )
+            damage = _nonnegative_integer(
+                profile,
+                "damage",
+                document,
+                f"lab_robot_parameters.{robot_type}.damage",
+            )
+            if robot_type == "engineer":
+                if projectile is not None or damage != 0:
+                    raise ConfigError(
+                        f"{document.path}: engineer 本轮必须无 launcher 且 damage=0"
+                    )
+            elif projectile not in {"17mm", "42mm"} or damage <= 0:
+                raise ConfigError(
+                    f"{document.path}: {robot_type} 必须配置 17mm/42mm synthetic damage"
+                )
+            self._lab_parameters[robot_type] = RobotParameters(
+                max_hp=_positive_integer(
+                    profile,
+                    "max_hp",
+                    document,
+                    f"lab_robot_parameters.{robot_type}.max_hp",
+                ),
+                damage=damage,
+                **common_values,
+            )
+            self._projectile_by_type[robot_type] = projectile
+            self._chassis_power_limit_by_type[robot_type] = _positive_integer(
+                profile,
+                "chassis_power_limit",
+                document,
+                f"lab_robot_parameters.{robot_type}.chassis_power_limit",
+            )
+
+        self.attack_damage_by_team: dict[str, int] = {}
+        self._team_states: dict[str, _TeamStructureState] = {}
+        self._base_by_team: dict[str, Structure] = {}
+        self._outpost_by_team: dict[str, Structure] = {}
+        self._rebuild_zone_by_team: dict[str, Zone] = {}
+        self._robot_types_by_id: dict[str, str] = {}
+
+    @property
+    def time_limit(self) -> float:
+        return self._time_limit
+
+    @property
+    def display_state(self) -> RuleSetDisplayState:
+        structure_statuses = []
+        for team_id in sorted(self._base_by_team):
+            base = self._base_by_team[team_id]
+            outpost = self._outpost_by_team[team_id]
+            state = self._team_states[team_id]
+            structure_statuses.append(
+                (
+                    base.id,
+                    base.hp,
+                    base.max_hp,
+                    "ARMOR" if state.base_armor_deployed else "",
+                )
+            )
+            outpost_status = ""
+            if not outpost.alive:
+                outpost_status = "DESTROYED"
+            elif state.outpost_ever_destroyed:
+                outpost_status = "REBUILT"
+            structure_statuses.append(
+                (outpost.id, outpost.hp, outpost.max_hp, outpost_status)
+            )
+
+        rebuild_progress = []
+        for team_id, state in sorted(self._team_states.items()):
+            for robot_id, progress in sorted(state.rebuild_progress_by_robot.items()):
+                if progress <= 0:
+                    continue
+                duration = self._rebuild_duration(self._robot_types_by_id[robot_id])
+                rebuild_progress.append((team_id, robot_id, progress, duration))
+
+        return RuleSetDisplayState(
+            victory_points=(),
+            control_owner=None,
+            attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
+            structure_statuses=tuple(structure_statuses),
+            rebuild_opportunities=tuple(
+                (team_id, state.outpost_rebuild_opportunities)
+                for team_id, state in sorted(self._team_states.items())
+            ),
+            rebuild_progress=tuple(rebuild_progress),
+        )
+
+    def robot_parameters(self, robot_type: str) -> RobotParameters:
+        try:
+            return self._lab_parameters[robot_type]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{self._document.path}: rmuc-2026-region-v1.4.0 "
+                f"不支持机器人类型 `{robot_type}`"
+            ) from exc
+
+    def structure_parameters(self, structure_type: str) -> StructureParameters:
+        try:
+            return self._structure_parameters[structure_type]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{self._document.path}: rmuc-2026-region-v1.4.0 "
+                f"不支持结构类型 `{structure_type}`"
+            ) from exc
+
+    def can_move(self, robot: Robot) -> bool:
+        return robot.alive
+
+    def can_attack(self, robot: Robot) -> bool:
+        return robot.alive and robot.damage > 0
+
+    def can_target(self, target: DamageableTarget) -> bool:
+        if isinstance(target, Structure):
+            # Unlike RMUL robot invincibility, an invincible RMUC Base must not
+            # consume target selection while its Outpost is alive.
+            return self.can_receive_damage(target)
+        return target.alive
+
+    def on_attack_committed(self, robot: Robot) -> None:
+        """This slice has no projectile allowance; attacks are direct-damage intents."""
+
+    def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        """RMUC economy is intentionally outside this slice."""
+        return False
+
+    def can_receive_damage(self, target: DamageableTarget) -> bool:
+        if not target.alive:
+            return False
+        if isinstance(target, Structure) and target.type == "base":
+            outpost = self._outpost_by_team.get(target.team)
+            return outpost is None or not outpost.alive
+        return True
+
+    def prepare_movement(self, match: "Match", dt: float) -> None:
+        """No RMUC chassis performance simulation in this slice."""
+
+    def prepare_combat(self, match: "Match", dt: float) -> None:
+        """No heat/projectile physics in this slice."""
+
+    def reset(self, match: "Match") -> None:
+        expected_roster = {
+            "hero": 1,
+            "engineer": 1,
+            "infantry": 2,
+            "sentry": 1,
+        }
+        for team in match.config.scenario.teams.values():
+            actual_roster = {
+                robot_type: sum(robot.type == robot_type for robot in team.robots)
+                for robot_type in _RMUC_ROBOT_TYPES
+            }
+            if actual_roster != expected_roster:
+                raise ConfigError(
+                    f"{self._document.path}: 队伍 `{team.team_id}` 必须恰好包含 "
+                    "1 hero、1 engineer、2 infantry、1 sentry"
+                )
+
+        player_team = match.config.scenario.player_team
+        player_definitions = next(
+            team.robots
+            for team in match.config.scenario.teams.values()
+            if team.team_id == player_team
+        )
+        expected_player_controlled = {
+            robot.id for robot in player_definitions if robot.type != "sentry"
+        }
+        if match.config.scenario.player_controlled != expected_player_controlled:
+            raise ConfigError(
+                f"{self._document.path}: player_controlled 必须包含 player_team 的 "
+                "hero、engineer、两台 infantry；sentry 由 AI 控制"
+            )
+
+        team_by_side = {
+            side: match.config.scenario.teams[side].team_id for side in ("red", "blue")
+        }
+        self.attack_damage_by_team = {
+            team_id: 0 for team_id in team_by_side.values()
+        }
+        self._team_states = {
+            team_id: _TeamStructureState() for team_id in team_by_side.values()
+        }
+        self._robot_types_by_id = {robot.id: robot.type for robot in match.robots}
+
+        self._base_by_team = {}
+        self._outpost_by_team = {}
+        for team_id in team_by_side.values():
+            team_structures = [
+                structure for structure in match.structures if structure.team == team_id
+            ]
+            bases = [structure for structure in team_structures if structure.type == "base"]
+            outposts = [
+                structure for structure in team_structures if structure.type == "outpost"
+            ]
+            if len(bases) != 1 or len(outposts) != 1 or len(team_structures) != 2:
+                raise ConfigError(
+                    f"{self._document.path}: 队伍 `{team_id}` 必须恰好有 1 Base 和 1 Outpost"
+                )
+            self._base_by_team[team_id] = bases[0]
+            self._outpost_by_team[team_id] = outposts[0]
+
+        zones_by_id = {zone.id: zone for zone in match.map.zones}
+        missing_zones = sorted(set(self._rebuild_zone_ids.values()) - set(zones_by_id))
+        if missing_zones:
+            raise ConfigError(
+                f"{self._document.path}: scenario 缺少前哨站重建区："
+                + ", ".join(missing_zones)
+            )
+        self._rebuild_zone_by_team = {
+            team_by_side[side]: zones_by_id[zone_id]
+            for side, zone_id in self._rebuild_zone_ids.items()
+        }
+
+    def update(self, match: "Match", dt: float) -> None:
+        self._consume_events(match)
+
+        frame_start = match.elapsed_time - dt
+        active_rebuild_dt = max(
+            0.0, min(dt, self._rebuild_cutoff - frame_start)
+        )
+        if active_rebuild_dt > 0:
+            self._advance_rebuild(match, active_rebuild_dt)
+
+        if match.elapsed_time >= self._rebuild_cutoff - 1e-9:
+            for state in self._team_states.values():
+                state.rebuild_progress_by_robot.clear()
+
+    def _consume_events(self, match: "Match") -> None:
+        structure_by_id = {structure.id: structure for structure in match.structures}
+        for event in match.current_events:
+            if event.type in {
+                MatchEventType.ROBOT_DAMAGED,
+                MatchEventType.STRUCTURE_DAMAGED,
+            }:
+                if (
+                    event.attacker_team_id in self.attack_damage_by_team
+                    and event.attacker_team_id != event.team_id
+                    and event.damage > 0
+                ):
+                    self.attack_damage_by_team[event.attacker_team_id] += event.damage
+
+            if event.type == MatchEventType.STRUCTURE_DAMAGED:
+                structure = structure_by_id.get(event.structure_id)
+                if structure is None or structure.type != "base":
+                    continue
+                state = self._team_states[structure.team]
+                previous_damage = state.base_damage_lost
+                state.base_damage_lost += event.damage
+                crossed = (
+                    state.base_damage_lost // self._base_damage_threshold
+                    - previous_damage // self._base_damage_threshold
+                )
+                if crossed > 0:
+                    state.outpost_rebuild_opportunities += crossed
+                if structure.hp <= 2000:
+                    state.base_armor_deployed = True
+
+            elif event.type == MatchEventType.STRUCTURE_DESTROYED:
+                structure = structure_by_id.get(event.structure_id)
+                if structure is None or structure.type != "outpost":
+                    continue
+                state = self._team_states[structure.team]
+                state.outpost_ever_destroyed = True
+                state.rebuild_progress_by_robot.clear()
+
+    def _advance_rebuild(self, match: "Match", dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id in sorted(self._team_states):
+            state = self._team_states[team_id]
+            outpost = self._outpost_by_team[team_id]
+            if outpost.alive or state.outpost_rebuild_opportunities <= 0:
+                state.rebuild_progress_by_robot.clear()
+                continue
+
+            zone = self._rebuild_zone_by_team[team_id]
+            eligible = [
+                robot
+                for robot in match.robots
+                if robot.team == team_id
+                and robot.alive
+                and robot.type in _REBUILD_ROBOT_TYPES
+                and zone.contains(robot.position)
+            ]
+            eligible_ids = {robot.id for robot in eligible}
+            for robot_id in list(state.rebuild_progress_by_robot):
+                if robot_id not in eligible_ids:
+                    del state.rebuild_progress_by_robot[robot_id]
+
+            for robot in sorted(eligible, key=lambda item: item.id):
+                progress = state.rebuild_progress_by_robot.get(robot.id, 0.0) + dt
+                state.rebuild_progress_by_robot[robot.id] = progress
+                if progress + 1e-9 < self._rebuild_duration(robot.type):
+                    continue
+
+                outpost.alive = True
+                outpost.hp = min(self._rebuilt_outpost_hp, outpost.max_hp)
+                state.outpost_rebuild_opportunities -= 1
+                state.rebuild_progress_by_robot.clear()
+                break
+
+    def _rebuild_duration(self, robot_type: str) -> float:
+        if robot_type == "engineer":
+            return self._engineer_rebuild_duration
+        return self._default_rebuild_duration
+
+    def evaluate_result(self, match: "Match") -> MatchResult | None:
+        bases = self._base_by_team
+        if (
+            match.elapsed_time < self.time_limit
+            and all(base.alive for base in bases.values())
+        ):
+            return None
+
+        team_ids = (
+            match.config.scenario.teams["red"].team_id,
+            match.config.scenario.teams["blue"].team_id,
+        )
+        first, second = team_ids
+        base_hp = {team_id: bases[team_id].hp for team_id in team_ids}
+        if base_hp[first] != base_hp[second]:
+            return MatchResult(first if base_hp[first] > base_hp[second] else second)
+
+        first_state = self._team_states[first]
+        second_state = self._team_states[second]
+        if (
+            not first_state.outpost_ever_destroyed
+            and not second_state.outpost_ever_destroyed
+        ):
+            outpost_hp = {
+                team_id: self._outpost_by_team[team_id].hp for team_id in team_ids
+            }
+            if outpost_hp[first] != outpost_hp[second]:
+                return MatchResult(
+                    first if outpost_hp[first] > outpost_hp[second] else second
+                )
+
+        if (
+            first_state.outpost_ever_destroyed
+            != second_state.outpost_ever_destroyed
+        ):
+            return MatchResult(
+                second if first_state.outpost_ever_destroyed else first
+            )
+
+        first_damage = self.attack_damage_by_team[first]
+        second_damage = self.attack_damage_by_team[second]
+        if first_damage != second_damage:
+            return MatchResult(first if first_damage > second_damage else second)
+
+        remaining_hp = {
+            team_id: sum(
+                robot.hp for robot in match.robots if robot.team == team_id
+            )
+            for team_id in team_ids
+        }
+        if remaining_hp[first] != remaining_hp[second]:
+            return MatchResult(
+                first if remaining_hp[first] > remaining_hp[second] else second
+            )
+        return MatchResult(None)
+
+
+def _mapping(
+    data: Mapping[str, Any], key: str, document: RuleDocument
+) -> Mapping[str, Any]:
+    value = data.get(key)
+    if not isinstance(value, dict):
+        raise ConfigError(f"{document.path}: `{key}` 必须是 YAML 字典")
+    return value
+
+
+def _string(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{document.path}: `{field}` 必须是非空字符串")
+    return value.strip()
+
+
+def _number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须是大于 0 的数字")
+    return float(value)
+
+
+def _positive_integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
+    return value
+
+
+def _nonnegative_integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负整数")
+    return value
+
+
+if TYPE_CHECKING:
+    from tarsgo_simulator.core.match import Match

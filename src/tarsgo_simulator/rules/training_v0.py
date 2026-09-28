@@ -5,7 +5,13 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
 from tarsgo_simulator.core.robot import Robot
-from tarsgo_simulator.rules.protocol import MatchResult, RobotParameters, RuleSetDisplayState
+from tarsgo_simulator.rules.protocol import (
+    DamageableTarget,
+    MatchResult,
+    RobotParameters,
+    RuleSetDisplayState,
+    StructureParameters,
+)
 
 
 class TrainingV0Rules:
@@ -40,11 +46,17 @@ class TrainingV0Rules:
             raise ConfigError(f"training-v0 不支持机器人类型 `{robot_type}`")
         return self._infantry
 
+    def structure_parameters(self, structure_type: str) -> StructureParameters:
+        raise ConfigError(f"training-v0 不支持结构类型 `{structure_type}`")
+
     def can_move(self, robot: Robot) -> bool:
         return robot.alive
 
     def can_attack(self, robot: Robot) -> bool:
         return robot.alive
+
+    def can_target(self, target: DamageableTarget) -> bool:
+        return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
         """Training V0 has no limited projectile resource."""
@@ -53,8 +65,8 @@ class TrainingV0Rules:
         """Training V0 has no economy or projectile exchange."""
         return False
 
-    def can_receive_damage(self, robot: Robot) -> bool:
-        return robot.alive
+    def can_receive_damage(self, target: DamageableTarget) -> bool:
+        return target.alive
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Training V0 has no chassis buffer state to advance."""
