@@ -1,4 +1,4 @@
-"""Partial RMUL 2026 rules for VP, lifecycle, economy, and shooting heat."""
+"""Partial RMUL 2026 rules for VP, lifecycle, economy, heat, and chassis buffer."""
 
 from dataclasses import dataclass
 import math
@@ -62,6 +62,19 @@ class _RobotShootingState:
     permanently_locked: bool = False
 
 
+@dataclass(frozen=True)
+class _ChassisPowerRule:
+    power_limit: float
+    moving_power_demand: float
+
+
+@dataclass
+class _RobotChassisState:
+    buffer_energy: float
+    power_off_remaining: float = 0.0
+    blocked_this_frame: bool = False
+
+
 class RMUL2026Rules:
     def __init__(self, document: RuleDocument) -> None:
         if document.metadata.status != "official-partial":
@@ -86,6 +99,14 @@ class RMUL2026Rules:
             self._shooting_heat_rules,
             self._lab_infantry_launcher_profile,
         ) = _parse_shooting_heat(document, self._allowed_projectile_rules)
+        (
+            self._chassis_power_detection_hz,
+            self._buffer_energy_max,
+            self._power_off_duration,
+            self._chassis_power_rules,
+            self._lab_infantry_chassis_profile,
+            self._stationary_power_demand,
+        ) = _parse_chassis_power(document)
         victory_points = _mapping(document.data, "victory_points", document)
         self._initial_victory_points = _integer(
             victory_points, "initial", document, "victory_points.initial"
@@ -264,6 +285,9 @@ class RMUL2026Rules:
         self.allowed_projectiles_by_robot: dict[str, int] = {}
         self._robot_shooting_states: dict[str, _RobotShootingState] = {}
         self._heat_cooling_accumulator = 0.0
+        self._robot_chassis_states: dict[str, _RobotChassisState] = {}
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot: dict[str, float] = {}
         self._granted_timed_coin_events: set[int] = set()
         self._granted_vp_gap_thresholds: set[int] = set()
 
@@ -321,6 +345,17 @@ class RMUL2026Rules:
                 )
                 for robot_id, robot_type in sorted(self._robot_types_by_id.items())
             ),
+            robot_chassis_power=tuple(
+                (
+                    robot_id,
+                    self._robot_chassis_states[robot_id].buffer_energy,
+                    self._buffer_energy_max,
+                    self._current_synthetic_power_by_robot.get(robot_id, 0.0),
+                    self._chassis_power_rules[robot_type].power_limit,
+                    self._robot_chassis_states[robot_id].power_off_remaining,
+                )
+                for robot_id, robot_type in sorted(self._robot_types_by_id.items())
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -331,6 +366,14 @@ class RMUL2026Rules:
             raise ConfigError(
                 f"{self._document.path}: rmul-2026-3v3 不支持机器人类型 `{robot_type}`"
             ) from exc
+
+    def can_move(self, robot: Robot) -> bool:
+        state = self._robot_chassis_states.get(robot.id)
+        return robot.alive and (
+            state is None
+            or not state.blocked_this_frame
+            and state.power_off_remaining <= 0
+        )
 
     def can_attack(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
@@ -399,6 +442,74 @@ class RMUL2026Rules:
         return robot.alive and (
             lifecycle is None or lifecycle.invincible_remaining <= 0
         )
+
+    def prepare_movement(self, match: "Match", dt: float) -> None:
+        """Advance quantized chassis buffer state before movement."""
+        for robot in match.robots:
+            state = self._robot_chassis_states[robot.id]
+            state.blocked_this_frame = state.power_off_remaining > 0
+            self._current_synthetic_power_by_robot[robot.id] = (
+                self._synthetic_power_demand(robot, state)
+            )
+
+        if dt <= 0:
+            return
+
+        self._chassis_power_accumulator += dt
+        ticks = math.floor(
+            self._chassis_power_accumulator * self._chassis_power_detection_hz
+            + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        tick_duration = 1.0 / self._chassis_power_detection_hz
+        self._chassis_power_accumulator = max(
+            0.0,
+            self._chassis_power_accumulator - ticks * tick_duration,
+        )
+        for _ in range(ticks):
+            for robot in match.robots:
+                state = self._robot_chassis_states[robot.id]
+                rule = self._chassis_power_rules[robot.type]
+                was_powered_off = state.power_off_remaining > 0
+                if was_powered_off:
+                    state.blocked_this_frame = True
+                    power = self._stationary_power_demand
+                else:
+                    power = self._synthetic_power_demand(robot, state)
+
+                state.buffer_energy -= (power - rule.power_limit) * tick_duration
+                state.buffer_energy = min(
+                    self._buffer_energy_max, state.buffer_energy
+                )
+                if state.buffer_energy <= 0:
+                    state.buffer_energy = 0.0
+                    if not was_powered_off and power > rule.power_limit:
+                        state.power_off_remaining = self._power_off_duration
+                        state.blocked_this_frame = True
+
+                if was_powered_off:
+                    state.power_off_remaining = max(
+                        0.0, state.power_off_remaining - tick_duration
+                    )
+                    if state.power_off_remaining <= 1e-9:
+                        state.power_off_remaining = 0.0
+
+        for robot in match.robots:
+            state = self._robot_chassis_states[robot.id]
+            self._current_synthetic_power_by_robot[robot.id] = (
+                self._synthetic_power_demand(robot, state)
+            )
+
+    def _synthetic_power_demand(
+        self, robot: Robot, state: _RobotChassisState
+    ) -> float:
+        if not robot.alive or state.power_off_remaining > 0:
+            return self._stationary_power_demand
+        if robot.path:
+            return self._chassis_power_rules[robot.type].moving_power_demand
+        return self._stationary_power_demand
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
         """Advance only quantized shooting-heat cooling before new attacks."""
@@ -508,6 +619,14 @@ class RMUL2026Rules:
             robot.id: _RobotShootingState() for robot in match.robots
         }
         self._heat_cooling_accumulator = 0.0
+        self._robot_chassis_states = {
+            robot.id: _RobotChassisState(buffer_energy=self._buffer_energy_max)
+            for robot in match.robots
+        }
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot = {
+            robot.id: self._stationary_power_demand for robot in match.robots
+        }
         self.victory_points = {
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
@@ -618,6 +737,14 @@ class RMUL2026Rules:
             if shooting is not None:
                 shooting.heat = 0.0
                 shooting.heat_locked = False
+            chassis = self._robot_chassis_states.get(event.robot_id)
+            if chassis is not None:
+                chassis.buffer_energy = self._buffer_energy_max
+                chassis.power_off_remaining = 0.0
+                chassis.blocked_this_frame = False
+                self._current_synthetic_power_by_robot[event.robot_id] = (
+                    self._stationary_power_demand
+                )
             lifecycle = self._robot_lifecycles.get(event.robot_id)
             if lifecycle is not None:
                 penalty = self._robot_penalties[event.robot_id]
@@ -1114,6 +1241,96 @@ def _parse_shooting_heat(
     return cooling_hz, parsed, infantry_launcher_profile
 
 
+def _parse_chassis_power(
+    document: RuleDocument,
+) -> tuple[float, float, float, dict[str, _ChassisPowerRule], str, float]:
+    data = _mapping(document.data, "chassis_power", document)
+    expected_keys = {
+        "detection_hz",
+        "buffer_energy_max",
+        "power_off_duration",
+        "robot_profiles",
+        "lab_power_demand",
+    }
+    if set(data) != expected_keys:
+        raise ConfigError(
+            f"{document.path}: chassis_power 字段不完整或包含未知字段"
+        )
+
+    detection_hz = _number(
+        data, "detection_hz", document, "chassis_power.detection_hz"
+    )
+    buffer_energy_max = _number(
+        data, "buffer_energy_max", document, "chassis_power.buffer_energy_max"
+    )
+    power_off_duration = _number(
+        data, "power_off_duration", document, "chassis_power.power_off_duration"
+    )
+
+    profiles = _mapping(data, "robot_profiles", document)
+    if set(profiles) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: chassis_power.robot_profiles 必须只包含 "
+            "hero、infantry、sentry"
+        )
+
+    demand = _mapping(data, "lab_power_demand", document)
+    if set(demand) != {"stationary", "moving"}:
+        raise ConfigError(
+            f"{document.path}: chassis_power.lab_power_demand "
+            "必须只包含 stationary、moving"
+        )
+    stationary = _nonnegative_number(
+        demand,
+        "stationary",
+        document,
+        "chassis_power.lab_power_demand.stationary",
+    )
+    moving = _mapping(demand, "moving", document)
+    if set(moving) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: chassis_power.lab_power_demand.moving "
+            "必须只包含 hero、infantry、sentry"
+        )
+
+    parsed: dict[str, _ChassisPowerRule] = {}
+    infantry_chassis_profile = ""
+    for robot_type in _RMUL_ROBOT_TYPES:
+        field = f"chassis_power.robot_profiles.{robot_type}"
+        profile = _mapping(profiles, robot_type, document)
+        expected_profile_keys = {"power_limit"}
+        if robot_type == "infantry":
+            expected_profile_keys.add("chassis_profile")
+        if set(profile) != expected_profile_keys:
+            raise ConfigError(
+                f"{document.path}: {field} 字段不完整或包含未知字段"
+            )
+        if robot_type == "infantry":
+            infantry_chassis_profile = _string(
+                profile, "chassis_profile", document, f"{field}.chassis_profile"
+            )
+        parsed[robot_type] = _ChassisPowerRule(
+            power_limit=_number(
+                profile, "power_limit", document, f"{field}.power_limit"
+            ),
+            moving_power_demand=_number(
+                moving,
+                robot_type,
+                document,
+                f"chassis_power.lab_power_demand.moving.{robot_type}",
+            ),
+        )
+
+    return (
+        detection_hz,
+        buffer_energy_max,
+        power_off_duration,
+        parsed,
+        infantry_chassis_profile,
+        stationary,
+    )
+
+
 def _string(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
 ) -> str:
@@ -1137,6 +1354,23 @@ def _number(
         or value <= 0
     ):
         raise ConfigError(f"{document.path}: `{field or key}` 必须是大于 0 的数字")
+    return float(value)
+
+
+def _nonnegative_number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ConfigError(f"{document.path}: {field} 必须是非负数字")
     return float(value)
 
 

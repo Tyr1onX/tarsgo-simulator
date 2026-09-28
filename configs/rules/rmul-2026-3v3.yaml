@@ -69,6 +69,24 @@ shooting_heat:
     sentry:
       heat_limit: 260
       cooling_per_second: 30
+chassis_power:
+  detection_hz: 10
+  buffer_energy_max: 60
+  power_off_duration: 5
+  robot_profiles:
+    hero:
+      power_limit: 100
+    infantry:
+      chassis_profile: power-priority
+      power_limit: 90
+    sentry:
+      power_limit: 100
+  lab_power_demand:
+    stationary: 0
+    moving:
+      hero: 105
+      infantry: 95
+      sentry: 105
 supply_zones:
   red: red-supply
   blue: blue-supply

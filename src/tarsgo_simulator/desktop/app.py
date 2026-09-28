@@ -330,6 +330,15 @@ def _draw(
         if display_state is not None
         else {}
     )
+    chassis_power = (
+        {
+            robot_id: (buffer, maximum, power, limit, power_off_remaining)
+            for robot_id, buffer, maximum, power, limit, power_off_remaining
+            in display_state.robot_chassis_power
+        }
+        if display_state is not None
+        else {}
+    )
 
     for robot in match.robots:
         center = (
@@ -357,6 +366,12 @@ def _draw(
             heat, limit, locked, permanently_locked = heat_state
             lock_label = " PERM" if permanently_locked else " LOCK" if locked else ""
             robot_label = f"{robot_label} H:{heat:g}/{limit:g}{lock_label}"
+        chassis_state = chassis_power.get(robot.id)
+        if chassis_state is not None:
+            buffer, maximum, _power, _limit, power_off_remaining = chassis_state
+            robot_label = f"{robot_label} B:{buffer:g}/{maximum:g}"
+            if power_off_remaining > 0:
+                robot_label = f"{robot_label} PWR {power_off_remaining:.1f}s"
         label_surface = small_font.render(robot_label, True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
         robot_status = robot_statuses.get(robot.id)
