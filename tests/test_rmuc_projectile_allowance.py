@@ -309,6 +309,9 @@ def test_committed_shot_resets_disengage_and_remote_requires_six_new_seconds() -
     assert state.disengaged_elapsed == 0
     assert not match.ruleset.remote_exchange_projectiles(match, hero)
 
+    # Flush the frame containing the committed shot; the continuous six-second
+    # disengage window starts after that combat-activity frame has settled.
+    match.update(0)
     match.update(5.999)
     assert not match.ruleset.remote_exchange_projectiles(match, hero)
     match.update(0.001)
