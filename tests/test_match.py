@@ -97,6 +97,21 @@ def _rules_lab_match() -> Match:
     return match
 
 
+def _zone_center(match: Match, zone_id: str) -> tuple[float, float]:
+    zone = next(zone for zone in match.map.zones if zone.id == zone_id)
+    return (zone.x + zone.width / 2, zone.y + zone.height / 2)
+
+
+def _own_supply_center(match: Match, robot: Robot) -> tuple[float, float]:
+    zone = match.ruleset._supply_zones[robot.team]
+    return (zone.x + zone.width / 2, zone.y + zone.height / 2)
+
+
+def _enemy_supply_center(match: Match, robot: Robot) -> tuple[float, float]:
+    zone = match.ruleset._forbidden_zones[robot.team]
+    return (zone.x + zone.width / 2, zone.y + zone.height / 2)
+
+
 def _complete_rmul_respawn(match: Match, robot_id: str) -> Robot:
     robot = _robot(match, robot_id)
     match.apply_damage(robot, robot.hp)
@@ -1266,15 +1281,17 @@ def test_desktop_selection_excludes_sentry_and_opponents() -> None:
     from tarsgo_simulator.desktop.app import (
         _select_player_robot,
         _select_player_robots_in_rectangle,
+        _viewport_for_match,
     )
 
     match = _rules_lab_match()
+    viewport = _viewport_for_match(match)
     hero = _robot(match, RMUL_HERO)
     sentry = _robot(match, RMUL_SENTRY)
     assert _select_player_robot(hero.position, match) == RMUL_HERO
     assert _select_player_robot(sentry.position, match) is None
-    all_map = pygame.Rect(0, 0, 1200, 1000)
-    assert _select_player_robots_in_rectangle(all_map, match) == {
+    all_map = pygame.Rect(0, 0, 1100, 780)
+    assert _select_player_robots_in_rectangle(all_map, match, viewport) == {
         RMUL_HERO,
         RMUL_INFANTRY,
     }
@@ -1324,8 +1341,8 @@ def _prepare_rmul_forbidden_zone(
     teammate = next(
         robot for robot in _team_robots(match, offender.team) if robot is not offender
     )
-    offender.position = (790.0, 210.0) if offender.team == RMUL_TARS_TEAM else (120.0, 210.0)
-    teammate.position = (300.0, 450.0)
+    offender.position = _enemy_supply_center(match, offender)
+    teammate.position = (600.0, 700.0)
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 999.0
@@ -1422,9 +1439,9 @@ def test_rmul_yellow_repeat_percentage_returns_to_base_after_thirty_seconds() ->
     match.update(3.01)
     assert offender.hp == 297
 
-    offender.position = (500.0, 450.0)
+    offender.position = (600.0, 700.0)
     match.update(30.1)
-    offender.position = (790.0, 210.0)
+    offender.position = _enemy_supply_center(match, offender)
     match.update(3.01)
 
     assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 2
@@ -1484,12 +1501,12 @@ def test_rmul_leaving_enemy_supply_resets_only_continuous_violation_timer() -> N
     state = match.ruleset._robot_penalties[RMUL_HERO]
     assert state.forbidden_elapsed == pytest.approx(2.0)
 
-    offender.position = (500.0, 450.0)
+    offender.position = (600.0, 700.0)
     match.update(0.1)
     assert state.forbidden_elapsed == 0.0
     assert state.next_yellow_at == 3.0
     match.update(2.0)
-    offender.position = (790.0, 210.0)
+    offender.position = _enemy_supply_center(match, offender)
     match.update(2.0)
 
     assert state.yellow_cards == 0
@@ -1521,17 +1538,18 @@ def test_rmul_death_stops_violation_timer_but_keeps_yellow_count() -> None:
 def test_rmul_enemy_supply_zone_remains_pathable_and_robot_can_enter() -> None:
     match = _rules_lab_match()
     robot = _robot(match, RMUL_HERO)
-    robot.position = (600.0, 260.0)
+    robot.position = (800.0, 400.0)
     robot.speed = 100.0
-    _robot(match, RMUL_INFANTRY).position = (100.0, 450.0)
-    _robot(match, RMUL_OPPONENT_HERO).position = (850.0, 500.0)
-    _robot(match, RMUL_OPPONENT_INFANTRY).position = (900.0, 400.0)
+    _robot(match, RMUL_INFANTRY).position = (300.0, 700.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (1100.0, 650.0)
+    _robot(match, RMUL_OPPONENT_INFANTRY).position = (950.0, 700.0)
+    target = _enemy_supply_center(match, robot)
 
-    assert match.order_move(RMUL_HERO, (790.0, 260.0))
+    assert match.order_move(RMUL_HERO, target)
     assert robot.path
-    assert robot.path[-1] == (790.0, 260.0)
-    assert match.map.is_passable((790.0, 260.0))
-    for _ in range(30):
+    assert robot.path[-1] == target
+    assert match.map.is_passable(target)
+    for _ in range(40):
         match.update(0.1)
         if match.ruleset._forbidden_zones[robot.team].contains(robot.position):
             break
@@ -1632,7 +1650,7 @@ def test_rmul_reaching_zero_vp_ends_match_immediately() -> None:
 
 def test_rmul_control_capture_and_integer_second_scoring() -> None:
     match = _rules_lab_match()
-    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = _zone_center(match, "center-control")
 
     match.update(0.0)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
@@ -1648,8 +1666,9 @@ def test_rmul_control_capture_and_integer_second_scoring() -> None:
 
 def _simultaneous_zone_claim(reverse_robots: bool) -> tuple[str | None, dict[str, int]]:
     match = _rules_lab_match()
-    _robot(match, RMUL_HERO).position = (420.0, 220.0)
-    _robot(match, RMUL_OPPONENT_HERO).position = (480.0, 300.0)
+    control_x, control_y = _zone_center(match, "center-control")
+    _robot(match, RMUL_HERO).position = (control_x - 20.0, control_y - 20.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = (control_x + 20.0, control_y + 20.0)
     if reverse_robots:
         match.robots.reverse()
 
@@ -1671,11 +1690,11 @@ def test_rmul_simultaneous_zone_claim_is_deterministic_and_order_independent() -
 
 def test_rmul_owner_keeps_zone_during_two_second_loss_delay_then_opponent_claims() -> None:
     match = _rules_lab_match()
-    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = _zone_center(match, "center-control")
     match.update(0.01)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
 
-    _robot(match, RMUL_HERO).position = (300.0, 260.0)
+    _robot(match, RMUL_HERO).position = (400.0, 400.0)
     match.update(1.5)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
     match.update(0.49)
@@ -1683,14 +1702,14 @@ def test_rmul_owner_keeps_zone_during_two_second_loss_delay_then_opponent_claims
     match.update(0.02)
     assert match.ruleset.control_owner is None
 
-    _robot(match, RMUL_OPPONENT_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_OPPONENT_HERO).position = _zone_center(match, "center-control")
     match.update(0.01)
     assert match.ruleset.control_owner == RMUL_OPPONENT_TEAM
 
 
 def test_rmul_reset_restores_victory_points_and_control_state() -> None:
     match = _rules_lab_match()
-    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = _zone_center(match, "center-control")
     match.update(0.01)
     match.update(1.0)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
@@ -1709,14 +1728,14 @@ def test_rmul_reset_restores_all_six_robot_and_ai_rule_states() -> None:
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 999.0
-    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = _zone_center(match, "center-control")
     match.update(0.01)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
 
     _prepare_rmul_forbidden_zone(match, RMUL_HERO)
     match.update(3.01)
     assert match.ruleset._robot_penalties[RMUL_HERO].yellow_cards == 1
-    _robot(match, RMUL_HERO).position = (450.0, 260.0)
+    _robot(match, RMUL_HERO).position = _zone_center(match, "center-control")
     match.update(0.01)
     sentry = _robot(match, RMUL_SENTRY)
     match.apply_damage(sentry, sentry.hp)
@@ -1817,8 +1836,8 @@ def test_rmul_supply_healing_is_per_robot_and_slice_invariant() -> None:
     whole = _rules_lab_match()
     sliced = _rules_lab_match()
     for match in (whole, sliced):
-        _robot(match, RMUL_HERO).position = (70.0, 170.0)
-        _robot(match, RMUL_INFANTRY).position = (150.0, 350.0)
+        _robot(match, RMUL_HERO).position = (80.0, 300.0)
+        _robot(match, RMUL_INFANTRY).position = (200.0, 500.0)
         _robot(match, RMUL_HERO).hp = 50
         _robot(match, RMUL_INFANTRY).hp = 50
 
@@ -1836,7 +1855,7 @@ def test_rmul_supply_healing_clears_fraction_on_leaving_and_at_full_hp() -> None
     match = _rules_lab_match()
     robot = _robot(match, RMUL_HERO)
     lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
-    robot.position = (110.0, 210.0)
+    robot.position = _own_supply_center(match, robot)
     robot.hp = 50
     match.update(0.01)
     assert lifecycle.healing_hp_fraction == pytest.approx(0.875)
@@ -1844,7 +1863,7 @@ def test_rmul_supply_healing_clears_fraction_on_leaving_and_at_full_hp() -> None
     robot.position = (450.0, 260.0)
     match.update(0.0)
     assert lifecycle.healing_hp_fraction == 0
-    robot.position = (110.0, 210.0)
+    robot.position = _own_supply_center(match, robot)
     match.update(0.03)
     assert robot.hp == 52
     assert lifecycle.healing_hp_fraction == pytest.approx(0.625)
@@ -2024,7 +2043,7 @@ def test_match_damage_entry_enforces_invincibility_unless_penalty_bypasses_it() 
 def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     match = _rules_lab_match()
     robot = _complete_rmul_respawn(match, RMUL_HERO)
-    robot.position = (450.0, 260.0)
+    robot.position = _zone_center(match, "center-control")
 
     match.update(0.0)
     assert match.ruleset.control_owner is None
@@ -2032,7 +2051,7 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
 
     # Supply zones only release state; they do not heal.
     robot.hp = 15
-    robot.position = (110.0, 260.0)
+    robot.position = _own_supply_center(match, robot)
     match.ruleset.allowed_projectiles_by_robot[RMUL_HERO] = 1
     match.update(0.0)
     lifecycle = match.ruleset._robot_lifecycles[RMUL_HERO]
@@ -2042,9 +2061,9 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     assert match.ruleset.can_attack(robot)
     assert match.ruleset.can_receive_damage(robot)
 
-    robot.position = (450.0, 260.0)
+    robot.position = _zone_center(match, "center-control")
     opponent = _robot(match, RMUL_OPPONENT_HERO)
-    opponent.position = (550.0, 260.0)
+    opponent.position = (700.0, 400.0)
     robot.attack_cooldown = 0
     opponent.attack_cooldown = 0
     match.ruleset.allowed_projectiles_by_robot[RMUL_OPPONENT_HERO] = 1
@@ -2071,16 +2090,16 @@ def test_rmul_only_each_teams_own_supply_zone_releases_states() -> None:
     assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].weak
 
     # Put each revived robot in the other team's supply zone.
-    t1.position = (790.0, 210.0)
-    o1.position = (110.0, 210.0)
+    t1.position = _enemy_supply_center(match, t1)
+    o1.position = _enemy_supply_center(match, o1)
     match.update(0.1)
     assert rules._robot_lifecycles[RMUL_HERO].weak
     assert rules._robot_lifecycles[RMUL_HERO].invincible_remaining > 0
     assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].weak
     assert rules._robot_lifecycles[RMUL_OPPONENT_HERO].invincible_remaining > 0
 
-    t1.position = (110.0, 210.0)
-    o1.position = (790.0, 210.0)
+    t1.position = _own_supply_center(match, t1)
+    o1.position = _own_supply_center(match, o1)
     match.update(0.0)
     assert not rules._robot_lifecycles[RMUL_HERO].weak
     assert rules._robot_lifecycles[RMUL_HERO].invincible_remaining == 0
@@ -2102,7 +2121,7 @@ def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> Non
     assert match.ruleset._robot_lifecycles[RMUL_HERO].weak
     assert match.ruleset._robot_lifecycles[RMUL_HERO].invincible_remaining == 30
 
-    _robot(match, RMUL_INFANTRY).position = (450.0, 260.0)
+    _robot(match, RMUL_INFANTRY).position = _zone_center(match, "center-control")
     match.update(0.01)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
     assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 160
@@ -2294,17 +2313,17 @@ def test_rmul_exchange_failures_are_atomic_and_respect_supply_and_control() -> N
     assert rules.allowed_projectiles_by_robot == counts
 
     rules.coins_by_team[RMUL_TARS_TEAM] = 100
-    hero.position = (450.0, 450.0)
+    hero.position = (600.0, 700.0)
     assert not match.order_exchange_projectiles(RMUL_HERO)
     assert rules.coins_by_team[RMUL_TARS_TEAM] == 100
     assert rules.allowed_projectiles_by_robot == counts
 
-    hero.position = (790.0, 260.0)
+    hero.position = _enemy_supply_center(match, hero)
     assert not match.order_exchange_projectiles(RMUL_HERO)
     assert rules.coins_by_team[RMUL_TARS_TEAM] == 100
     assert rules._robot_penalties[RMUL_HERO].forbidden_elapsed == 0
 
-    hero.position = (120.0, 190.0)
+    hero.position = _own_supply_center(match, hero)
     rules.coins_by_team[RMUL_TARS_TEAM] = 1000
     assert not match.order_exchange_projectiles(RMUL_SENTRY)
     assert rules.allowed_projectiles_by_robot[RMUL_SENTRY] == 750

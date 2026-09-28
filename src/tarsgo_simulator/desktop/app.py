@@ -8,6 +8,7 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.viewport import Viewport
 
 
 BACKGROUND = (18, 24, 32)
@@ -15,6 +16,10 @@ FIELD_COLOR = (49, 66, 61)
 FIELD_BORDER = (137, 157, 145)
 OBSTACLE_COLOR = (112, 119, 126)
 ZONE_COLOR = (79, 156, 166)
+RED_SUPPLY_COLOR = (196, 102, 96)
+BLUE_SUPPLY_COLOR = (94, 132, 196)
+CONTROL_ZONE_COLOR = (79, 156, 166)
+HIGH_GROUND_COLOR = (180, 162, 105)
 TEXT_COLOR = (236, 240, 244)
 MUTED_COLOR = (166, 178, 187)
 PLAYER_COLOR = (66, 190, 167)
@@ -22,20 +27,31 @@ OPPONENT_COLOR = (225, 105, 92)
 SELECTION_COLOR = (255, 225, 126)
 HP_COLOR = (105, 214, 133)
 HP_BACKGROUND = (65, 72, 78)
-MAP_ORIGIN = (32, 82)
 HUD_HEIGHT = 68
 WINDOW_MARGIN = 32
+WINDOW_SIZE = (1100, 780)
+FIELD_TOP = 82
+FIELD_VIEW_RECT = (
+    WINDOW_MARGIN,
+    FIELD_TOP,
+    WINDOW_SIZE[0] - WINDOW_MARGIN * 2,
+    WINDOW_SIZE[1] - FIELD_TOP - WINDOW_MARGIN,
+)
+ZONE_STYLE = {
+    "red-supply": (RED_SUPPLY_COLOR, "RED SUPPLY"),
+    "blue-supply": (BLUE_SUPPLY_COLOR, "BLUE SUPPLY"),
+    "center-control": (CONTROL_ZONE_COLOR, "CONTROL"),
+    "red-high-ground": (HIGH_GROUND_COLOR, "HIGH GROUND"),
+    "blue-high-ground": (HIGH_GROUND_COLOR, "HIGH GROUND"),
+}
 
 
 def main(scenario_path: str | Path | None = None) -> None:
     match = Match.from_scenario(scenario_path or default_scenario_path())
     pygame.init()
     try:
-        window_size = (
-            round(match.map.width) + WINDOW_MARGIN * 2,
-            round(match.map.height) + HUD_HEIGHT + WINDOW_MARGIN,
-        )
-        screen = pygame.display.set_mode(window_size)
+        viewport = _viewport_for_match(match)
+        screen = pygame.display.set_mode(WINDOW_SIZE)
         pygame.display.set_caption(_window_caption(match))
         font = pygame.font.Font(None, 25)
         small_font = pygame.font.Font(None, 18)
@@ -70,13 +86,13 @@ def main(scenario_path: str | Path | None = None) -> None:
                         match.order_exchange_projectiles(next(iter(selected_robot_ids)))
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
-                        if _screen_to_world(event.pos, match) is not None:
+                        if _screen_to_world(event.pos, viewport) is not None:
                             selection_start = event.pos
                             selection_current = event.pos
                             modifiers = getattr(event, "mod", 0) | pygame.key.get_mods()
                             selection_shift = bool(modifiers & pygame.KMOD_SHIFT)
                     elif event.button == 3:
-                        world = _screen_to_world(event.pos, match)
+                        world = _screen_to_world(event.pos, viewport)
                         if world is None:
                             continue
                         if len(selected_robot_ids) == 1:
@@ -92,10 +108,10 @@ def main(scenario_path: str | Path | None = None) -> None:
                     if math.dist(selection_start, selection_current) > 5:
                         selection_rect = _selection_rectangle(selection_start, selection_current)
                         selected_robot_ids = _select_player_robots_in_rectangle(
-                            selection_rect, match
+                            selection_rect, match, viewport
                         )
                     else:
-                        world = _screen_to_world(event.pos, match)
+                        world = _screen_to_world(event.pos, viewport)
                         _apply_click_selection(
                             world,
                             match,
@@ -127,6 +143,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                 opponent_team,
                 selected_robot_ids,
                 selection_rect,
+                viewport,
             )
             pygame.display.flip()
     finally:
@@ -150,11 +167,18 @@ def _window_caption(match: Match) -> str:
     return "TARS-Go Infantry Training"
 
 
-def _screen_to_world(position: tuple[int, int], match: Match) -> tuple[float, float] | None:
-    x = position[0] - MAP_ORIGIN[0]
-    y = position[1] - MAP_ORIGIN[1]
-    point = (float(x), float(y))
-    return point if match.map.contains(point) else None
+def _viewport_for_match(match: Match) -> Viewport:
+    return Viewport.fit(
+        (match.map.width, match.map.height),
+        FIELD_VIEW_RECT,
+    )
+
+
+def _screen_to_world(
+    position: tuple[int, int],
+    viewport: Viewport,
+) -> tuple[float, float] | None:
+    return viewport.screen_to_world((float(position[0]), float(position[1])))
 
 
 def _select_player_robot(
@@ -205,18 +229,32 @@ def _selection_rectangle(
 def _select_player_robots_in_rectangle(
     selection_rect: pygame.Rect,
     match: Match,
+    viewport: Viewport,
 ) -> set[str]:
     selected = set()
     for robot in match.robots:
         if not robot.alive or not match.is_player_controlled(robot.id):
             continue
-        center = (
-            round(MAP_ORIGIN[0] + robot.position[0]),
-            round(MAP_ORIGIN[1] + robot.position[1]),
-        )
+        center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
         if selection_rect.collidepoint(center):
             selected.add(robot.id)
     return selected
+
+
+def _world_rect_to_screen(
+    viewport: Viewport,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> pygame.Rect:
+    left, top = viewport.world_to_screen((x, y))
+    return pygame.Rect(
+        round(left),
+        round(top),
+        max(1, round(viewport.world_length_to_screen(width))),
+        max(1, round(viewport.world_length_to_screen(height))),
+    )
 
 
 def _draw(
@@ -228,6 +266,7 @@ def _draw(
     opponent_team: str,
     selected_robot_ids: set[str],
     selection_rect: pygame.Rect | None,
+    viewport: Viewport,
 ) -> None:
     screen.fill(BACKGROUND)
     player_robots = [robot for robot in match.robots if robot.team == player_team]
@@ -280,25 +319,37 @@ def _draw(
             control_surface.get_rect(center=(screen.get_width() // 2, 52)),
         )
 
-    field_rect = pygame.Rect(MAP_ORIGIN, (round(match.map.width), round(match.map.height)))
+    field_left, field_top = viewport.origin
+    field_width, field_height = viewport.screen_size
+    field_rect = pygame.Rect(
+        round(field_left),
+        round(field_top),
+        round(field_width),
+        round(field_height),
+    )
     pygame.draw.rect(screen, FIELD_COLOR, field_rect)
     pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
     for obstacle in match.map.obstacles:
-        obstacle_rect = pygame.Rect(
-            round(MAP_ORIGIN[0] + obstacle.x),
-            round(MAP_ORIGIN[1] + obstacle.y),
-            round(obstacle.width),
-            round(obstacle.height),
+        obstacle_rect = _world_rect_to_screen(
+            viewport,
+            obstacle.x,
+            obstacle.y,
+            obstacle.width,
+            obstacle.height,
         )
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
     for zone in match.map.zones:
-        zone_rect = pygame.Rect(
-            round(MAP_ORIGIN[0] + zone.x),
-            round(MAP_ORIGIN[1] + zone.y),
-            round(zone.width),
-            round(zone.height),
+        zone_rect = _world_rect_to_screen(
+            viewport,
+            zone.x,
+            zone.y,
+            zone.width,
+            zone.height,
         )
-        pygame.draw.rect(screen, ZONE_COLOR, zone_rect, width=2)
+        zone_color, zone_label = ZONE_STYLE.get(zone.id, (ZONE_COLOR, zone.id.upper()))
+        pygame.draw.rect(screen, zone_color, zone_rect, width=2)
+        label_surface = small_font.render(zone_label, True, zone_color)
+        screen.blit(label_surface, label_surface.get_rect(center=zone_rect.center))
 
     if all(robot.type == "infantry" for robot in match.robots):
         labels = {}
@@ -341,11 +392,11 @@ def _draw(
     )
 
     for robot in match.robots:
-        center = (
-            round(MAP_ORIGIN[0] + robot.position[0]),
-            round(MAP_ORIGIN[1] + robot.position[1]),
+        center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
+        radius = max(
+            9,
+            round(viewport.world_length_to_screen(match.map.collision_radius)),
         )
-        radius = max(9, round(match.map.collision_radius))
         color = PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
         if robot.id in selected_robot_ids:
             pygame.draw.circle(screen, SELECTION_COLOR, center, radius + 6, width=2)

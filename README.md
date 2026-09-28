@@ -16,7 +16,7 @@
 ### Current playable slice
 
 - Training-v0 Infantry 2v2：玩家可左键选择、Shift 多选或拖框选择两台己方步兵。
-- RMUL Rules Lab：双方各有 Hero、Infantry、Sentry；玩家控制己方 Hero 和 Infantry，Sentry 自动运行，对手三台由单机 AI 控制。
+- RMUL Rules Lab：双方各有 Hero、Infantry、Sentry；玩家控制己方 Hero 和 Infantry，Sentry 自动运行，对手三台由单机 AI 控制。战场使用 V1.2.0 已确认的 12 m × 8 m footprint（100 world units/m），并以二维 approximation 表示 supply/control/high-ground 语义区域。
 - 右键下令时，单台按指定位置移动；多台保持当前相对队形分别移动，路径会绕开障碍物。
 - Training-v0 中，对手两台步兵独立追击。
 - 机器人实体会互相阻挡，不能互相穿透或重叠。
@@ -28,13 +28,13 @@
 
 `training-v0` 是长期保留的 synthetic sandbox，不代表官方比赛规则或 TARS-Go 实车参数。RuleSet 边界用于让不同规则并存；RMUL 2026 实验实现不会修改训练模式。参见 [规则架构](docs/rules/architecture.md)。
 
-`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 使用 Hero + Infantry + 自动 Sentry 的 3V3 阵容结构，用于试验 VP、中央控制区、战亡扣分、自动复活、弱化 / 无敌、补给回血、R45 定时黄/红牌、金币、允许发弹量、射击热量、发射机构热锁、底盘功率上限、60 J Buffer、10 Hz 功率结算、5 秒 chassis power-off 和胜负闭环。射击仍是 synthetic direct-damage：每个合法攻击意图映射为 1 发允许发弹量和 1 次热量增加，但不会模拟实体弹丸、命中检测或官方武器伤害。底盘 `Pr` 也明确是 synthetic Rules Lab approximation：有 movement intent 时使用各机器人官方 `Pl+5 W`，stationary 时为 0；它不是实车电机、轮系、电流/电压或超级电容仿真。移动速度、射程、攻击间隔与伤害仍为实验抽象，补给区与地图为合成布局，不代表完整规则或官方场地图。当前 AI 不会为 Hero / Infantry 购买弹量，也不会主动做热量或功率管理；42 mm 屏蔽特殊情况和主观裁判判罚仍未实现。回血和兑换按本方区域中心点检测补给区，攻击伤害统计采用模拟器实际 HP 损失。启动实验场景：
+`rmul-2026-3v3` 目前处于 **partial / experimental** 状态：rules lab 使用 Hero + Infantry + 自动 Sentry 的 3V3 阵容结构，用于试验 VP、中央控制区、战亡扣分、自动复活、弱化 / 无敌、补给回血、R45 定时黄/红牌、金币、允许发弹量、射击热量、发射机构热锁、底盘功率上限、60 J Buffer、10 Hz 功率结算、5 秒 chassis power-off 和胜负闭环。射击仍是 synthetic direct-damage：每个合法攻击意图映射为 1 发允许发弹量和 1 次热量增加，但不会模拟实体弹丸、命中检测或官方武器伤害。底盘 `Pr` 也明确是 synthetic Rules Lab approximation：有 movement intent 时使用各机器人官方 `Pl+5 W`，stationary 时为 0；它不是实车电机、轮系、电流/电压或超级电容仿真。移动速度、射程、攻击间隔与伤害仍为实验抽象。地图已升级为 **V1.2.0 official-field 2D geometry approximation**：12 m × 8 m 战场 footprint 与中心对称/场地模块语义来自官方手册；当前 supply/control/high-ground 的内部矩形 footprint 仍明确标记为 approximation，因为本轮无法可靠读取 V1.2.0 图中全部尺寸数字。spawn positions 仍为 synthetic，elevation / ramps 与交互卡 dead zones 未模拟。当前 AI 不会为 Hero / Infantry 购买弹量，也不会主动做热量或功率管理；42 mm 屏蔽特殊情况和主观裁判判罚仍未实现。回血和兑换按本方区域中心点检测补给区，攻击伤害统计采用模拟器实际 HP 损失。启动实验场景：
 
 ```bash
 python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml
 ```
 
-完整规则边界见 [RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
+完整规则边界见 [RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md)、[场地二维表示](docs/rules/rmul-2026-field.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
 
 ## 本地运行
 

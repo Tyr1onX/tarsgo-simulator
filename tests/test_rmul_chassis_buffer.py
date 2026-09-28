@@ -209,7 +209,7 @@ def test_chassis_off_does_not_lock_launcher() -> None:
 def test_chassis_off_robot_still_controls_center() -> None:
     match = _rules_lab_match()
     robot = _robot(match, HERO)
-    robot.position = (450.0, 260.0)
+    robot.position = (600.0, 400.0)
     match.ruleset._robot_chassis_states[HERO].power_off_remaining = 5
 
     match.update(1.0)
@@ -220,7 +220,7 @@ def test_chassis_off_robot_still_controls_center() -> None:
 def test_chassis_off_robot_still_receives_supply_healing() -> None:
     match = _rules_lab_match()
     robot = _robot(match, HERO)
-    robot.position = (100.0, 190.0)
+    robot.position = (200.0, 300.0)
     robot.hp = 100
     match.ruleset._robot_chassis_states[HERO].power_off_remaining = 5
 
