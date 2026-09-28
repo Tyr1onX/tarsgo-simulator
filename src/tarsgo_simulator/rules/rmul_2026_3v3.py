@@ -443,6 +443,72 @@ class RMUL2026Rules:
             lifecycle is None or lifecycle.invincible_remaining <= 0
         )
 
+    def prepare_movement(self, match: "Match", dt: float) -> None:
+        """Advance quantized chassis buffer state before movement."""
+        for robot in match.robots:
+            state = self._robot_chassis_states[robot.id]
+            state.blocked_this_frame = state.power_off_remaining > 0
+            self._current_synthetic_power_by_robot[robot.id] = (
+                self._synthetic_power_demand(robot, state)
+            )
+
+        if dt <= 0:
+            return
+
+        self._chassis_power_accumulator += dt
+        ticks = math.floor(
+            self._chassis_power_accumulator * self._chassis_power_detection_hz
+            + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        tick_duration = 1.0 / self._chassis_power_detection_hz
+        self._chassis_power_accumulator = max(
+            0.0,
+            self._chassis_power_accumulator - ticks * tick_duration,
+        )
+        for _ in range(ticks):
+            for robot in match.robots:
+                state = self._robot_chassis_states[robot.id]
+                rule = self._chassis_power_rules[robot.type]
+                was_powered_off = state.power_off_remaining > 0
+                if was_powered_off:
+                    state.blocked_this_frame = True
+                    power = self._stationary_power_demand
+                else:
+                    power = self._synthetic_power_demand(robot, state)
+
+                state.buffer_energy -= (power - rule.power_limit) * tick_duration
+                state.buffer_energy = min(
+                    self._buffer_energy_max, state.buffer_energy
+                )
+                if state.buffer_energy <= 0:
+                    state.buffer_energy = 0.0
+                    if not was_powered_off and power > rule.power_limit:
+                        state.power_off_remaining = self._power_off_duration
+                        state.blocked_this_frame = True
+
+                if was_powered_off:
+                    state.power_off_remaining = max(
+                        0.0, state.power_off_remaining - tick_duration
+                    )
+
+        for robot in match.robots:
+            state = self._robot_chassis_states[robot.id]
+            self._current_synthetic_power_by_robot[robot.id] = (
+                self._synthetic_power_demand(robot, state)
+            )
+
+    def _synthetic_power_demand(
+        self, robot: Robot, state: _RobotChassisState
+    ) -> float:
+        if not robot.alive or state.power_off_remaining > 0:
+            return self._stationary_power_demand
+        if robot.path:
+            return self._chassis_power_rules[robot.type].moving_power_demand
+        return self._stationary_power_demand
+
     def prepare_combat(self, match: "Match", dt: float) -> None:
         """Advance only quantized shooting-heat cooling before new attacks."""
         if dt <= 0:
