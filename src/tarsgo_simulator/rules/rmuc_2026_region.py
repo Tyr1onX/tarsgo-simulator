@@ -674,23 +674,145 @@ class RMUC2026RegionalRules:
             for state in self._team_states.values():
                 state.rebuild_progress_by_robot.clear()
 
+    def _effective_performance_for_type(
+        self, robot_type: str, level: int
+    ) -> _EffectivePerformance:
+        if robot_type == "hero":
+            row = self._hero_performance[self._hero_profile][level]
+            return _EffectivePerformance(
+                max_hp=row["max_hp"],
+                chassis_power_limit=row["chassis_power_limit"],
+                heat_limit=row["heat_limit"],
+                cooling_per_second=row["cooling_per_second"],
+            )
+        if robot_type == "infantry":
+            chassis = self._infantry_chassis_performance[
+                self._infantry_chassis_profile
+            ][level]
+            launcher = self._infantry_launcher_performance[
+                self._infantry_launcher_profile
+            ][level]
+            return _EffectivePerformance(
+                max_hp=chassis["max_hp"],
+                chassis_power_limit=chassis["chassis_power_limit"],
+                heat_limit=launcher["heat_limit"],
+                cooling_per_second=launcher["cooling_per_second"],
+            )
+        raise KeyError(robot_type)
+
+    def _effective_performance(self, robot_id: str) -> _EffectivePerformance:
+        state = self._progression_by_robot[robot_id]
+        robot_type = self._robot_types_by_id[robot_id]
+        return self._effective_performance_for_type(robot_type, state.level)
+
+    def _grant_experience(self, robot_id: str, amount: float) -> None:
+        state = self._progression_by_robot.get(robot_id)
+        robot = self._robots_by_id.get(robot_id)
+        if (
+            state is None
+            or robot is None
+            or not math.isfinite(amount)
+            or amount <= 0
+        ):
+            return
+
+        level_cap = self._level_cap_by_team[robot.team]
+        cap_experience = float(self._level_thresholds[level_cap])
+        if state.level >= level_cap or state.experience >= cap_experience:
+            state.level = level_cap
+            state.experience = cap_experience
+            return
+
+        old_level = state.level
+        state.experience = min(cap_experience, state.experience + float(amount))
+        state.level = max(
+            level
+            for level, threshold in self._level_thresholds.items()
+            if level <= level_cap and threshold <= state.experience + 1e-9
+        )
+        if state.level == old_level:
+            return
+
+        performance = self._effective_performance(robot_id)
+        previous_max_hp = robot.max_hp
+        hp_increase = max(0, performance.max_hp - previous_max_hp)
+        robot.max_hp = performance.max_hp
+        if robot.alive:
+            robot.hp = min(robot.max_hp, robot.hp + hp_increase)
+        else:
+            robot.hp = 0
+
+    def _robot_level(self, robot_id: str | None) -> int:
+        if robot_id is None:
+            return 1
+        progression = self._progression_by_robot.get(robot_id)
+        return progression.level if progression is not None else 1
+
+    def _grant_kill_experience(self, event) -> None:
+        if (
+            event.attacker_id not in self._progression_by_robot
+            or event.robot_id not in self._robots_by_id
+            or event.attacker_team_id == event.team_id
+        ):
+            return
+        attacker_level = self._robot_level(event.attacker_id)
+        victim_level = self._robot_level(event.robot_id)
+        level_difference = max(0, victim_level - attacker_level)
+        amount = (
+            self._kill_base_factor
+            * victim_level
+            * (1 + self._kill_level_difference_factor * level_difference)
+        )
+        self._grant_experience(event.attacker_id, amount)
+
     def _consume_events(self, match: "Match") -> None:
         structure_by_id = {structure.id: structure for structure in match.structures}
         for event in match.current_events:
-            if event.type in {
-                MatchEventType.ROBOT_DAMAGED,
-                MatchEventType.STRUCTURE_DAMAGED,
-            }:
-                if (
-                    event.attacker_team_id in self.attack_damage_by_team
-                    and event.attacker_team_id != event.team_id
-                    and event.damage > 0
-                ):
-                    self.attack_damage_by_team[event.attacker_team_id] += event.damage
+            is_enemy_damage = (
+                event.attacker_team_id in self.attack_damage_by_team
+                and event.attacker_team_id != event.team_id
+                and event.damage > 0
+            )
+            if (
+                event.type
+                in {MatchEventType.ROBOT_DAMAGED, MatchEventType.STRUCTURE_DAMAGED}
+                and is_enemy_damage
+            ):
+                self.attack_damage_by_team[event.attacker_team_id] += event.damage
+
+            known_experience_source = (
+                is_enemy_damage and event.attacker_id in self._progression_by_robot
+            )
+            if event.type == MatchEventType.ROBOT_DAMAGED:
+                if known_experience_source:
+                    self._grant_experience(
+                        event.attacker_id,
+                        event.damage * self._robot_damage_experience_per_hp,
+                    )
+                continue
+
+            if event.type == MatchEventType.ROBOT_DESTROYED:
+                self._grant_kill_experience(event)
+                continue
 
             if event.type == MatchEventType.STRUCTURE_DAMAGED:
                 structure = structure_by_id.get(event.structure_id)
-                if structure is None or structure.type != "base":
+                if structure is None:
+                    continue
+
+                if known_experience_source:
+                    if structure.type == "outpost":
+                        self._grant_experience(
+                            event.attacker_id,
+                            event.damage * self._outpost_damage_experience_per_hp,
+                        )
+                    elif structure.type == "base":
+                        self._grant_experience(
+                            event.attacker_id,
+                            math.ceil(event.damage / self._base_hp_per_experience),
+                        )
+
+                if structure.type != "base":
                     continue
                 state = self._team_states[structure.team]
                 previous_damage = state.base_damage_lost
@@ -703,8 +825,9 @@ class RMUC2026RegionalRules:
                     state.outpost_rebuild_opportunities += crossed
                 if structure.hp <= 2000:
                     state.base_armor_deployed = True
+                continue
 
-            elif event.type == MatchEventType.STRUCTURE_DESTROYED:
+            if event.type == MatchEventType.STRUCTURE_DESTROYED:
                 structure = structure_by_id.get(event.structure_id)
                 if structure is None or structure.type != "outpost":
                     continue
