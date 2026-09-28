@@ -216,6 +216,7 @@ class Match:
             self._update_ai(dt)
             for robot in self.robots:
                 robot.update_cooldown(dt)
+            self.ruleset.prepare_movement(self, dt)
             self._move_robots(dt)
             self.ruleset.prepare_combat(self, dt)
             update_combat(
@@ -248,11 +249,15 @@ class Match:
                     )
 
     def _move_robots(self, dt: float) -> None:
+        movement_allowed = {
+            robot.id: robot.alive and self.ruleset.can_move(robot)
+            for robot in self.robots
+        }
         proposals: dict[str, MovementProposal] = {}
         for robot in self.robots:
             proposals[robot.id] = (
                 robot.propose_movement(dt, self.map)
-                if robot.alive
+                if movement_allowed[robot.id]
                 else (robot.position, list(robot.path))
             )
 
@@ -283,7 +288,7 @@ class Match:
             blocked.update(new_conflicts)
 
         for robot in self.robots:
-            if robot.alive and robot.id not in blocked:
+            if movement_allowed[robot.id] and robot.id not in blocked:
                 robot.commit_movement(proposals[robot.id])
 
     def _update_ai(self, dt: float) -> None:
