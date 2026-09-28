@@ -1,0 +1,9 @@
+schema_version: 1
+team_id: tarsgo-rmuc-2026-region
+display_name: TARS-Go
+robots:
+  - {id: tarsgo-hero, type: hero}
+  - {id: tarsgo-engineer, type: engineer}
+  - {id: tarsgo-infantry-1, type: infantry}
+  - {id: tarsgo-infantry-2, type: infantry}
+  - {id: tarsgo-sentry, type: sentry}
