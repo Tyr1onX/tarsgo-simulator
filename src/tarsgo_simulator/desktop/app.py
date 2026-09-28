@@ -453,6 +453,15 @@ def _draw(
         if display_state is not None
         else {}
     )
+    progression = (
+        {
+            robot_id: (level, experience, level_cap)
+            for robot_id, level, experience, level_cap
+            in display_state.robot_progression
+        }
+        if display_state is not None
+        else {}
+    )
 
     for robot in match.robots:
         center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
@@ -473,6 +482,13 @@ def _draw(
         if hp_width:
             pygame.draw.rect(screen, HP_COLOR, (bar_x, bar_y, hp_width, bar_height))
         robot_label = labels[robot.id]
+        progression_state = progression.get(robot.id)
+        if progression_state is not None:
+            level, experience, level_cap = progression_state
+            if level >= level_cap:
+                robot_label = f"{robot_label} L{level} MAX"
+            else:
+                robot_label = f"{robot_label} L{level} XP:{experience:g}"
         if robot.id in projectile_counts:
             robot_label = f"{robot_label} {projectile_counts[robot.id]}"
         heat_state = shooting_heat.get(robot.id)
