@@ -10,12 +10,12 @@ from tarsgo_simulator.core.structure import Structure
 
 def update_combat(
     robots: list[Robot],
-    structures: list[Structure],
     game_map: GameMap,
     *,
     can_attack: Callable[[Robot], bool],
-    can_target: Callable[[Robot | Structure], bool],
     apply_damage: Callable[[Robot | Structure, int, Robot], int],
+    structures: list[Structure] | None = None,
+    can_target: Callable[[Robot | Structure], bool] | None = None,
     on_attack_committed: Callable[[Robot], None] | None = None,
 ) -> None:
     """Let each robot attack its nearest visible legal enemy target in range."""
@@ -26,10 +26,10 @@ def update_combat(
 
         targets = [
             target
-            for target in [*robots, *structures]
+            for target in [*robots, *(structures or [])]
             if target.alive
             and target.team != attacker.team
-            and can_target(target)
+            and (can_target is None or can_target(target))
             and _distance(attacker.position, target.position) <= attacker.attack_range
             and game_map.has_line_of_sight(attacker.position, target.position)
         ]
