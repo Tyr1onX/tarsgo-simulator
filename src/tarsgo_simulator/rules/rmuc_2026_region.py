@@ -1290,6 +1290,16 @@ class RMUC2026RegionalRules:
                 )
                 for team_id, state in sorted(self._economy_by_team.items())
             ),
+            robot_projectiles=tuple(
+                (
+                    robot_id,
+                    state.projectile_type,
+                    state.allowed,
+                )
+                for robot_id, state in sorted(
+                    self._projectile_allowance_by_robot.items()
+                )
+            ),
             structure_statuses=tuple(structure_statuses),
             rebuild_opportunities=tuple(
                 (team_id, state.outpost_rebuild_opportunities)
@@ -1408,7 +1418,13 @@ class RMUC2026RegionalRules:
         return robot.alive
 
     def can_attack(self, robot: Robot) -> bool:
-        return robot.alive and robot.damage > 0
+        allowance = self._projectile_allowance_by_robot.get(robot.id)
+        return (
+            robot.alive
+            and robot.damage > 0
+            and allowance is not None
+            and allowance.allowed > 0
+        )
 
     def can_target(self, target: DamageableTarget) -> bool:
         if isinstance(target, Structure):
@@ -1418,14 +1434,87 @@ class RMUC2026RegionalRules:
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
-        """Grant shot Experience when Combat commits a legal attack intent."""
+        """Consume one legal projectile intent and grant its shot Experience."""
+        allowance = self._projectile_allowance_by_robot.get(robot.id)
+        if allowance is None or allowance.allowed <= 0:
+            return
+        allowance.allowed -= 1
+        allowance.combat_activity_this_frame = True
+
         shot_experience = self._shot_experience.get(robot.type)
         if shot_experience is not None:
             self._grant_experience(robot.id, shot_experience)
 
     def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
-        """RMUC spending is intentionally outside this income-only economy slice."""
-        return False
+        """Perform the non-remote exchange at an eligible own-side buff point."""
+        return self._purchase_projectile_allowance(match, robot, remote=False)
+
+    def remote_exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        """Accept a remote exchange now and deliver its allowance six seconds later."""
+        return self._purchase_projectile_allowance(match, robot, remote=True)
+
+    def _purchase_projectile_allowance(
+        self,
+        match: "Match",
+        robot: Robot,
+        *,
+        remote: bool,
+    ) -> bool:
+        allowance_state = self._projectile_allowance_by_robot.get(robot.id)
+        economy_state = self._economy_by_team.get(robot.team)
+        purchase_state = self._projectile_purchase_by_team.get(robot.team)
+        if (
+            match.finished
+            or not robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or allowance_state is None
+            or economy_state is None
+            or purchase_state is None
+        ):
+            return False
+
+        projectile = allowance_state.projectile_type
+        rule = self._projectile_purchase_rules.get(projectile)
+        if rule is None or self._projectile_by_type.get(robot.type) != projectile:
+            return False
+
+        if remote:
+            if allowance_state.disengaged_elapsed + 1e-9 < self._projectile_disengaged_after:
+                return False
+            cost = rule.remote_coins
+            amount = rule.remote_allowance
+        else:
+            zones = self._projectile_exchange_zones_by_team.get(robot.team, ())
+            if not any(zone.contains(robot.position) for zone in zones):
+                return False
+            cost = rule.nonremote_coins
+            amount = rule.nonremote_allowance
+
+        purchased = (
+            purchase_state.purchased_17mm
+            if projectile == "17mm"
+            else purchase_state.purchased_42mm
+        )
+        if economy_state.coins < cost or purchased + amount > rule.team_cap:
+            return False
+
+        economy_state.coins -= cost
+        if projectile == "17mm":
+            purchase_state.purchased_17mm += amount
+        else:
+            purchase_state.purchased_42mm += amount
+
+        if remote:
+            allowance_state.pending_remote_deliveries.append(
+                _PendingProjectileDelivery(
+                    amount=amount,
+                    effective_at=match.elapsed_time
+                    + self._projectile_remote_effective_delay,
+                )
+            )
+        else:
+            allowance_state.allowed += amount
+        return True
 
     def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
         """Add one Rules Lab Energy Unit resource credit, up to the D4 cap of two."""
@@ -1800,6 +1889,24 @@ class RMUC2026RegionalRules:
         }
         self._next_timed_gold_grant_index = 0
         self._next_periodic_gold_tick = self._economy_periodic_interval
+        self._projectile_allowance_by_robot = {}
+        for robot in match.robots:
+            initial_rule = self._projectile_initial.get(robot.type)
+            if initial_rule is None or robot.type == "engineer":
+                continue
+            projectile, initial_allowance = initial_rule
+            self._projectile_allowance_by_robot[robot.id] = (
+                _ProjectileAllowanceState(
+                    projectile_type=projectile,
+                    allowed=initial_allowance,
+                    disengaged_elapsed=self._projectile_disengaged_after,
+                )
+            )
+        self._projectile_purchase_by_team = {
+            team_id: _TeamProjectilePurchaseState()
+            for team_id in team_by_side.values()
+        }
+        self._next_sentry_supply_grant = self._sentry_supply_interval
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -1829,11 +1936,19 @@ class RMUC2026RegionalRules:
             self._outpost_by_team[team_id] = outposts[0]
 
         zones_by_id = {zone.id: zone for zone in match.map.zones}
-        required_zone_ids = set(self._rebuild_zone_ids.values()) | {
-            zone_id
-            for side_zones in self._tech_core_zone_ids.values()
-            for zone_id in side_zones.values()
-        }
+        required_zone_ids = (
+            set(self._rebuild_zone_ids.values())
+            | {
+                zone_id
+                for side_zones in self._tech_core_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
+            | {
+                zone_id
+                for side_zones in self._projectile_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
+        )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
             raise ConfigError(
@@ -1856,9 +1971,23 @@ class RMUC2026RegionalRules:
             ]
             for side in ("red", "blue")
         }
+        self._projectile_exchange_zones_by_team = {
+            team_by_side[side]: tuple(
+                zones_by_id[self._projectile_zone_ids[side][zone_type]]
+                for zone_type in ("supply", "base", "outpost")
+            )
+            for side in ("red", "blue")
+        }
+        self._supply_buff_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["supply"]
+            ]
+            for side in ("red", "blue")
+        }
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._advance_projectile_allowance(match, dt)
         self._advance_tech_core_attempts(match, dt)
         self._advance_d4(match, dt)
         self._advance_economy(match)
@@ -1873,6 +2002,67 @@ class RMUC2026RegionalRules:
         if match.elapsed_time >= self._rebuild_cutoff - 1e-9:
             for state in self._team_states.values():
                 state.rebuild_progress_by_robot.clear()
+
+    def _advance_projectile_allowance(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+
+        for robot_id, state in self._projectile_allowance_by_robot.items():
+            robot = self._robots_by_id[robot_id]
+            if state.combat_activity_this_frame:
+                state.disengaged_elapsed = 0.0
+            elif robot.alive:
+                state.disengaged_elapsed += max(0.0, dt)
+            else:
+                state.disengaged_elapsed = 0.0
+            state.combat_activity_this_frame = False
+
+            if not state.pending_remote_deliveries:
+                continue
+            remaining: list[_PendingProjectileDelivery] = []
+            for delivery in state.pending_remote_deliveries:
+                if (
+                    delivery.effective_at < self._time_limit - 1e-9
+                    and delivery.effective_at <= settlement_end + 1e-9
+                ):
+                    state.allowed += delivery.amount
+                else:
+                    remaining.append(delivery)
+            state.pending_remote_deliveries = remaining
+
+        while (
+            self._next_sentry_supply_grant <= settlement_end + 1e-9
+            and self._next_sentry_supply_grant < self._time_limit - 1e-9
+        ):
+            for purchase_state in self._projectile_purchase_by_team.values():
+                purchase_state.pending_sentry_supply += self._sentry_supply_allowance
+            self._next_sentry_supply_grant += self._sentry_supply_interval
+
+        for team_id, purchase_state in self._projectile_purchase_by_team.items():
+            if purchase_state.pending_sentry_supply <= 0:
+                continue
+            sentry = next(
+                (
+                    robot
+                    for robot in match.robots
+                    if robot.team == team_id and robot.type == "sentry"
+                ),
+                None,
+            )
+            supply_zone = self._supply_buff_zone_by_team.get(team_id)
+            if (
+                sentry is None
+                or not sentry.alive
+                or supply_zone is None
+                or not supply_zone.contains(sentry.position)
+            ):
+                continue
+            state = self._projectile_allowance_by_robot[sentry.id]
+            state.allowed += purchase_state.pending_sentry_supply
+            purchase_state.pending_sentry_supply = 0
 
     def _initial_coins_for_ratings(
         self,
@@ -2065,6 +2255,11 @@ class RMUC2026RegionalRules:
                 is_enemy_damage and event.attacker_id in self._progression_by_robot
             )
             if event.type == MatchEventType.ROBOT_DAMAGED:
+                allowance_state = self._projectile_allowance_by_robot.get(
+                    event.robot_id
+                )
+                if allowance_state is not None:
+                    allowance_state.combat_activity_this_frame = True
                 if known_experience_source:
                     self._grant_experience(
                         event.attacker_id,
