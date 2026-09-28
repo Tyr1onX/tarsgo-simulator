@@ -943,6 +943,14 @@ class RMUC2026RegionalRules:
         self._level_cap_by_team = {
             team_id: self._initial_level_cap for team_id in team_by_side.values()
         }
+        self._engineer_resources_by_id = {
+            robot.id: _EngineerResourceState()
+            for robot in match.robots
+            if robot.type == "engineer"
+        }
+        self._tech_core_by_team = {
+            team_id: _TechCoreTeamState() for team_id in team_by_side.values()
+        }
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -972,15 +980,32 @@ class RMUC2026RegionalRules:
             self._outpost_by_team[team_id] = outposts[0]
 
         zones_by_id = {zone.id: zone for zone in match.map.zones}
-        missing_zones = sorted(set(self._rebuild_zone_ids.values()) - set(zones_by_id))
+        required_zone_ids = set(self._rebuild_zone_ids.values()) | {
+            zone_id
+            for side_zones in self._tech_core_zone_ids.values()
+            for zone_id in side_zones.values()
+        }
+        missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
             raise ConfigError(
-                f"{self._document.path}: scenario 缺少前哨站重建区："
+                f"{self._document.path}: scenario 缺少 RMUC Rules Lab zone："
                 + ", ".join(missing_zones)
             )
         self._rebuild_zone_by_team = {
             team_by_side[side]: zones_by_id[zone_id]
             for side, zone_id in self._rebuild_zone_ids.items()
+        }
+        self._resource_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["resource"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._assembly_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["assembly"]
+            ]
+            for side in ("red", "blue")
         }
 
     def update(self, match: "Match", dt: float) -> None:
