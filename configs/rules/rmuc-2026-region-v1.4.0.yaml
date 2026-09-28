@@ -60,6 +60,24 @@ tech_core:
         periodic_gold_per_10s: 25
       repeat:
         periodic_gold_per_10s: 15
+    4:
+      available_after: 180
+      prerequisite: 3
+      only_once: true
+      first:
+        defense_bonus: 0.50
+        base_hp_bonus: 2000
+        periodic_gold_per_10s: 50
+      repeat: null
+  difficulty4:
+    total_window: 45
+    paired_step_window: 5
+    paired_steps: [2, 3, 5, 6]
+    priority_buffer: 15
+    retry_lockout: 90
+    priority_failure:
+      permanent_lockout: true
+      periodic_gold_penalty_per_10s: 25
 
 experience:
   level_thresholds:

@@ -17,7 +17,7 @@ Regional V1.4.0 manual.
 - V1.4.0 match-result chain;
 - Hero and Infantry private Experience state;
 - complete Lv1-Lv10 Experience thresholds;
-- current per-team level cap of 5 with XP clamped at 2200;
+- initial per-team level cap of 5, with D2/D3 unlocks to 7/10;
 - deterministic Hero/Infantry committed-shot Experience;
 - known-source Robot / Outpost / Base actual-damage Experience;
 - known-source Robot kill Experience formula;
@@ -32,16 +32,24 @@ Regional V1.4.0 manual.
 - effective Power / Heat Limit / Cooling values exposed without enabling their
   gameplay systems;
 - minimal level / XP HUD labels;
-- synthetic Engineer Energy Unit carrying abstraction;
+- synthetic Engineer Energy Unit resource-credit abstraction (0..2);
 - synthetic per-team resource / assembly zones;
-- Tech Core Difficulty 1-3 availability and prerequisite flow;
+- Tech Core Difficulty 1-4 availability and prerequisite flow;
 - explicit Rules Lab mechanical-success confirmation;
 - 15 s continuous assembly-zone leave failure;
 - active Engineer destruction failure;
-- first/repeat D1-D3 completion counts;
+- first/repeat D1-D3 completion counts plus D4 one-time completion state;
 - D2 first completion level-cap unlock 5 → 7;
 - D3 first completion level-cap unlock 7 → 10;
-- Tech Core first/repeat reward metadata with only level-cap rewards consumed;
+- D4 global dual-Core coordinator and cross-team exclusivity;
+- D4 180 s gate, D3 prerequisite, and two-credit requirement;
+- D4 45 s total window and ordered six-step abstraction;
+- D4 paired Step 2/3/5/6 five-second synchronization;
+- D4 Step 1/4 exemption from paired timing;
+- D4 15 s cross-team priority buffer;
+- D4 normal 90 s retry lockout;
+- D4 priority-takeover permanent lockout and -25/10s gold-penalty state;
+- Tech Core reward metadata with only D2/D3 level-cap rewards consumed;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -51,10 +59,9 @@ Regional V1.4.0 manual.
 - Dart System and Dart Experience;
 - physical Energy Unit entities, world placement, stock, and pickup depletion;
 - Tech Core real pose / insertion / translation / rotation / sensor validation;
-- Tech Core Difficulty 4;
-- Difficulty 4 dual Tech Cores and dual Energy Units;
-- Difficulty 4 per-step synchronization and timing;
-- Difficulty 4 cross-team priority / interruption / cooldown / lockout rules;
+- Tech Core physical movement / collision / obstruction sensing;
+- overload alarms and blocked-Core auto-award behavior;
+- temporary reactivation of a dead Engineer during opposing D4 takeover;
 - Tech Core periodic-gold gameplay;
 - Difficulty 3 defense-buff gameplay;
 - Difficulty 4 Base +2000 / virtual-shield / defense / gold rewards;
@@ -86,24 +93,26 @@ future systems. The current `MatchEvent` already supports the deterministic
 known-attacker path required by this slice, so no premature `DamageTaxonomy`
 or generic Experience-source hierarchy is added.
 
-### Tech Core Difficulty 4
+### Tech Core D4 physical/field boundary
 
-Difficulty 4 is deliberately deferred because it is a separate coupled system,
-not a simple extension of D1-D3. It includes two Tech Cores, dual Energy Units,
-per-step synchronization, V1.4.0 timing constraints, a 45-second total window,
-cross-team priority, interruption buffering, failure cooldown/lockout behavior,
-special gold penalties, and first-completion Base/defense/economy effects.
+The rule-level D4 state machine is implemented: global exclusivity, full
+priority buffer, dual logical Core slots, six ordered steps, Step 2/3/5/6 pair
+windows, 45-second total timing, normal retry lockout, and priority-takeover
+permanent lockout/penalty state.
 
-The current state representation can be extended later, but none of those
-Difficulty 4 mechanics are partially implemented now.
+Still deferred are the physical mechanisms that would be required to model Core
+movement and obstruction: real pose, motor motion, collision, overload sensing,
+the blocked-Core >15 s auto-award path, and temporary reactivation/control of a
+dead Engineer so it can move away from the Core.
 
 ### Energy Unit / Tech Core physical boundary
 
-Current carrying state is boolean and only means the Engineer possesses the
-resource required for one D1-D3 attempt. Resource zones are synthetic renewable
+Current `energy_unit_credits` is a rules-level resource-credit abstraction,
+not physical carrying capacity. It exists only to express D1-D3 consuming one
+prepared unit and D4 consuming two. Resource zones remain synthetic renewable
 Rules Lab sources. Physical Energy Unit count, stock, respawn, world pose,
-mechanical arm motion, Tech Core pose, insertion/translation/rotation, and
-sensor validation remain deferred.
+grasp/inventory semantics, mechanical arm motion, Tech Core pose,
+insertion/translation/rotation, and sensor validation remain deferred.
 
 ### Dynamic Power / Heat gameplay
 
@@ -125,6 +134,7 @@ synthetic approximations rather than official full-field coordinates.
 
 ## Next candidate
 
-This round stops after Experience + Performance. A later phase can use the
-per-team level-cap boundary to add Tech Core / Energy Unit behavior without
-rewriting progression, but that phase is not part of this implementation.
+The Tech Core rule-level flow now reaches D4. A later slice can consume the
+already-stored D3/D4 defense, Base-HP/virtual-shield, periodic-gold, and
+priority-failure penalty metadata. Those Economy / Field Buff consumers are not
+part of the current implementation.

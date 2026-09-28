@@ -1,4 +1,4 @@
-"""Partial RMUC 2026 Regional V1.4.0 rules including Experience/Performance."""
+"""Partial RMUC 2026 Regional V1.4.0 rules including progression and Tech Core."""
 
 from dataclasses import dataclass, field
 import math
@@ -39,7 +39,7 @@ class _EffectivePerformance:
 
 @dataclass
 class _EngineerResourceState:
-    carrying_energy_unit: bool = False
+    energy_unit_credits: int = 0
 
 
 @dataclass
@@ -49,22 +49,48 @@ class _TechCoreAttempt:
     outside_zone_elapsed: float = 0.0
 
 
+@dataclass
+class _D4Attempt:
+    engineer_id: str
+    activated_at: float
+    current_step: int = 1
+    completed_core_slots: set[str] = field(default_factory=set)
+    first_core_completed_at: float | None = None
+    outside_zone_elapsed: float = 0.0
+    priority_takeover: bool = False
+
+
+@dataclass
+class _D4CoordinatorState:
+    active_team_id: str | None = None
+    pending_team_id: str | None = None
+    pending_engineer_id: str | None = None
+    priority_buffer_remaining: float = 0.0
+    priority_takeover: bool = False
+
+
 @dataclass(frozen=True)
 class _TechCoreDifficultyRule:
     available_after: float
     prerequisite: int | None
     first_level_cap: int | None
     first_periodic_gold_per_10s: int
-    repeat_periodic_gold_per_10s: int
+    repeat_periodic_gold_per_10s: int | None
     first_defense_bonus: float | None = None
+    first_base_hp_bonus: int | None = None
+    only_once: bool = False
 
 
 @dataclass
 class _TechCoreTeamState:
     completion_count_by_difficulty: dict[int, int] = field(
-        default_factory=lambda: {1: 0, 2: 0, 3: 0}
+        default_factory=lambda: {1: 0, 2: 0, 3: 0, 4: 0}
     )
     active_attempt: _TechCoreAttempt | None = None
+    d4_attempt: _D4Attempt | None = None
+    d4_retry_after: float = 0.0
+    permanently_locked_out_of_d4: bool = False
+    d4_priority_failure_gold_penalty: int = 0
 
 
 @dataclass
@@ -77,7 +103,7 @@ class _TeamStructureState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D3."""
+    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D4."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
@@ -162,7 +188,12 @@ class RMUC2026RegionalRules:
             )
 
         tech_core = _mapping(document.data, "tech_core", document)
-        if set(tech_core) != {"leave_zone_fail_after", "zones", "difficulties"}:
+        if set(tech_core) != {
+            "leave_zone_fail_after",
+            "zones",
+            "difficulties",
+            "difficulty4",
+        }:
             raise ConfigError(
                 f"{document.path}: `tech_core` 字段不完整或包含未知字段"
             )
@@ -206,9 +237,9 @@ class RMUC2026RegionalRules:
             )
 
         raw_difficulties = _mapping(tech_core, "difficulties", document)
-        if set(raw_difficulties) != {1, 2, 3}:
+        if set(raw_difficulties) != {1, 2, 3, 4}:
             raise ConfigError(
-                f"{document.path}: `tech_core.difficulties` 本轮必须且只能包含 1、2、3"
+                f"{document.path}: `tech_core.difficulties` 必须完整包含 1～4"
             )
         self._tech_core_difficulties: dict[int, _TechCoreDifficultyRule] = {}
         for difficulty in (1, 2, 3):
@@ -237,16 +268,8 @@ class RMUC2026RegionalRules:
                     f"必须是 {expected_prerequisite}"
                 )
 
-            first = _mapping(
-                raw_rule,
-                "first",
-                document,
-            )
-            repeat = _mapping(
-                raw_rule,
-                "repeat",
-                document,
-            )
+            first = _mapping(raw_rule, "first", document)
+            repeat = _mapping(raw_rule, "repeat", document)
             if set(repeat) != {"periodic_gold_per_10s"}:
                 raise ConfigError(
                     f"{document.path}: `tech_core.difficulties.{difficulty}.repeat` "
@@ -301,6 +324,70 @@ class RMUC2026RegionalRules:
                 first_defense_bonus=first_defense_bonus,
             )
 
+        raw_d4 = raw_difficulties.get(4)
+        if not isinstance(raw_d4, dict) or set(raw_d4) != {
+            "available_after",
+            "prerequisite",
+            "only_once",
+            "first",
+            "repeat",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4` 字段不完整或包含未知字段"
+            )
+        if raw_d4.get("prerequisite") != 3:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.prerequisite` 必须是 3"
+            )
+        if raw_d4.get("only_once") is not True:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.only_once` 必须为 true"
+            )
+        if raw_d4.get("repeat") is not None:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.repeat` 必须为 null"
+            )
+        d4_first = _mapping(raw_d4, "first", document)
+        if set(d4_first) != {
+            "defense_bonus",
+            "base_hp_bonus",
+            "periodic_gold_per_10s",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.first` "
+                "必须保存 defense/base/gold metadata"
+            )
+        self._tech_core_difficulties[4] = _TechCoreDifficultyRule(
+            available_after=_nonnegative_number(
+                raw_d4,
+                "available_after",
+                document,
+                "tech_core.difficulties.4.available_after",
+            ),
+            prerequisite=3,
+            first_level_cap=None,
+            first_periodic_gold_per_10s=_positive_integer(
+                d4_first,
+                "periodic_gold_per_10s",
+                document,
+                "tech_core.difficulties.4.first.periodic_gold_per_10s",
+            ),
+            repeat_periodic_gold_per_10s=None,
+            first_defense_bonus=_fraction(
+                d4_first,
+                "defense_bonus",
+                document,
+                "tech_core.difficulties.4.first.defense_bonus",
+            ),
+            first_base_hp_bonus=_positive_integer(
+                d4_first,
+                "base_hp_bonus",
+                document,
+                "tech_core.difficulties.4.first.base_hp_bonus",
+            ),
+            only_once=True,
+        )
+
         if self._tech_core_difficulties[2].first_level_cap != 7:
             raise ConfigError(
                 f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
@@ -308,6 +395,100 @@ class RMUC2026RegionalRules:
         if self._tech_core_difficulties[3].first_level_cap != 10:
             raise ConfigError(
                 f"{document.path}: Tech Core Difficulty 3 first level_cap 必须为 10"
+            )
+        if self._tech_core_difficulties[4].available_after != 180:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 available_after 必须为 180"
+            )
+        if (
+            self._tech_core_difficulties[4].first_defense_bonus != 0.5
+            or self._tech_core_difficulties[4].first_base_hp_bonus != 2000
+            or self._tech_core_difficulties[4].first_periodic_gold_per_10s != 50
+        ):
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 reward metadata 不匹配 V1.4.0"
+            )
+
+        difficulty4 = _mapping(tech_core, "difficulty4", document)
+        if set(difficulty4) != {
+            "total_window",
+            "paired_step_window",
+            "paired_steps",
+            "priority_buffer",
+            "retry_lockout",
+            "priority_failure",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4` 字段不完整或包含未知字段"
+            )
+        self._d4_total_window = _number(
+            difficulty4,
+            "total_window",
+            document,
+            "tech_core.difficulty4.total_window",
+        )
+        self._d4_paired_step_window = _number(
+            difficulty4,
+            "paired_step_window",
+            document,
+            "tech_core.difficulty4.paired_step_window",
+        )
+        paired_steps = difficulty4.get("paired_steps")
+        if (
+            not isinstance(paired_steps, list)
+            or any(
+                not isinstance(step, int) or isinstance(step, bool)
+                for step in paired_steps
+            )
+            or set(paired_steps) != {2, 3, 5, 6}
+            or len(paired_steps) != 4
+        ):
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4.paired_steps` "
+                "必须恰好是 2、3、5、6"
+            )
+        self._d4_paired_steps = frozenset(paired_steps)
+        self._d4_priority_buffer = _number(
+            difficulty4,
+            "priority_buffer",
+            document,
+            "tech_core.difficulty4.priority_buffer",
+        )
+        self._d4_retry_lockout = _number(
+            difficulty4,
+            "retry_lockout",
+            document,
+            "tech_core.difficulty4.retry_lockout",
+        )
+        priority_failure = _mapping(difficulty4, "priority_failure", document)
+        if set(priority_failure) != {
+            "permanent_lockout",
+            "periodic_gold_penalty_per_10s",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4.priority_failure` "
+                "字段不完整或包含未知字段"
+            )
+        if priority_failure.get("permanent_lockout") is not True:
+            raise ConfigError(
+                f"{document.path}: D4 priority failure permanent_lockout 必须为 true"
+            )
+        self._d4_priority_failure_gold_penalty = _positive_integer(
+            priority_failure,
+            "periodic_gold_penalty_per_10s",
+            document,
+            "tech_core.difficulty4.priority_failure.periodic_gold_penalty_per_10s",
+        )
+        if (
+            self._d4_total_window != 45
+            or self._d4_paired_step_window != 5
+            or self._d4_priority_buffer != 15
+            or self._d4_retry_lockout != 90
+            or self._d4_priority_failure_gold_penalty != 25
+        ):
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 timing/penalty metadata "
+                "不匹配 V1.4.0"
             )
 
         experience = _mapping(document.data, "experience", document)
@@ -629,6 +810,7 @@ class RMUC2026RegionalRules:
         self._level_cap_by_team: dict[str, int] = {}
         self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
         self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
+        self._d4_coordinator = _D4CoordinatorState()
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
 
@@ -710,6 +892,7 @@ class RMUC2026RegionalRules:
                     state.completion_count_by_difficulty[1],
                     state.completion_count_by_difficulty[2],
                     state.completion_count_by_difficulty[3],
+                    state.completion_count_by_difficulty[4],
                     (
                         state.active_attempt.difficulty
                         if state.active_attempt is not None
@@ -726,11 +909,44 @@ class RMUC2026RegionalRules:
             engineer_energy_units=tuple(
                 (
                     engineer_id,
-                    state.carrying_energy_unit,
+                    state.energy_unit_credits,
                 )
                 for engineer_id, state in sorted(
                     self._engineer_resources_by_id.items()
                 )
+            ),
+            d4_status=tuple(
+                (
+                    team_id,
+                    (
+                        "complete"
+                        if state.completion_count_by_difficulty[4] >= 1
+                        else "active"
+                        if self._d4_coordinator.active_team_id == team_id
+                        else "pending"
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else "locked"
+                        if state.permanently_locked_out_of_d4
+                        else "idle"
+                    ),
+                    state.d4_attempt.current_step if state.d4_attempt is not None else 0,
+                    state.d4_attempt.activated_at if state.d4_attempt is not None else 0.0,
+                    (
+                        state.d4_attempt.first_core_completed_at
+                        if state.d4_attempt is not None
+                        and state.d4_attempt.first_core_completed_at is not None
+                        else -1.0
+                    ),
+                    (
+                        self._d4_coordinator.priority_buffer_remaining
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else 0.0
+                    ),
+                    state.d4_retry_after,
+                    state.permanently_locked_out_of_d4,
+                    state.d4_priority_failure_gold_penalty,
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
             ),
         )
 
@@ -776,7 +992,7 @@ class RMUC2026RegionalRules:
         return False
 
     def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
-        """Pick up the Rules Lab's synthetic renewable Energy Unit."""
+        """Add one Rules Lab Energy Unit resource credit, up to the D4 cap of two."""
         if (
             match.finished
             or engineer.type != "engineer"
@@ -788,12 +1004,12 @@ class RMUC2026RegionalRules:
         resource_zone = self._resource_zone_by_team.get(engineer.team)
         if (
             resource_state is None
-            or resource_state.carrying_energy_unit
+            or resource_state.energy_unit_credits >= 2
             or resource_zone is None
             or not resource_zone.contains(engineer.position)
         ):
             return False
-        resource_state.carrying_energy_unit = True
+        resource_state.energy_unit_credits += 1
         return True
 
     def start_tech_core_assembly(
@@ -802,13 +1018,17 @@ class RMUC2026RegionalRules:
         engineer: Robot,
         difficulty: int,
     ) -> bool:
-        """Start one explicit Rules Lab Tech Core D1-D3 assembly attempt."""
+        """Start D1-D3 directly or request D4 through the global coordinator."""
+        if difficulty == 4:
+            return self._request_d4_assembly(match, engineer)
         if (
             match.finished
             or engineer.type != "engineer"
             or not engineer.alive
             or self._robots_by_id.get(engineer.id) is not engineer
-            or difficulty not in self._tech_core_difficulties
+            or difficulty not in {1, 2, 3}
+            or self._d4_coordinator.active_team_id is not None
+            or self._d4_coordinator.pending_team_id is not None
         ):
             return False
 
@@ -819,10 +1039,11 @@ class RMUC2026RegionalRules:
         if (
             team_state is None
             or resource_state is None
-            or not resource_state.carrying_energy_unit
+            or resource_state.energy_unit_credits < 1
             or assembly_zone is None
             or not assembly_zone.contains(engineer.position)
             or team_state.active_attempt is not None
+            or team_state.d4_attempt is not None
             or match.elapsed_time + 1e-9 < rule.available_after
         ):
             return False
@@ -833,6 +1054,7 @@ class RMUC2026RegionalRules:
         ):
             return False
 
+        resource_state.energy_unit_credits -= 1
         team_state.active_attempt = _TechCoreAttempt(
             engineer_id=engineer.id,
             difficulty=difficulty,
@@ -854,14 +1076,11 @@ class RMUC2026RegionalRules:
             return False
 
         team_state = self._tech_core_by_team.get(engineer.team)
-        resource_state = self._engineer_resources_by_id.get(engineer.id)
         assembly_zone = self._assembly_zone_by_team.get(engineer.team)
         if (
             team_state is None
             or team_state.active_attempt is None
             or team_state.active_attempt.engineer_id != engineer.id
-            or resource_state is None
-            or not resource_state.carrying_energy_unit
             or assembly_zone is None
             or not assembly_zone.contains(engineer.position)
         ):
@@ -871,7 +1090,6 @@ class RMUC2026RegionalRules:
         previous_count = team_state.completion_count_by_difficulty[difficulty]
         team_state.completion_count_by_difficulty[difficulty] = previous_count + 1
         team_state.active_attempt = None
-        resource_state.carrying_energy_unit = False
 
         if previous_count == 0:
             level_cap = self._tech_core_difficulties[difficulty].first_level_cap
@@ -881,6 +1099,175 @@ class RMUC2026RegionalRules:
                     level_cap,
                 )
         return True
+
+    def confirm_d4_step(
+        self,
+        match: "Match",
+        engineer: Robot,
+        core_slot: str,
+        step: int,
+    ) -> bool:
+        """Confirm one abstracted D4 mechanical step on one of the two Core slots."""
+        if (
+            match.finished
+            or core_slot not in {"own", "opponent"}
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or self._d4_coordinator.active_team_id != engineer.team
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        attempt = team_state.d4_attempt if team_state is not None else None
+        if (
+            attempt is None
+            or attempt.engineer_id != engineer.id
+            or step != attempt.current_step
+            or core_slot in attempt.completed_core_slots
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+        ):
+            return False
+
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            self._fail_d4_attempt(engineer.team, total_deadline, "total-timeout")
+            return False
+
+        if step in self._d4_paired_steps and attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                self._fail_d4_attempt(engineer.team, pair_deadline, "pair-timeout")
+                return False
+
+        attempt.completed_core_slots.add(core_slot)
+        if (
+            step in self._d4_paired_steps
+            and attempt.first_core_completed_at is None
+        ):
+            attempt.first_core_completed_at = match.elapsed_time
+
+        if len(attempt.completed_core_slots) < 2:
+            return True
+
+        if step == 6:
+            self._complete_d4_attempt(engineer.team)
+            return True
+
+        attempt.current_step += 1
+        attempt.completed_core_slots.clear()
+        attempt.first_core_completed_at = None
+        return True
+
+    def _request_d4_assembly(self, match: "Match", engineer: Robot) -> bool:
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or self._d4_coordinator.active_team_id is not None
+            or self._d4_coordinator.pending_team_id is not None
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        rule = self._tech_core_difficulties[4]
+        if (
+            team_state is None
+            or resource_state is None
+            or resource_state.energy_unit_credits < 2
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+            or team_state.active_attempt is not None
+            or team_state.d4_attempt is not None
+            or team_state.completion_count_by_difficulty[4] >= 1
+            or team_state.permanently_locked_out_of_d4
+            or match.elapsed_time + 1e-9 < team_state.d4_retry_after
+            or match.elapsed_time + 1e-9 < rule.available_after
+            or team_state.completion_count_by_difficulty[3] < 1
+        ):
+            return False
+
+        other_team_id = next(
+            team_id
+            for team_id in self._tech_core_by_team
+            if team_id != engineer.team
+        )
+        other_state = self._tech_core_by_team[other_team_id]
+
+        resource_state.energy_unit_credits -= 2
+        if other_state.active_attempt is not None:
+            self._d4_coordinator.pending_team_id = engineer.team
+            self._d4_coordinator.pending_engineer_id = engineer.id
+            self._d4_coordinator.priority_buffer_remaining = self._d4_priority_buffer
+            self._d4_coordinator.priority_takeover = True
+            return True
+
+        self._activate_d4(
+            team_id=engineer.team,
+            engineer_id=engineer.id,
+            activated_at=match.elapsed_time,
+            priority_takeover=False,
+        )
+        return True
+
+    def _activate_d4(
+        self,
+        *,
+        team_id: str,
+        engineer_id: str,
+        activated_at: float,
+        priority_takeover: bool,
+    ) -> None:
+        team_state = self._tech_core_by_team[team_id]
+        team_state.d4_attempt = _D4Attempt(
+            engineer_id=engineer_id,
+            activated_at=activated_at,
+            priority_takeover=priority_takeover,
+        )
+        self._d4_coordinator.active_team_id = team_id
+        self._d4_coordinator.pending_team_id = None
+        self._d4_coordinator.pending_engineer_id = None
+        self._d4_coordinator.priority_buffer_remaining = 0.0
+        self._d4_coordinator.priority_takeover = False
+
+    def _complete_d4_attempt(self, team_id: str) -> None:
+        team_state = self._tech_core_by_team[team_id]
+        team_state.completion_count_by_difficulty[4] = 1
+        team_state.d4_attempt = None
+        self._d4_coordinator.active_team_id = None
+
+    def _fail_d4_attempt(
+        self,
+        team_id: str,
+        failure_time: float,
+        reason: str,
+    ) -> None:
+        del reason  # Reserved for deterministic tests/debugging without a failure engine.
+        team_state = self._tech_core_by_team[team_id]
+        attempt = team_state.d4_attempt
+        if attempt is None:
+            return
+
+        priority_takeover = attempt.priority_takeover
+        team_state.d4_attempt = None
+        self._d4_coordinator.active_team_id = None
+        if priority_takeover:
+            team_state.permanently_locked_out_of_d4 = True
+            team_state.d4_priority_failure_gold_penalty = (
+                self._d4_priority_failure_gold_penalty
+            )
+        else:
+            team_state.d4_retry_after = max(
+                team_state.d4_retry_after,
+                failure_time + self._d4_retry_lockout,
+            )
 
     def can_receive_damage(self, target: DamageableTarget) -> bool:
         if not target.alive:
@@ -951,6 +1338,7 @@ class RMUC2026RegionalRules:
         self._tech_core_by_team = {
             team_id: _TechCoreTeamState() for team_id in team_by_side.values()
         }
+        self._d4_coordinator = _D4CoordinatorState()
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -1011,6 +1399,7 @@ class RMUC2026RegionalRules:
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
         self._advance_tech_core_attempts(match, dt)
+        self._advance_d4(match, dt)
 
         frame_start = match.elapsed_time - dt
         active_rebuild_dt = max(
@@ -1144,14 +1533,24 @@ class RMUC2026RegionalRules:
                 self._grant_kill_experience(event)
                 resource_state = self._engineer_resources_by_id.get(event.robot_id)
                 if resource_state is not None:
-                    resource_state.carrying_energy_unit = False
+                    resource_state.energy_unit_credits = 0
                     team_state = self._tech_core_by_team.get(event.team_id)
                     if (
                         team_state is not None
                         and team_state.active_attempt is not None
                         and team_state.active_attempt.engineer_id == event.robot_id
                     ):
-                        team_state.active_attempt = None
+                        self._fail_tech_core_attempt(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.d4_attempt is not None
+                        and team_state.d4_attempt.engineer_id == event.robot_id
+                    ):
+                        self._fail_d4_attempt(
+                            event.team_id,
+                            event.time,
+                            "engineer-destroyed",
+                        )
                 continue
 
             if event.type == MatchEventType.STRUCTURE_DAMAGED:
@@ -1220,11 +1619,99 @@ class RMUC2026RegionalRules:
         team_state = self._tech_core_by_team.get(team_id)
         if team_state is None or team_state.active_attempt is None:
             return
-        engineer_id = team_state.active_attempt.engineer_id
+        # The attempt's one Energy Unit credit was reserved at start.
+        # Failure consumes that reservation but preserves any unreserved credit.
         team_state.active_attempt = None
-        resource_state = self._engineer_resources_by_id.get(engineer_id)
-        if resource_state is not None:
-            resource_state.carrying_energy_unit = False
+
+    def _advance_d4(self, match: "Match", dt: float) -> None:
+        coordinator = self._d4_coordinator
+        if coordinator.pending_team_id is not None:
+            remaining_before = coordinator.priority_buffer_remaining
+            if dt + 1e-9 < remaining_before:
+                coordinator.priority_buffer_remaining = max(
+                    0.0,
+                    remaining_before - dt,
+                )
+                return
+
+            pending_team_id = coordinator.pending_team_id
+            pending_engineer_id = coordinator.pending_engineer_id
+            priority_takeover = coordinator.priority_takeover
+            leftover_dt = max(0.0, dt - remaining_before)
+            activation_time = match.elapsed_time - leftover_dt
+
+            other_team_id = next(
+                team_id
+                for team_id in self._tech_core_by_team
+                if team_id != pending_team_id
+            )
+            if self._tech_core_by_team[other_team_id].active_attempt is not None:
+                self._fail_tech_core_attempt(other_team_id)
+
+            if pending_engineer_id is None:
+                raise RuntimeError("D4 pending request missing engineer id")
+            self._activate_d4(
+                team_id=pending_team_id,
+                engineer_id=pending_engineer_id,
+                activated_at=activation_time,
+                priority_takeover=priority_takeover,
+            )
+            self._advance_active_d4(match, leftover_dt)
+            return
+
+        if coordinator.active_team_id is not None:
+            self._advance_active_d4(match, dt)
+
+    def _advance_active_d4(self, match: "Match", dt: float) -> None:
+        team_id = self._d4_coordinator.active_team_id
+        if team_id is None:
+            return
+        team_state = self._tech_core_by_team[team_id]
+        attempt = team_state.d4_attempt
+        if attempt is None:
+            self._d4_coordinator.active_team_id = None
+            return
+
+        engineer = self._robots_by_id.get(attempt.engineer_id)
+        if engineer is None or not engineer.alive:
+            self._fail_d4_attempt(team_id, match.elapsed_time, "engineer-destroyed")
+            return
+
+        frame_start = match.elapsed_time - max(0.0, dt)
+        failure_candidates: list[tuple[float, str]] = []
+
+        assembly_zone = self._assembly_zone_by_team[team_id]
+        if assembly_zone.contains(engineer.position):
+            attempt.outside_zone_elapsed = 0.0
+        else:
+            outside_before = attempt.outside_zone_elapsed
+            attempt.outside_zone_elapsed += max(0.0, dt)
+            if (
+                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                time_to_failure = max(
+                    0.0,
+                    self._tech_core_leave_zone_fail_after - outside_before,
+                )
+                failure_candidates.append(
+                    (frame_start + time_to_failure, "left-assembly")
+                )
+
+        if attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                failure_candidates.append((pair_deadline, "pair-timeout"))
+
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            failure_candidates.append((total_deadline, "total-timeout"))
+
+        if failure_candidates:
+            failure_time, reason = min(failure_candidates, key=lambda item: item[0])
+            self._fail_d4_attempt(team_id, failure_time, reason)
 
     def _advance_rebuild(self, match: "Match", dt: float) -> None:
         if dt <= 0:
