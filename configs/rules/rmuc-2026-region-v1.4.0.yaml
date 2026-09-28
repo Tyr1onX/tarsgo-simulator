@@ -26,6 +26,36 @@ economy:
     - {elapsed: 300, coins: 50}
     - {elapsed: 360, coins: 150}
 
+projectile_allowance:
+  disengaged_after: 6
+  remote_effective_delay: 6
+  zones:
+    red:
+      supply: red-supply-buff
+      base: red-base-buff
+      outpost: red-outpost-buff
+    blue:
+      supply: blue-supply-buff
+      base: blue-base-buff
+      outpost: blue-outpost-buff
+  initial:
+    hero: {projectile: 42mm, allowance: 0}
+    infantry: {projectile: 17mm, allowance: 0}
+    sentry: {projectile: 17mm, allowance: 300}
+    drone: {projectile: 17mm, allowance: 750, additional_acquisition: false}
+  purchase:
+    17mm:
+      team_cap: 1000
+      nonremote: {coins: 10, allowance: 10}
+      remote: {coins: 150, allowance: 100}
+    42mm:
+      team_cap: 100
+      nonremote: {coins: 10, allowance: 1}
+      remote: {coins: 150, allowance: 10}
+  sentry_supply:
+    interval: 60
+    allowance: 100
+
 structures:
   base:
     max_hp: 5000
