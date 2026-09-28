@@ -10,7 +10,8 @@ learning_goals:
   - 验证 RMUC 2026 区域赛 V1.4.0 的基地与前哨站核心生命周期
   - 观察基地累计损伤带来的前哨站重建机会与 5 秒/10 秒独立占领进度
   - 验证七分钟比赛结束与基地被毁后的胜负链
-  - 体验 Engineer Energy Unit 与 Tech Core D1-D3 对 team level cap 的解锁
+  - 体验 Engineer Energy Unit 与 Tech Core D1-D4 对 team level cap / economy 的影响
+  - 体验 17mm / 42mm 允许发弹量、本地/远程金币兑换与 Sentry 补给累积
 setup:
   map:
     width: 2800
@@ -26,6 +27,13 @@ setup:
       - {id: blue-assembly, x: 2020, y: 160, width: 260, height: 220}
       - {id: red-outpost-rebuild, x: 720, y: 600, width: 260, height: 300}
       - {id: blue-outpost-rebuild, x: 1820, y: 600, width: 260, height: 300}
+      # Synthetic ammo-exchange eligibility geometry, not official field coordinates.
+      - {id: red-supply-buff, x: 120, y: 240, width: 220, height: 160}
+      - {id: blue-supply-buff, x: 2460, y: 1100, width: 220, height: 160}
+      - {id: red-base-buff, x: 160, y: 650, width: 180, height: 200}
+      - {id: blue-base-buff, x: 2460, y: 650, width: 180, height: 200}
+      - {id: red-outpost-buff, x: 720, y: 930, width: 220, height: 180}
+      - {id: blue-outpost-buff, x: 1860, y: 390, width: 220, height: 180}
   teams:
     red: tarsgo-rmuc-2026-region
     blue: opponent-rmuc-2026-region

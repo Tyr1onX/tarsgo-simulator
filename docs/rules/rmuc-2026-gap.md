@@ -57,6 +57,16 @@ Regional V1.4.0 manual.
 - Tech Core D1-D4 first/repeat periodic-gold income accumulation;
 - global 10 s Rules Lab periodic settlement convention with large-dt catch-up;
 - D4 priority-failure -25/10s periodic penalty consumer with wallet floor at 0;
+- Hero / Infantry / Sentry RuleSet-private projectile allowance state;
+- initial Hero 42mm=0, Infantry 17mm=0, Sentry 17mm=300 allowance;
+- Drone 17mm=750 initial allowance recorded as metadata only;
+- committed-shot allowance deduction and allowance-zero attack gate;
+- team-wide purchased allowance caps: 17mm=1000, 42mm=100;
+- non-remote 17mm / 42mm Gold-Coin exchange at synthetic own supply/base/outpost buff zones;
+- out-of-combat six-second RMUC-private state used for remote exchange eligibility;
+- remote 17mm / 42mm exchange with immediate wallet/cap reservation and six-second delivery;
+- multiple pending remote deliveries with large-dt end-of-frame settlement;
+- Sentry 100-round minute supply accrual at 60..360 s, accumulation, and whole-pending claim;
 - Tech Core reward metadata with D2/D3 level caps and periodic gold consumed;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
@@ -78,18 +88,20 @@ Regional V1.4.0 manual.
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
 - complete Field Buff system;
-- RMUC spending/action economy: non-remote and remote 17 mm / 42 mm allowed-
-  projectile purchases, remote healing, immediate respawn, and Drone air support;
+- remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
 - RMUC shooting-heat gameplay using dynamic Performance stats;
 - RMUC chassis-buffer / power-off gameplay using dynamic Performance stats;
 - entity projectile physics;
+- actual preload / magazine inventory and physical projectile stock;
+- projectile-allowance overfire behavior;
+- 42 mm shielding after Hero defeat / abnormal disconnection / overfire;
 - armor-module hit detection;
 - official complete RMUC field geometry/elevation;
 - 42 mm shield special case;
 - Outpost rotation physics;
-- Sentry automatic/semi-automatic mode differences, posture, remote exchange, or
-  special commands;
+- Sentry automatic/semi-automatic mode differences, autonomous purchase policy,
+  posture, or other special commands;
 - armor deployment geometry or hitbox changes.
 
 ### Unknown-source Experience
@@ -142,8 +154,9 @@ synthetic approximations rather than official full-field coordinates.
 
 ## Next candidate
 
-The RMUC income side now consumes the official timed grants, Tech Core periodic
-gold, and D4 priority-failure penalty. Later slices can independently add the
-spending/action side or consume the still-stored D3/D4 Defense and Base
-HP/virtual-shield rewards. Those consumers are intentionally not part of this
-implementation.
+The RMUC resource-to-combat path now reaches Gold Coins → 17/42 mm allowance →
+committed synthetic shots → damage / Experience. The remaining spending actions
+(remote healing, instant respawn, Drone air support) and the still-stored
+D3/D4 Defense / Base HP / virtual-shield rewards remain separate later slices.
+RMUC shooting heat and 42 mm shielding/overfire also remain intentionally
+deferred.
