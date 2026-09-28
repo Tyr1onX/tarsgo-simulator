@@ -109,8 +109,41 @@ class _TeamEconomyState:
     d4_priority_penalty_active_from: float | None = None
 
 
+@dataclass(frozen=True)
+class _ProjectilePurchaseRule:
+    team_cap: int
+    nonremote_coins: int
+    nonremote_allowance: int
+    remote_coins: int
+    remote_allowance: int
+
+
+@dataclass(frozen=True)
+class _PendingProjectileDelivery:
+    amount: int
+    effective_at: float
+
+
+@dataclass
+class _ProjectileAllowanceState:
+    projectile_type: str
+    allowed: int
+    disengaged_elapsed: float
+    combat_activity_this_frame: bool = False
+    pending_remote_deliveries: list[_PendingProjectileDelivery] = field(
+        default_factory=list
+    )
+
+
+@dataclass
+class _TeamProjectilePurchaseState:
+    purchased_17mm: int = 0
+    purchased_42mm: int = 0
+    pending_sentry_supply: int = 0
+
+
 class RMUC2026RegionalRules:
-    """V1.4.0 Regional Rules Lab with progression, Tech Core, and income economy."""
+    """V1.4.0 Regional Rules Lab with progression, Tech Core, and economy."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
