@@ -1427,6 +1427,42 @@ def _string(
     return value.strip()
 
 
+def _nonnegative_number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负数字")
+    return float(value)
+
+
+def _fraction(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 < value <= 1
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须在 (0, 1] 范围内")
+    return float(value)
+
+
 def _number(
     data: Mapping[str, Any],
     key: str,
