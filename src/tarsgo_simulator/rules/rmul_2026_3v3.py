@@ -1,4 +1,4 @@
-"""Partial RMUL 2026 rules for VP, control zones, and respawn lifecycle."""
+"""Partial RMUL 2026 rules for VP, lifecycle, economy, and shooting heat."""
 
 from dataclasses import dataclass
 import math
@@ -47,6 +47,21 @@ class _AllowedProjectileRule:
     exchange_amount: int | None = None
 
 
+@dataclass(frozen=True)
+class _ShootingHeatRule:
+    heat_limit: float
+    cooling_per_second: float
+    projectile_heat: float
+    permanent_lock_extra: float
+
+
+@dataclass
+class _RobotShootingState:
+    heat: float = 0.0
+    heat_locked: bool = False
+    permanently_locked: bool = False
+
+
 class RMUL2026Rules:
     def __init__(self, document: RuleDocument) -> None:
         if document.metadata.status != "official-partial":
@@ -66,6 +81,11 @@ class RMUL2026Rules:
         )
         self._vp_gap_coin_grants = _parse_vp_gap_coin_grants(economy, document)
         self._allowed_projectile_rules = _parse_allowed_projectiles(document)
+        (
+            self._heat_cooling_hz,
+            self._shooting_heat_rules,
+            self._lab_infantry_launcher_profile,
+        ) = _parse_shooting_heat(document, self._allowed_projectile_rules)
         victory_points = _mapping(document.data, "victory_points", document)
         self._initial_victory_points = _integer(
             victory_points, "initial", document, "victory_points.initial"
@@ -242,6 +262,8 @@ class RMUL2026Rules:
         self._robot_penalties: dict[str, _RobotPenaltyState] = {}
         self.coins_by_team: dict[str, int] = {}
         self.allowed_projectiles_by_robot: dict[str, int] = {}
+        self._robot_shooting_states: dict[str, _RobotShootingState] = {}
+        self._heat_cooling_accumulator = 0.0
         self._granted_timed_coin_events: set[int] = set()
         self._granted_vp_gap_thresholds: set[int] = set()
 
@@ -289,6 +311,16 @@ class RMUL2026Rules:
                 )
                 for robot_id, robot_type in sorted(self._robot_types_by_id.items())
             ),
+            robot_shooting_heat=tuple(
+                (
+                    robot_id,
+                    self._robot_shooting_states[robot_id].heat,
+                    self._shooting_heat_rules[robot_type].heat_limit,
+                    self._robot_shooting_states[robot_id].heat_locked,
+                    self._robot_shooting_states[robot_id].permanently_locked,
+                )
+                for robot_id, robot_type in sorted(self._robot_types_by_id.items())
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -302,17 +334,41 @@ class RMUL2026Rules:
 
     def can_attack(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
+        penalty = self._robot_penalties.get(robot.id)
+        shooting = self._robot_shooting_states.get(robot.id)
         return (
             robot.alive
             and self.allowed_projectiles_by_robot.get(robot.id, 0) > 0
             and (lifecycle is None or not lifecycle.weak)
+            and (penalty is None or not penalty.disqualified)
+            and (
+                shooting is None
+                or not shooting.heat_locked
+                and not shooting.permanently_locked
+            )
         )
 
     def on_attack_committed(self, robot: Robot) -> None:
-        if robot.id in self.allowed_projectiles_by_robot:
-            self.allowed_projectiles_by_robot[robot.id] = max(
-                0, self.allowed_projectiles_by_robot[robot.id] - 1
-            )
+        shooting = self._robot_shooting_states.get(robot.id)
+        projectile_rule = self._allowed_projectile_rules.get(robot.type)
+        if (
+            robot.id not in self.allowed_projectiles_by_robot
+            or shooting is None
+            or projectile_rule is None
+        ):
+            return
+
+        self.allowed_projectiles_by_robot[robot.id] = max(
+            0, self.allowed_projectiles_by_robot[robot.id] - 1
+        )
+        heat_rule = self._shooting_heat_rules[robot.type]
+        shooting.heat += heat_rule.projectile_heat
+        permanent_threshold = heat_rule.heat_limit + heat_rule.permanent_lock_extra
+        if shooting.heat >= permanent_threshold:
+            shooting.permanently_locked = True
+            shooting.heat_locked = False
+        elif shooting.heat > heat_rule.heat_limit:
+            shooting.heat_locked = True
 
     def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
         rule = self._allowed_projectile_rules.get(robot.type)
@@ -343,6 +399,35 @@ class RMUL2026Rules:
         return robot.alive and (
             lifecycle is None or lifecycle.invincible_remaining <= 0
         )
+
+    def prepare_combat(self, match: "Match", dt: float) -> None:
+        """Advance only quantized shooting-heat cooling before new attacks."""
+        if dt <= 0:
+            return
+
+        self._heat_cooling_accumulator += dt
+        ticks = math.floor(
+            self._heat_cooling_accumulator * self._heat_cooling_hz + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        self._heat_cooling_accumulator = max(
+            0.0,
+            self._heat_cooling_accumulator - ticks / self._heat_cooling_hz,
+        )
+        for robot in match.robots:
+            state = self._robot_shooting_states[robot.id]
+            heat_rule = self._shooting_heat_rules[robot.type]
+            state.heat = max(
+                0.0,
+                state.heat
+                - ticks * heat_rule.cooling_per_second / self._heat_cooling_hz,
+            )
+            if state.heat <= 1e-9:
+                state.heat = 0.0
+                if not state.permanently_locked:
+                    state.heat_locked = False
 
     def reset(self, match: "Match") -> None:
         expected_roster = {robot_type: 1 for robot_type in _RMUL_ROBOT_TYPES}
@@ -419,6 +504,10 @@ class RMUL2026Rules:
             robot.id: self._allowed_projectile_rules[robot.type].initial
             for robot in match.robots
         }
+        self._robot_shooting_states = {
+            robot.id: _RobotShootingState() for robot in match.robots
+        }
+        self._heat_cooling_accumulator = 0.0
         self.victory_points = {
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
@@ -525,6 +614,10 @@ class RMUL2026Rules:
                 continue
             if event.type != MatchEventType.ROBOT_DESTROYED:
                 continue
+            shooting = self._robot_shooting_states.get(event.robot_id)
+            if shooting is not None:
+                shooting.heat = 0.0
+                shooting.heat_locked = False
             lifecycle = self._robot_lifecycles.get(event.robot_id)
             if lifecycle is not None:
                 penalty = self._robot_penalties[event.robot_id]
@@ -927,6 +1020,98 @@ def _parse_allowed_projectiles(
             ),
         )
     return parsed
+
+
+def _parse_shooting_heat(
+    document: RuleDocument,
+    allowed_projectiles: Mapping[str, _AllowedProjectileRule],
+) -> tuple[float, dict[str, _ShootingHeatRule], str]:
+    data = _mapping(document.data, "shooting_heat", document)
+    expected_keys = {
+        "cooling_hz",
+        "projectile_heat",
+        "permanent_lock_extra",
+        "robot_profiles",
+    }
+    if set(data) != expected_keys:
+        raise ConfigError(
+            f"{document.path}: `shooting_heat` 字段不完整或包含未知字段"
+        )
+
+    cooling_hz = _number(
+        data, "cooling_hz", document, "shooting_heat.cooling_hz"
+    )
+    projectile_heat = _mapping(data, "projectile_heat", document)
+    permanent_lock_extra = _mapping(data, "permanent_lock_extra", document)
+    projectiles = {rule.projectile for rule in allowed_projectiles.values()}
+    if set(projectile_heat) != projectiles:
+        raise ConfigError(
+            f"{document.path}: `shooting_heat.projectile_heat` 必须匹配允许弹丸类型"
+        )
+    if set(permanent_lock_extra) != projectiles:
+        raise ConfigError(
+            f"{document.path}: `shooting_heat.permanent_lock_extra` 必须匹配允许弹丸类型"
+        )
+
+    projectile_heat_values = {
+        projectile: _number(
+            projectile_heat,
+            projectile,
+            document,
+            f"shooting_heat.projectile_heat.{projectile}",
+        )
+        for projectile in projectiles
+    }
+    permanent_extra_values = {
+        projectile: _number(
+            permanent_lock_extra,
+            projectile,
+            document,
+            f"shooting_heat.permanent_lock_extra.{projectile}",
+        )
+        for projectile in projectiles
+    }
+
+    profiles = _mapping(data, "robot_profiles", document)
+    if set(profiles) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: `shooting_heat.robot_profiles` "
+            "必须只包含 hero、infantry、sentry"
+        )
+
+    parsed: dict[str, _ShootingHeatRule] = {}
+    infantry_launcher_profile = ""
+    for robot_type in _RMUL_ROBOT_TYPES:
+        field = f"shooting_heat.robot_profiles.{robot_type}"
+        profile = _mapping(profiles, robot_type, document)
+        expected_profile_keys = {"heat_limit", "cooling_per_second"}
+        if robot_type == "infantry":
+            expected_profile_keys.add("launcher_profile")
+        if set(profile) != expected_profile_keys:
+            raise ConfigError(
+                f"{document.path}: `{field}` 字段不完整或包含未知字段"
+            )
+        if robot_type == "infantry":
+            infantry_launcher_profile = _string(
+                profile, "launcher_profile", document, f"{field}.launcher_profile"
+            )
+
+        projectile = allowed_projectiles[robot_type].projectile
+        parsed[robot_type] = _ShootingHeatRule(
+            heat_limit=_number(
+                profile, "heat_limit", document, f"{field}.heat_limit"
+            ),
+            cooling_per_second=_number(
+                profile,
+                "cooling_per_second",
+                document,
+                f"{field}.cooling_per_second",
+            ),
+            projectile_heat=projectile_heat_values[projectile],
+            permanent_lock_extra=permanent_extra_values[projectile],
+        )
+
+    return cooling_hz, parsed, infantry_launcher_profile
 
 
 def _string(

@@ -53,6 +53,9 @@ class TrainingV0Rules:
     def can_receive_damage(self, robot: Robot) -> bool:
         return robot.alive
 
+    def prepare_combat(self, match: "Match", dt: float) -> None:
+        """Training V0 has no shooting heat to advance."""
+
     def reset(self, match: "Match") -> None:
         """Training V0 keeps no state outside the Match."""
 

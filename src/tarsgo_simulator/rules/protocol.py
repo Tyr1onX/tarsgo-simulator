@@ -31,6 +31,7 @@ class RuleSetDisplayState:
     attack_damage: tuple[tuple[str, int], ...] = ()
     coins: tuple[tuple[str, int], ...] = ()
     robot_projectiles: tuple[tuple[str, str, int], ...] = ()
+    robot_shooting_heat: tuple[tuple[str, float, float, bool, bool], ...] = ()
 
 
 class RuleSet(Protocol):
@@ -46,6 +47,8 @@ class RuleSet(Protocol):
     def exchange_projectiles(self, match: "Match", robot: "Robot") -> bool: ...
 
     def can_receive_damage(self, robot: "Robot") -> bool: ...
+
+    def prepare_combat(self, match: "Match", dt: float) -> None: ...
 
     def reset(self, match: "Match") -> None: ...
 
