@@ -156,6 +156,10 @@ class RMUC2026RegionalRules:
             raise ConfigError(
                 f"{document.path}: `experience.initial_level_cap` 必须对应有效等级"
             )
+        if self._initial_level_cap != 5:
+            raise ConfigError(
+                f"{document.path}: 当前 Regional V1.4.0 slice 的初始等级上限必须为 5"
+            )
 
         shot = _mapping(experience, "shot", document)
         if set(shot) != {"hero", "infantry"}:
@@ -931,6 +935,88 @@ class RMUC2026RegionalRules:
                 first if remaining_hp[first] > remaining_hp[second] else second
             )
         return MatchResult(None)
+
+
+def _parse_level_thresholds(
+    value: Any, document: RuleDocument
+) -> dict[int, float]:
+    field = "experience.level_thresholds"
+    if not isinstance(value, list) or len(value) != 10:
+        raise ConfigError(f"{document.path}: `{field}` 必须包含 Lv1～Lv10 共 10 行")
+
+    parsed: dict[int, float] = {}
+    for index, row in enumerate(value):
+        row_field = f"{field}[{index}]"
+        if not isinstance(row, dict) or set(row) != {"level", "experience"}:
+            raise ConfigError(
+                f"{document.path}: `{row_field}` 必须只包含 level、experience"
+            )
+        level = row.get("level")
+        experience = row.get("experience")
+        if not isinstance(level, int) or isinstance(level, bool) or level <= 0:
+            raise ConfigError(f"{document.path}: `{row_field}.level` 必须是正整数")
+        if level in parsed:
+            raise ConfigError(f"{document.path}: `{field}` 等级 {level} 重复")
+        if (
+            not isinstance(experience, (int, float))
+            or isinstance(experience, bool)
+            or not math.isfinite(experience)
+            or experience < 0
+        ):
+            raise ConfigError(
+                f"{document.path}: `{row_field}.experience` 必须是非负数字"
+            )
+        parsed[level] = float(experience)
+
+    if set(parsed) != set(range(1, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须完整覆盖 Lv1～Lv10")
+    if parsed[1] != 0:
+        raise ConfigError(f"{document.path}: `{field}` Lv1 必须从 0 XP 开始")
+    if any(parsed[level] <= parsed[level - 1] for level in range(2, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须随等级严格递增")
+    return parsed
+
+
+def _parse_performance_rows(
+    value: Any,
+    stat_fields: tuple[str, ...],
+    document: RuleDocument,
+    field: str,
+) -> dict[int, dict[str, int]]:
+    if not isinstance(value, list) or len(value) != 10:
+        raise ConfigError(f"{document.path}: `{field}` 必须包含 Lv1～Lv10 共 10 行")
+
+    parsed: dict[int, dict[str, int]] = {}
+    expected_keys = {"level", *stat_fields}
+    for index, row in enumerate(value):
+        row_field = f"{field}[{index}]"
+        if not isinstance(row, dict) or set(row) != expected_keys:
+            raise ConfigError(
+                f"{document.path}: `{row_field}` 字段不完整或包含未知字段"
+            )
+        level = row.get("level")
+        if not isinstance(level, int) or isinstance(level, bool) or level <= 0:
+            raise ConfigError(f"{document.path}: `{row_field}.level` 必须是正整数")
+        if level in parsed:
+            raise ConfigError(f"{document.path}: `{field}` 等级 {level} 重复")
+
+        stats: dict[str, int] = {}
+        for stat in stat_fields:
+            value_at_level = row.get(stat)
+            if (
+                not isinstance(value_at_level, int)
+                or isinstance(value_at_level, bool)
+                or value_at_level <= 0
+            ):
+                raise ConfigError(
+                    f"{document.path}: `{row_field}.{stat}` 必须是正整数"
+                )
+            stats[stat] = value_at_level
+        parsed[level] = stats
+
+    if set(parsed) != set(range(1, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须完整覆盖 Lv1～Lv10")
+    return parsed
 
 
 def _mapping(
