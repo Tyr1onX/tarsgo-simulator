@@ -1131,19 +1131,18 @@ class RMUC2026RegionalRules:
         ):
             return False
 
-        total_elapsed = match.elapsed_time - attempt.activated_at
-        if total_elapsed > self._d4_total_window + 1e-9:
-            self._fail_d4_attempt(engineer.team, match.elapsed_time, "total-timeout")
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            self._fail_d4_attempt(engineer.team, total_deadline, "total-timeout")
             return False
 
-        if (
-            step in self._d4_paired_steps
-            and attempt.first_core_completed_at is not None
-            and match.elapsed_time - attempt.first_core_completed_at
-            > self._d4_paired_step_window + 1e-9
-        ):
-            self._fail_d4_attempt(engineer.team, match.elapsed_time, "pair-timeout")
-            return False
+        if step in self._d4_paired_steps and attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                self._fail_d4_attempt(engineer.team, pair_deadline, "pair-timeout")
+                return False
 
         attempt.completed_core_slots.add(core_slot)
         if (
