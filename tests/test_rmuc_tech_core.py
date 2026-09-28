@@ -403,7 +403,7 @@ def test_repeat_order_tracks_counts_and_keeps_cap_ten() -> None:
     assert match.ruleset._level_cap_by_team[RED] == 10
 
 
-def test_reward_metadata_is_loaded_but_only_level_cap_is_consumed() -> None:
+def test_reward_metadata_is_loaded_with_periodic_gold_consumer() -> None:
     match = _match()
     rules = match.ruleset
 
@@ -424,7 +424,8 @@ def test_reward_metadata_is_loaded_but_only_level_cap_is_consumed() -> None:
     assert rules._tech_core_difficulties[4].first_periodic_gold_per_10s == 50
     assert rules._tech_core_difficulties[4].repeat_periodic_gold_per_10s is None
 
-    assert match.ruleset.display_state.coins == ()
+    assert dict(match.ruleset.display_state.coins) == {RED: 400, BLUE: 400}
+    assert match.ruleset._periodic_gold_rate(RED) == (0, 0, 0)
 
 
 def test_display_state_exposes_minimal_tech_core_and_energy_unit_status() -> None:
