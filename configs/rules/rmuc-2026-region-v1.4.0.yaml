@@ -1,0 +1,57 @@
+schema_version: 1
+id: rmuc-2026-region-v1.4.0
+season: 2026
+competition: RMUC
+stage: regional
+status: official-partial
+official_version: "1.4.0"
+source_url: https://bbs.robomaster.com/wiki/20204847/809871?source=7
+last_verified: "2026-09-28"
+match_duration: 420
+
+structures:
+  base:
+    max_hp: 5000
+  outpost:
+    max_hp: 1500
+
+outpost_rebuild:
+  base_damage_threshold: 1000
+  restored_hp: 750
+  cutoff_seconds: 300
+  durations:
+    default: 10
+    engineer: 5
+  zones:
+    red: red-outpost-rebuild
+    blue: blue-outpost-rebuild
+
+# Experience / Performance are deliberately not implemented in this slice.
+# These are the level-1/default or fixed values used by the Rules Lab where
+# the official rule defines one, plus synthetic movement/combat timing.
+lab_robot_parameters:
+  common:
+    move_speed: 190
+    collision_radius: 18
+    attack_range: 240
+    attack_interval: 0.75
+  hero:
+    max_hp: 150
+    damage: 200
+    projectile: 42mm
+    chassis_power_limit: 50
+  engineer:
+    max_hp: 250
+    damage: 0
+    projectile: null
+    chassis_power_limit: 120
+  infantry:
+    max_hp: 200
+    damage: 20
+    projectile: 17mm
+    chassis_power_limit: 45
+  sentry:
+    max_hp: 400
+    damage: 20
+    projectile: 17mm
+    chassis_power_limit: 100
