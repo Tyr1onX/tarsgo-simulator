@@ -8,6 +8,14 @@ if TYPE_CHECKING:
     from tarsgo_simulator.core.robot import Robot
 
 
+class DamageableTarget(Protocol):
+    id: str
+    team: str
+    hp: int
+    max_hp: int
+    alive: bool
+
+
 @dataclass(frozen=True)
 class RobotParameters:
     max_hp: int
@@ -24,6 +32,11 @@ class MatchResult:
 
 
 @dataclass(frozen=True)
+class StructureParameters:
+    max_hp: int
+
+
+@dataclass(frozen=True)
 class RuleSetDisplayState:
     victory_points: tuple[tuple[str, int], ...]
     control_owner: str | None
@@ -35,6 +48,9 @@ class RuleSetDisplayState:
     robot_chassis_power: tuple[
         tuple[str, float, float, float, float, float], ...
     ] = ()
+    structure_statuses: tuple[tuple[str, int, int, str], ...] = ()
+    rebuild_opportunities: tuple[tuple[str, int], ...] = ()
+    rebuild_progress: tuple[tuple[str, str, float, float], ...] = ()
 
 
 class RuleSet(Protocol):
@@ -43,15 +59,19 @@ class RuleSet(Protocol):
 
     def robot_parameters(self, robot_type: str) -> RobotParameters: ...
 
+    def structure_parameters(self, structure_type: str) -> StructureParameters: ...
+
     def can_move(self, robot: "Robot") -> bool: ...
 
     def can_attack(self, robot: "Robot") -> bool: ...
+
+    def can_target(self, target: DamageableTarget) -> bool: ...
 
     def on_attack_committed(self, robot: "Robot") -> None: ...
 
     def exchange_projectiles(self, match: "Match", robot: "Robot") -> bool: ...
 
-    def can_receive_damage(self, robot: "Robot") -> bool: ...
+    def can_receive_damage(self, target: DamageableTarget) -> bool: ...
 
     def prepare_movement(self, match: "Match", dt: float) -> None: ...
 
