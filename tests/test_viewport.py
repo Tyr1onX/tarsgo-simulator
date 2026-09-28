@@ -118,3 +118,39 @@ def test_training_uses_same_non_pixel_viewport_transform() -> None:
     assert world is not None
     assert world[0] == pytest.approx(robot.position[0], abs=1.0)
     assert world[1] == pytest.approx(robot.position[1], abs=1.0)
+
+
+def test_desktop_draw_smoke_for_training_and_rmul_field() -> None:
+    pygame = pytest.importorskip("pygame")
+    from tarsgo_simulator.desktop.app import (
+        WINDOW_SIZE,
+        _draw,
+        _viewport_for_match,
+    )
+
+    pygame.font.init()
+    try:
+        font = pygame.font.Font(None, 25)
+        small_font = pygame.font.Font(None, 18)
+        for scenario in (default_scenario_path(), RULES_LAB_PATH):
+            match = Match(load_match_config(scenario))
+            screen = pygame.Surface(WINDOW_SIZE)
+            player_team = match.config.scenario.player_team
+            opponent_team = next(
+                team.team_id
+                for team in match.config.scenario.teams.values()
+                if team.team_id != player_team
+            )
+            _draw(
+                screen,
+                font,
+                small_font,
+                match,
+                player_team,
+                opponent_team,
+                set(),
+                None,
+                _viewport_for_match(match),
+            )
+    finally:
+        pygame.font.quit()
