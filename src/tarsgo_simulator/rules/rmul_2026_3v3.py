@@ -1,4 +1,4 @@
-"""Partial RMUL 2026 rules for VP, lifecycle, economy, and shooting heat."""
+"""Partial RMUL 2026 rules for VP, lifecycle, economy, heat, and chassis buffer."""
 
 from dataclasses import dataclass
 import math
@@ -62,6 +62,19 @@ class _RobotShootingState:
     permanently_locked: bool = False
 
 
+@dataclass(frozen=True)
+class _ChassisPowerRule:
+    power_limit: float
+    moving_power_demand: float
+
+
+@dataclass
+class _RobotChassisState:
+    buffer_energy: float
+    power_off_remaining: float = 0.0
+    blocked_this_frame: bool = False
+
+
 class RMUL2026Rules:
     def __init__(self, document: RuleDocument) -> None:
         if document.metadata.status != "official-partial":
@@ -86,6 +99,14 @@ class RMUL2026Rules:
             self._shooting_heat_rules,
             self._lab_infantry_launcher_profile,
         ) = _parse_shooting_heat(document, self._allowed_projectile_rules)
+        (
+            self._chassis_power_detection_hz,
+            self._buffer_energy_max,
+            self._power_off_duration,
+            self._chassis_power_rules,
+            self._lab_infantry_chassis_profile,
+            self._stationary_power_demand,
+        ) = _parse_chassis_power(document)
         victory_points = _mapping(document.data, "victory_points", document)
         self._initial_victory_points = _integer(
             victory_points, "initial", document, "victory_points.initial"
@@ -264,6 +285,9 @@ class RMUL2026Rules:
         self.allowed_projectiles_by_robot: dict[str, int] = {}
         self._robot_shooting_states: dict[str, _RobotShootingState] = {}
         self._heat_cooling_accumulator = 0.0
+        self._robot_chassis_states: dict[str, _RobotChassisState] = {}
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot: dict[str, float] = {}
         self._granted_timed_coin_events: set[int] = set()
         self._granted_vp_gap_thresholds: set[int] = set()
 
@@ -321,6 +345,17 @@ class RMUL2026Rules:
                 )
                 for robot_id, robot_type in sorted(self._robot_types_by_id.items())
             ),
+            robot_chassis_power=tuple(
+                (
+                    robot_id,
+                    self._robot_chassis_states[robot_id].buffer_energy,
+                    self._buffer_energy_max,
+                    self._current_synthetic_power_by_robot.get(robot_id, 0.0),
+                    self._chassis_power_rules[robot_type].power_limit,
+                    self._robot_chassis_states[robot_id].power_off_remaining,
+                )
+                for robot_id, robot_type in sorted(self._robot_types_by_id.items())
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -331,6 +366,14 @@ class RMUL2026Rules:
             raise ConfigError(
                 f"{self._document.path}: rmul-2026-3v3 不支持机器人类型 `{robot_type}`"
             ) from exc
+
+    def can_move(self, robot: Robot) -> bool:
+        state = self._robot_chassis_states.get(robot.id)
+        return robot.alive and (
+            state is None
+            or not state.blocked_this_frame
+            and state.power_off_remaining <= 0
+        )
 
     def can_attack(self, robot: Robot) -> bool:
         lifecycle = self._robot_lifecycles.get(robot.id)
