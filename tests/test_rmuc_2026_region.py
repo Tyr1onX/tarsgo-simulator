@@ -327,6 +327,7 @@ def test_invincible_base_does_not_absorb_target_selection() -> None:
 
     attacker.position = (2400.0, 750.0)
     attacker.attack_cooldown = 0.0
+    match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
     target_robot.position = (2180.0, 750.0)
     assert abs(attacker.position[0] - base.position[0]) < abs(
         attacker.position[0] - target_robot.position[0]
