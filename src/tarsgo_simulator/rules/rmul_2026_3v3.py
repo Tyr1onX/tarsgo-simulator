@@ -9,9 +9,11 @@ from tarsgo_simulator.core.events import MatchEventType
 from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.protocol import (
+    DamageableTarget,
     MatchResult,
     RobotParameters,
     RuleSetDisplayState,
+    StructureParameters,
 )
 
 
@@ -367,6 +369,9 @@ class RMUL2026Rules:
                 f"{self._document.path}: rmul-2026-3v3 不支持机器人类型 `{robot_type}`"
             ) from exc
 
+    def structure_parameters(self, structure_type: str) -> StructureParameters:
+        raise ConfigError(f"rmul-2026-3v3 不支持结构类型 `{structure_type}`")
+
     def can_move(self, robot: Robot) -> bool:
         state = self._robot_chassis_states.get(robot.id)
         return robot.alive and (
@@ -390,6 +395,11 @@ class RMUL2026Rules:
                 and not shooting.permanently_locked
             )
         )
+
+    def can_target(self, target: DamageableTarget) -> bool:
+        # Preserve RMUL intent semantics: an invincible robot can still be selected
+        # and absorb a shot intent; apply_damage remains the damage gate.
+        return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
         shooting = self._robot_shooting_states.get(robot.id)
@@ -437,9 +447,9 @@ class RMUL2026Rules:
         self.allowed_projectiles_by_robot[robot.id] += rule.exchange_amount
         return True
 
-    def can_receive_damage(self, robot: Robot) -> bool:
-        lifecycle = self._robot_lifecycles.get(robot.id)
-        return robot.alive and (
+    def can_receive_damage(self, target: DamageableTarget) -> bool:
+        lifecycle = self._robot_lifecycles.get(target.id)
+        return target.alive and (
             lifecycle is None or lifecycle.invincible_remaining <= 0
         )
 
