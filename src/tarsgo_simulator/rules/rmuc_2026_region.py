@@ -373,7 +373,11 @@ class RMUC2026RegionalRules:
         self._chassis_power_limit_by_type: dict[str, int] = {}
         for robot_type in _RMUC_ROBOT_TYPES:
             profile = _mapping(lab_parameters, robot_type, document)
-            expected = {"max_hp", "damage", "projectile", "chassis_power_limit"}
+            expected = (
+                {"damage", "projectile"}
+                if robot_type in _EXPERIENCE_ROBOT_TYPES
+                else {"max_hp", "damage", "projectile", "chassis_power_limit"}
+            )
             if set(profile) != expected:
                 raise ConfigError(
                     f"{document.path}: `lab_robot_parameters.{robot_type}` "
@@ -402,23 +406,34 @@ class RMUC2026RegionalRules:
                 raise ConfigError(
                     f"{document.path}: {robot_type} 必须配置 17mm/42mm synthetic damage"
                 )
-            self._lab_parameters[robot_type] = RobotParameters(
-                max_hp=_positive_integer(
+
+            if robot_type in _EXPERIENCE_ROBOT_TYPES:
+                initial_performance = self._effective_performance_for_type(
+                    robot_type, 1
+                )
+                max_hp = initial_performance.max_hp
+                chassis_power_limit = initial_performance.chassis_power_limit
+            else:
+                max_hp = _positive_integer(
                     profile,
                     "max_hp",
                     document,
                     f"lab_robot_parameters.{robot_type}.max_hp",
-                ),
+                )
+                chassis_power_limit = _positive_integer(
+                    profile,
+                    "chassis_power_limit",
+                    document,
+                    f"lab_robot_parameters.{robot_type}.chassis_power_limit",
+                )
+
+            self._lab_parameters[robot_type] = RobotParameters(
+                max_hp=max_hp,
                 damage=damage,
                 **common_values,
             )
             self._projectile_by_type[robot_type] = projectile
-            self._chassis_power_limit_by_type[robot_type] = _positive_integer(
-                profile,
-                "chassis_power_limit",
-                document,
-                f"lab_robot_parameters.{robot_type}.chassis_power_limit",
-            )
+            self._chassis_power_limit_by_type[robot_type] = chassis_power_limit
 
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
@@ -426,6 +441,9 @@ class RMUC2026RegionalRules:
         self._outpost_by_team: dict[str, Structure] = {}
         self._rebuild_zone_by_team: dict[str, Zone] = {}
         self._robot_types_by_id: dict[str, str] = {}
+        self._robots_by_id: dict[str, Robot] = {}
+        self._progression_by_robot: dict[str, _RobotProgressionState] = {}
+        self._level_cap_by_team: dict[str, int] = {}
 
     @property
     def time_limit(self) -> float:
