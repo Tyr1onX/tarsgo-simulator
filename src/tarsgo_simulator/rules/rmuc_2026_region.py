@@ -491,6 +491,31 @@ class RMUC2026RegionalRules:
                 for team_id, state in sorted(self._team_states.items())
             ),
             rebuild_progress=tuple(rebuild_progress),
+            robot_progression=tuple(
+                (
+                    robot_id,
+                    state.level,
+                    state.experience,
+                    self._level_cap_by_team[self._robots_by_id[robot_id].team],
+                )
+                for robot_id, state in sorted(self._progression_by_robot.items())
+            ),
+            robot_performance=tuple(
+                (
+                    robot_id,
+                    performance.max_hp,
+                    performance.chassis_power_limit,
+                    performance.heat_limit,
+                    performance.cooling_per_second,
+                )
+                for robot_id, performance in (
+                    (
+                        robot_id,
+                        self._effective_performance(robot_id),
+                    )
+                    for robot_id in sorted(self._progression_by_robot)
+                )
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -525,7 +550,10 @@ class RMUC2026RegionalRules:
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
-        """This slice has no projectile allowance; attacks are direct-damage intents."""
+        """Grant shot Experience when Combat commits a legal attack intent."""
+        shot_experience = self._shot_experience.get(robot.type)
+        if shot_experience is not None:
+            self._grant_experience(robot.id, shot_experience)
 
     def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
         """RMUC economy is intentionally outside this slice."""
@@ -588,6 +616,20 @@ class RMUC2026RegionalRules:
             team_id: _TeamStructureState() for team_id in team_by_side.values()
         }
         self._robot_types_by_id = {robot.id: robot.type for robot in match.robots}
+        self._robots_by_id = {robot.id: robot for robot in match.robots}
+        self._level_cap_by_team = {
+            team_id: self._initial_level_cap for team_id in team_by_side.values()
+        }
+        self._progression_by_robot = {
+            robot.id: _RobotProgressionState()
+            for robot in match.robots
+            if robot.type in _EXPERIENCE_ROBOT_TYPES
+        }
+        for robot_id in self._progression_by_robot:
+            robot = self._robots_by_id[robot_id]
+            performance = self._effective_performance(robot_id)
+            robot.max_hp = performance.max_hp
+            robot.hp = performance.max_hp
 
         self._base_by_team = {}
         self._outpost_by_team = {}
