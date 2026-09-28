@@ -703,6 +703,35 @@ class RMUC2026RegionalRules:
                     for robot_id in sorted(self._progression_by_robot)
                 )
             ),
+            tech_core_status=tuple(
+                (
+                    team_id,
+                    self._level_cap_by_team[team_id],
+                    state.completion_count_by_difficulty[1],
+                    state.completion_count_by_difficulty[2],
+                    state.completion_count_by_difficulty[3],
+                    (
+                        state.active_attempt.difficulty
+                        if state.active_attempt is not None
+                        else None
+                    ),
+                    (
+                        state.active_attempt.outside_zone_elapsed
+                        if state.active_attempt is not None
+                        else 0.0
+                    ),
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
+            ),
+            engineer_energy_units=tuple(
+                (
+                    engineer_id,
+                    state.carrying_energy_unit,
+                )
+                for engineer_id, state in sorted(
+                    self._engineer_resources_by_id.items()
+                )
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
