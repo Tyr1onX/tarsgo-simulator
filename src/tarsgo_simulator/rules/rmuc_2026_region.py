@@ -1002,6 +1002,18 @@ class RMUC2026RegionalRules:
             victory_points=(),
             control_owner=None,
             attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
+            coins=tuple(
+                (team_id, state.coins)
+                for team_id, state in sorted(self._economy_by_team.items())
+            ),
+            team_economy=tuple(
+                (
+                    team_id,
+                    state.coins,
+                    *self._periodic_gold_rate(team_id),
+                )
+                for team_id, state in sorted(self._economy_by_team.items())
+            ),
             structure_statuses=tuple(structure_statuses),
             rebuild_opportunities=tuple(
                 (team_id, state.outpost_rebuild_opportunities)
