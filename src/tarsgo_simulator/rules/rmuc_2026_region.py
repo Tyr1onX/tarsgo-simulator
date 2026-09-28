@@ -1250,6 +1250,11 @@ class RMUC2026RegionalRules:
         previous_count = team_state.completion_count_by_difficulty[difficulty]
         team_state.completion_count_by_difficulty[difficulty] = previous_count + 1
         team_state.active_attempt = None
+        self._add_tech_core_periodic_gold(
+            engineer.team,
+            difficulty,
+            first_completion=previous_count == 0,
+        )
 
         if previous_count == 0:
             level_cap = self._tech_core_difficulties[difficulty].first_level_cap
@@ -1399,7 +1404,14 @@ class RMUC2026RegionalRules:
 
     def _complete_d4_attempt(self, team_id: str) -> None:
         team_state = self._tech_core_by_team[team_id]
+        if team_state.completion_count_by_difficulty[4] != 0:
+            raise RuntimeError("D4 completion count must be zero before success")
         team_state.completion_count_by_difficulty[4] = 1
+        self._add_tech_core_periodic_gold(
+            team_id,
+            4,
+            first_completion=True,
+        )
         team_state.d4_attempt = None
         self._d4_coordinator.active_team_id = None
 
@@ -1423,6 +1435,9 @@ class RMUC2026RegionalRules:
             team_state.d4_priority_failure_gold_penalty = (
                 self._d4_priority_failure_gold_penalty
             )
+            economy_state = self._economy_by_team.get(team_id)
+            if economy_state is not None:
+                economy_state.d4_priority_penalty_active_from = failure_time
         else:
             team_state.d4_retry_after = max(
                 team_state.d4_retry_after,
@@ -1499,6 +1514,16 @@ class RMUC2026RegionalRules:
             team_id: _TechCoreTeamState() for team_id in team_by_side.values()
         }
         self._d4_coordinator = _D4CoordinatorState()
+        initial_coins = self._initial_coins_for_ratings(
+            self._economy_lab_rating["project_document"],
+            self._economy_lab_rating["technical_solution"],
+        )
+        self._economy_by_team = {
+            team_id: _TeamEconomyState(coins=initial_coins)
+            for team_id in team_by_side.values()
+        }
+        self._next_timed_gold_grant_index = 0
+        self._next_periodic_gold_tick = self._economy_periodic_interval
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -1560,6 +1585,7 @@ class RMUC2026RegionalRules:
         self._consume_events(match)
         self._advance_tech_core_attempts(match, dt)
         self._advance_d4(match, dt)
+        self._advance_economy(match)
 
         frame_start = match.elapsed_time - dt
         active_rebuild_dt = max(
@@ -1571,6 +1597,87 @@ class RMUC2026RegionalRules:
         if match.elapsed_time >= self._rebuild_cutoff - 1e-9:
             for state in self._team_states.values():
                 state.rebuild_progress_by_robot.clear()
+
+    def _initial_coins_for_ratings(
+        self,
+        project_document: str,
+        technical_solution: str,
+    ) -> int:
+        return max(
+            0,
+            self._economy_initial_coins
+            + self._economy_rating_modifiers["project_document"][project_document]
+            + self._economy_rating_modifiers["technical_solution"][technical_solution],
+        )
+
+    def _add_tech_core_periodic_gold(
+        self,
+        team_id: str,
+        difficulty: int,
+        *,
+        first_completion: bool,
+    ) -> None:
+        rule = self._tech_core_difficulties[difficulty]
+        amount = (
+            rule.first_periodic_gold_per_10s
+            if first_completion
+            else rule.repeat_periodic_gold_per_10s
+        )
+        if amount is None:
+            raise RuntimeError(
+                f"Tech Core D{difficulty} has no repeat periodic-gold reward"
+            )
+        self._economy_by_team[
+            team_id
+        ].tech_core_periodic_gold_per_10s += amount
+
+    def _periodic_gold_rate(self, team_id: str) -> tuple[int, int, int]:
+        economy_state = self._economy_by_team[team_id]
+        gross = economy_state.tech_core_periodic_gold_per_10s
+        penalty = (
+            self._tech_core_by_team[team_id].d4_priority_failure_gold_penalty
+            if economy_state.d4_priority_penalty_active_from is not None
+            else 0
+        )
+        return gross, penalty, gross - penalty
+
+    def _periodic_gold_net_at(self, team_id: str, tick_time: float) -> int:
+        economy_state = self._economy_by_team[team_id]
+        gross = economy_state.tech_core_periodic_gold_per_10s
+        active_from = economy_state.d4_priority_penalty_active_from
+        penalty = (
+            self._tech_core_by_team[team_id].d4_priority_failure_gold_penalty
+            if active_from is not None and tick_time + 1e-9 >= active_from
+            else 0
+        )
+        return gross - penalty
+
+    def _advance_economy(self, match: "Match") -> None:
+        if match.finished:
+            return
+        settlement_end = min(match.elapsed_time, self._time_limit)
+
+        while self._next_timed_gold_grant_index < len(self._economy_timed_grants):
+            grant_time, amount = self._economy_timed_grants[
+                self._next_timed_gold_grant_index
+            ]
+            if grant_time > settlement_end + 1e-9:
+                break
+            for state in self._economy_by_team.values():
+                state.coins += amount
+            self._next_timed_gold_grant_index += 1
+
+        while (
+            self._next_periodic_gold_tick <= settlement_end + 1e-9
+            and self._next_periodic_gold_tick < self._time_limit - 1e-9
+        ):
+            tick_time = self._next_periodic_gold_tick
+            for team_id, state in self._economy_by_team.items():
+                state.coins = max(
+                    0,
+                    state.coins + self._periodic_gold_net_at(team_id, tick_time),
+                )
+            self._next_periodic_gold_tick += self._economy_periodic_interval
 
     def _effective_performance_for_type(
         self, robot_type: str, level: int
@@ -2137,6 +2244,18 @@ def _positive_integer(
     value = data.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
+    return value
+
+
+def _integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ConfigError(f"{document.path}: `{field}` 必须是整数")
     return value
 
 
