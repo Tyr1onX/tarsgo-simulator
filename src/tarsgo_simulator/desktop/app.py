@@ -47,6 +47,10 @@ ZONE_STYLE = {
     "blue-start": (BLUE_SUPPLY_COLOR, "BLUE START"),
     "red-outpost-rebuild": (RED_SUPPLY_COLOR, "OUTPOST REBUILD"),
     "blue-outpost-rebuild": (BLUE_SUPPLY_COLOR, "OUTPOST REBUILD"),
+    "red-resource": (RED_SUPPLY_COLOR, "RESOURCE"),
+    "blue-resource": (BLUE_SUPPLY_COLOR, "RESOURCE"),
+    "red-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
+    "blue-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
 }
 
 
@@ -86,8 +90,54 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_start = None
                         selection_current = None
                         selection_shift = False
-                    elif event.key == pygame.K_e and len(selected_robot_ids) == 1:
-                        match.order_exchange_projectiles(next(iter(selected_robot_ids)))
+                    elif len(selected_robot_ids) == 1:
+                        robot_id = next(iter(selected_robot_ids))
+                        robot = next(
+                            (
+                                item
+                                for item in match.robots
+                                if item.id == robot_id
+                            ),
+                            None,
+                        )
+                        if event.key == pygame.K_e:
+                            match.order_exchange_projectiles(robot_id)
+                        elif robot is not None and event.key == pygame.K_g:
+                            action = getattr(
+                                match.ruleset,
+                                "pickup_energy_unit",
+                                None,
+                            )
+                            if callable(action):
+                                action(match, robot)
+                        elif robot is not None and event.key in {
+                            pygame.K_1,
+                            pygame.K_2,
+                            pygame.K_3,
+                        }:
+                            action = getattr(
+                                match.ruleset,
+                                "start_tech_core_assembly",
+                                None,
+                            )
+                            if callable(action):
+                                difficulty = {
+                                    pygame.K_1: 1,
+                                    pygame.K_2: 2,
+                                    pygame.K_3: 3,
+                                }[event.key]
+                                action(match, robot, difficulty)
+                        elif robot is not None and event.key in {
+                            pygame.K_RETURN,
+                            pygame.K_KP_ENTER,
+                        }:
+                            action = getattr(
+                                match.ruleset,
+                                "confirm_tech_core_assembly",
+                                None,
+                            )
+                            if callable(action):
+                                action(match, robot)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         if _screen_to_world(event.pos, viewport) is not None:
