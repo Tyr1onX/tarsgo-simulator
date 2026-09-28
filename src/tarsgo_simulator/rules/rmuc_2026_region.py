@@ -1549,7 +1549,7 @@ class RMUC2026RegionalRules:
                     ):
                         self._fail_d4_attempt(
                             event.team_id,
-                            match.elapsed_time,
+                            event.time,
                             "engineer-destroyed",
                         )
                 continue
@@ -1678,31 +1678,41 @@ class RMUC2026RegionalRules:
             self._fail_d4_attempt(team_id, match.elapsed_time, "engineer-destroyed")
             return
 
+        frame_start = match.elapsed_time - max(0.0, dt)
+        failure_candidates: list[tuple[float, str]] = []
+
         assembly_zone = self._assembly_zone_by_team[team_id]
         if assembly_zone.contains(engineer.position):
             attempt.outside_zone_elapsed = 0.0
         else:
+            outside_before = attempt.outside_zone_elapsed
             attempt.outside_zone_elapsed += max(0.0, dt)
             if (
                 attempt.outside_zone_elapsed + 1e-9
                 >= self._tech_core_leave_zone_fail_after
             ):
-                self._fail_d4_attempt(team_id, match.elapsed_time, "left-assembly")
-                return
+                time_to_failure = max(
+                    0.0,
+                    self._tech_core_leave_zone_fail_after - outside_before,
+                )
+                failure_candidates.append(
+                    (frame_start + time_to_failure, "left-assembly")
+                )
 
-        if (
-            attempt.first_core_completed_at is not None
-            and match.elapsed_time - attempt.first_core_completed_at
-            > self._d4_paired_step_window + 1e-9
-        ):
-            self._fail_d4_attempt(team_id, match.elapsed_time, "pair-timeout")
-            return
+        if attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                failure_candidates.append((pair_deadline, "pair-timeout"))
 
-        if (
-            match.elapsed_time - attempt.activated_at
-            > self._d4_total_window + 1e-9
-        ):
-            self._fail_d4_attempt(team_id, match.elapsed_time, "total-timeout")
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            failure_candidates.append((total_deadline, "total-timeout"))
+
+        if failure_candidates:
+            failure_time, reason = min(failure_candidates, key=lambda item: item[0])
+            self._fail_d4_attempt(team_id, failure_time, reason)
 
     def _advance_rebuild(self, match: "Match", dt: float) -> None:
         if dt <= 0:
