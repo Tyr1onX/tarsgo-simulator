@@ -53,6 +53,8 @@ class RuleSetDisplayState:
     rebuild_progress: tuple[tuple[str, str, float, float], ...] = ()
     robot_progression: tuple[tuple[str, int, float, int], ...] = ()
     robot_performance: tuple[tuple[str, int, int, int, int], ...] = ()
+    tech_core_status: tuple[tuple[str, int, int, int, int, int | None, float], ...] = ()
+    engineer_energy_units: tuple[tuple[str, bool], ...] = ()
 
 
 class RuleSet(Protocol):

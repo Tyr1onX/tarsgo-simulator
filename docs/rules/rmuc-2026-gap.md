@@ -32,6 +32,16 @@ Regional V1.4.0 manual.
 - effective Power / Heat Limit / Cooling values exposed without enabling their
   gameplay systems;
 - minimal level / XP HUD labels;
+- synthetic Engineer Energy Unit carrying abstraction;
+- synthetic per-team resource / assembly zones;
+- Tech Core Difficulty 1-3 availability and prerequisite flow;
+- explicit Rules Lab mechanical-success confirmation;
+- 15 s continuous assembly-zone leave failure;
+- active Engineer destruction failure;
+- first/repeat D1-D3 completion counts;
+- D2 first completion level-cap unlock 5 → 7;
+- D3 first completion level-cap unlock 7 → 10;
+- Tech Core first/repeat reward metadata with only level-cap rewards consumed;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -39,9 +49,15 @@ Regional V1.4.0 manual.
 - Drone entity and Drone Experience progression;
 - Radar;
 - Dart System and Dart Experience;
-- Tech Core assembly;
-- Tech Core level-cap unlock from 5 → 7 → 10;
-- Energy Unit;
+- physical Energy Unit entities, world placement, stock, and pickup depletion;
+- Tech Core real pose / insertion / translation / rotation / sensor validation;
+- Tech Core Difficulty 4;
+- Difficulty 4 dual Tech Cores and dual Energy Units;
+- Difficulty 4 per-step synchronization and timing;
+- Difficulty 4 cross-team priority / interruption / cooldown / lockout rules;
+- Tech Core periodic-gold gameplay;
+- Difficulty 3 defense-buff gameplay;
+- Difficulty 4 Base +2000 / virtual-shield / defense / gold rewards;
 - Energy Mechanism and its Experience sources;
 - Hero deployment-mode Experience;
 - terrain-traversal Experience;
@@ -69,6 +85,25 @@ source classification such as projectile/non-projectile, penalty, Dart, or other
 future systems. The current `MatchEvent` already supports the deterministic
 known-attacker path required by this slice, so no premature `DamageTaxonomy`
 or generic Experience-source hierarchy is added.
+
+### Tech Core Difficulty 4
+
+Difficulty 4 is deliberately deferred because it is a separate coupled system,
+not a simple extension of D1-D3. It includes two Tech Cores, dual Energy Units,
+per-step synchronization, V1.4.0 timing constraints, a 45-second total window,
+cross-team priority, interruption buffering, failure cooldown/lockout behavior,
+special gold penalties, and first-completion Base/defense/economy effects.
+
+The current state representation can be extended later, but none of those
+Difficulty 4 mechanics are partially implemented now.
+
+### Energy Unit / Tech Core physical boundary
+
+Current carrying state is boolean and only means the Engineer possesses the
+resource required for one D1-D3 attempt. Resource zones are synthetic renewable
+Rules Lab sources. Physical Energy Unit count, stock, respawn, world pose,
+mechanical arm motion, Tech Core pose, insertion/translation/rotation, and
+sensor validation remain deferred.
 
 ### Dynamic Power / Heat gameplay
 

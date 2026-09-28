@@ -10,15 +10,20 @@ learning_goals:
   - 验证 RMUC 2026 区域赛 V1.4.0 的基地与前哨站核心生命周期
   - 观察基地累计损伤带来的前哨站重建机会与 5 秒/10 秒独立占领进度
   - 验证七分钟比赛结束与基地被毁后的胜负链
+  - 体验 Engineer Energy Unit 与 Tech Core D1-D3 对 team level cap 的解锁
 setup:
   map:
     width: 2800
     height: 1500
     obstacles: []
     zones:
-      # Rules Lab approximation. Only semantic start/rebuild areas are represented.
+      # Rules Lab approximation. These semantic rectangles are not official coordinates.
       - {id: red-start, x: 80, y: 450, width: 520, height: 600}
       - {id: blue-start, x: 2200, y: 450, width: 520, height: 600}
+      - {id: red-resource, x: 120, y: 1120, width: 260, height: 220}
+      - {id: blue-resource, x: 2420, y: 160, width: 260, height: 220}
+      - {id: red-assembly, x: 520, y: 1120, width: 260, height: 220}
+      - {id: blue-assembly, x: 2020, y: 160, width: 260, height: 220}
       - {id: red-outpost-rebuild, x: 720, y: 600, width: 260, height: 300}
       - {id: blue-outpost-rebuild, x: 1820, y: 600, width: 260, height: 300}
   teams:

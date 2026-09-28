@@ -38,6 +38,36 @@ class _EffectivePerformance:
 
 
 @dataclass
+class _EngineerResourceState:
+    carrying_energy_unit: bool = False
+
+
+@dataclass
+class _TechCoreAttempt:
+    engineer_id: str
+    difficulty: int
+    outside_zone_elapsed: float = 0.0
+
+
+@dataclass(frozen=True)
+class _TechCoreDifficultyRule:
+    available_after: float
+    prerequisite: int | None
+    first_level_cap: int | None
+    first_periodic_gold_per_10s: int
+    repeat_periodic_gold_per_10s: int
+    first_defense_bonus: float | None = None
+
+
+@dataclass
+class _TechCoreTeamState:
+    completion_count_by_difficulty: dict[int, int] = field(
+        default_factory=lambda: {1: 0, 2: 0, 3: 0}
+    )
+    active_attempt: _TechCoreAttempt | None = None
+
+
+@dataclass
 class _TeamStructureState:
     outpost_ever_destroyed: bool = False
     base_damage_lost: int = 0
@@ -47,7 +77,7 @@ class _TeamStructureState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 regional rules slice without experience/performance or full economy."""
+    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D3."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
@@ -129,6 +159,155 @@ class RMUC2026RegionalRules:
         if len(set(self._rebuild_zone_ids.values())) != 2:
             raise ConfigError(
                 f"{document.path}: red / blue 前哨站重建区必须使用不同 zone id"
+            )
+
+        tech_core = _mapping(document.data, "tech_core", document)
+        if set(tech_core) != {"leave_zone_fail_after", "zones", "difficulties"}:
+            raise ConfigError(
+                f"{document.path}: `tech_core` 字段不完整或包含未知字段"
+            )
+        self._tech_core_leave_zone_fail_after = _number(
+            tech_core,
+            "leave_zone_fail_after",
+            document,
+            "tech_core.leave_zone_fail_after",
+        )
+
+        tech_core_zones = _mapping(tech_core, "zones", document)
+        if set(tech_core_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `tech_core.zones` 必须包含 red、blue"
+            )
+        self._tech_core_zone_ids: dict[str, dict[str, str]] = {}
+        for side in ("red", "blue"):
+            side_zones = _mapping(tech_core_zones, side, document)
+            if set(side_zones) != {"resource", "assembly"}:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.zones.{side}` "
+                    "必须只包含 resource、assembly"
+                )
+            self._tech_core_zone_ids[side] = {
+                zone_type: _string(
+                    side_zones,
+                    zone_type,
+                    document,
+                    f"tech_core.zones.{side}.{zone_type}",
+                )
+                for zone_type in ("resource", "assembly")
+            }
+        all_tech_core_zone_ids = {
+            zone_id
+            for side_zones in self._tech_core_zone_ids.values()
+            for zone_id in side_zones.values()
+        }
+        if len(all_tech_core_zone_ids) != 4:
+            raise ConfigError(
+                f"{document.path}: Tech Core resource / assembly zone id 必须互不相同"
+            )
+
+        raw_difficulties = _mapping(tech_core, "difficulties", document)
+        if set(raw_difficulties) != {1, 2, 3}:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties` 本轮必须且只能包含 1、2、3"
+            )
+        self._tech_core_difficulties: dict[int, _TechCoreDifficultyRule] = {}
+        for difficulty in (1, 2, 3):
+            raw_rule = raw_difficulties.get(difficulty)
+            if not isinstance(raw_rule, dict) or set(raw_rule) != {
+                "available_after",
+                "prerequisite",
+                "first",
+                "repeat",
+            }:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}` "
+                    "字段不完整或包含未知字段"
+                )
+            available_after = _nonnegative_number(
+                raw_rule,
+                "available_after",
+                document,
+                f"tech_core.difficulties.{difficulty}.available_after",
+            )
+            prerequisite = raw_rule.get("prerequisite")
+            expected_prerequisite = None if difficulty == 1 else difficulty - 1
+            if prerequisite != expected_prerequisite:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.prerequisite` "
+                    f"必须是 {expected_prerequisite}"
+                )
+
+            first = _mapping(
+                raw_rule,
+                "first",
+                document,
+            )
+            repeat = _mapping(
+                raw_rule,
+                "repeat",
+                document,
+            )
+            if set(repeat) != {"periodic_gold_per_10s"}:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.repeat` "
+                    "本轮只保存 periodic_gold_per_10s metadata"
+                )
+            repeat_gold = _positive_integer(
+                repeat,
+                "periodic_gold_per_10s",
+                document,
+                f"tech_core.difficulties.{difficulty}.repeat.periodic_gold_per_10s",
+            )
+
+            expected_first_fields = {"periodic_gold_per_10s"}
+            if difficulty in {2, 3}:
+                expected_first_fields.add("level_cap")
+            if difficulty == 3:
+                expected_first_fields.add("defense_bonus")
+            if set(first) != expected_first_fields:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.first` "
+                    "字段与当前 V1.4.0 slice 不匹配"
+                )
+            first_gold = _positive_integer(
+                first,
+                "periodic_gold_per_10s",
+                document,
+                f"tech_core.difficulties.{difficulty}.first.periodic_gold_per_10s",
+            )
+            first_level_cap = None
+            if difficulty in {2, 3}:
+                first_level_cap = _positive_integer(
+                    first,
+                    "level_cap",
+                    document,
+                    f"tech_core.difficulties.{difficulty}.first.level_cap",
+                )
+            first_defense_bonus = None
+            if difficulty == 3:
+                first_defense_bonus = _fraction(
+                    first,
+                    "defense_bonus",
+                    document,
+                    "tech_core.difficulties.3.first.defense_bonus",
+                )
+
+            self._tech_core_difficulties[difficulty] = _TechCoreDifficultyRule(
+                available_after=available_after,
+                prerequisite=prerequisite,
+                first_level_cap=first_level_cap,
+                first_periodic_gold_per_10s=first_gold,
+                repeat_periodic_gold_per_10s=repeat_gold,
+                first_defense_bonus=first_defense_bonus,
+            )
+
+        if self._tech_core_difficulties[2].first_level_cap != 7:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
+            )
+        if self._tech_core_difficulties[3].first_level_cap != 10:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 3 first level_cap 必须为 10"
             )
 
         experience = _mapping(document.data, "experience", document)
@@ -448,6 +627,10 @@ class RMUC2026RegionalRules:
         self._robots_by_id: dict[str, Robot] = {}
         self._progression_by_robot: dict[str, _RobotProgressionState] = {}
         self._level_cap_by_team: dict[str, int] = {}
+        self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
+        self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
+        self._resource_zone_by_team: dict[str, Zone] = {}
+        self._assembly_zone_by_team: dict[str, Zone] = {}
 
     @property
     def time_limit(self) -> float:
@@ -520,6 +703,35 @@ class RMUC2026RegionalRules:
                     for robot_id in sorted(self._progression_by_robot)
                 )
             ),
+            tech_core_status=tuple(
+                (
+                    team_id,
+                    self._level_cap_by_team[team_id],
+                    state.completion_count_by_difficulty[1],
+                    state.completion_count_by_difficulty[2],
+                    state.completion_count_by_difficulty[3],
+                    (
+                        state.active_attempt.difficulty
+                        if state.active_attempt is not None
+                        else None
+                    ),
+                    (
+                        state.active_attempt.outside_zone_elapsed
+                        if state.active_attempt is not None
+                        else 0.0
+                    ),
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
+            ),
+            engineer_energy_units=tuple(
+                (
+                    engineer_id,
+                    state.carrying_energy_unit,
+                )
+                for engineer_id, state in sorted(
+                    self._engineer_resources_by_id.items()
+                )
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -562,6 +774,113 @@ class RMUC2026RegionalRules:
     def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
         """RMUC economy is intentionally outside this slice."""
         return False
+
+    def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
+        """Pick up the Rules Lab's synthetic renewable Energy Unit."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        resource_zone = self._resource_zone_by_team.get(engineer.team)
+        if (
+            resource_state is None
+            or resource_state.carrying_energy_unit
+            or resource_zone is None
+            or not resource_zone.contains(engineer.position)
+        ):
+            return False
+        resource_state.carrying_energy_unit = True
+        return True
+
+    def start_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+        difficulty: int,
+    ) -> bool:
+        """Start one explicit Rules Lab Tech Core D1-D3 assembly attempt."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or difficulty not in self._tech_core_difficulties
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        rule = self._tech_core_difficulties[difficulty]
+        if (
+            team_state is None
+            or resource_state is None
+            or not resource_state.carrying_energy_unit
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+            or team_state.active_attempt is not None
+            or match.elapsed_time + 1e-9 < rule.available_after
+        ):
+            return False
+
+        if (
+            rule.prerequisite is not None
+            and team_state.completion_count_by_difficulty[rule.prerequisite] < 1
+        ):
+            return False
+
+        team_state.active_attempt = _TechCoreAttempt(
+            engineer_id=engineer.id,
+            difficulty=difficulty,
+        )
+        return True
+
+    def confirm_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+    ) -> bool:
+        """Confirm that the abstracted physical D1-D3 assembly succeeded."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        if (
+            team_state is None
+            or team_state.active_attempt is None
+            or team_state.active_attempt.engineer_id != engineer.id
+            or resource_state is None
+            or not resource_state.carrying_energy_unit
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+        ):
+            return False
+
+        difficulty = team_state.active_attempt.difficulty
+        previous_count = team_state.completion_count_by_difficulty[difficulty]
+        team_state.completion_count_by_difficulty[difficulty] = previous_count + 1
+        team_state.active_attempt = None
+        resource_state.carrying_energy_unit = False
+
+        if previous_count == 0:
+            level_cap = self._tech_core_difficulties[difficulty].first_level_cap
+            if level_cap is not None:
+                self._level_cap_by_team[engineer.team] = max(
+                    self._level_cap_by_team[engineer.team],
+                    level_cap,
+                )
+        return True
 
     def can_receive_damage(self, target: DamageableTarget) -> bool:
         if not target.alive:
@@ -624,6 +943,14 @@ class RMUC2026RegionalRules:
         self._level_cap_by_team = {
             team_id: self._initial_level_cap for team_id in team_by_side.values()
         }
+        self._engineer_resources_by_id = {
+            robot.id: _EngineerResourceState()
+            for robot in match.robots
+            if robot.type == "engineer"
+        }
+        self._tech_core_by_team = {
+            team_id: _TechCoreTeamState() for team_id in team_by_side.values()
+        }
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -653,19 +980,37 @@ class RMUC2026RegionalRules:
             self._outpost_by_team[team_id] = outposts[0]
 
         zones_by_id = {zone.id: zone for zone in match.map.zones}
-        missing_zones = sorted(set(self._rebuild_zone_ids.values()) - set(zones_by_id))
+        required_zone_ids = set(self._rebuild_zone_ids.values()) | {
+            zone_id
+            for side_zones in self._tech_core_zone_ids.values()
+            for zone_id in side_zones.values()
+        }
+        missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
             raise ConfigError(
-                f"{self._document.path}: scenario 缺少前哨站重建区："
+                f"{self._document.path}: scenario 缺少 RMUC Rules Lab zone："
                 + ", ".join(missing_zones)
             )
         self._rebuild_zone_by_team = {
             team_by_side[side]: zones_by_id[zone_id]
             for side, zone_id in self._rebuild_zone_ids.items()
         }
+        self._resource_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["resource"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._assembly_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["assembly"]
+            ]
+            for side in ("red", "blue")
+        }
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._advance_tech_core_attempts(match, dt)
 
         frame_start = match.elapsed_time - dt
         active_rebuild_dt = max(
@@ -797,6 +1142,16 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                resource_state = self._engineer_resources_by_id.get(event.robot_id)
+                if resource_state is not None:
+                    resource_state.carrying_energy_unit = False
+                    team_state = self._tech_core_by_team.get(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.active_attempt is not None
+                        and team_state.active_attempt.engineer_id == event.robot_id
+                    ):
+                        team_state.active_attempt = None
                 continue
 
             if event.type == MatchEventType.STRUCTURE_DAMAGED:
@@ -838,6 +1193,38 @@ class RMUC2026RegionalRules:
                 state = self._team_states[structure.team]
                 state.outpost_ever_destroyed = True
                 state.rebuild_progress_by_robot.clear()
+
+    def _advance_tech_core_attempts(self, match: "Match", dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, team_state in self._tech_core_by_team.items():
+            attempt = team_state.active_attempt
+            if attempt is None:
+                continue
+            engineer = self._robots_by_id.get(attempt.engineer_id)
+            if engineer is None or not engineer.alive:
+                self._fail_tech_core_attempt(team_id)
+                continue
+            assembly_zone = self._assembly_zone_by_team[team_id]
+            if assembly_zone.contains(engineer.position):
+                attempt.outside_zone_elapsed = 0.0
+                continue
+            attempt.outside_zone_elapsed += dt
+            if (
+                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                self._fail_tech_core_attempt(team_id)
+
+    def _fail_tech_core_attempt(self, team_id: str) -> None:
+        team_state = self._tech_core_by_team.get(team_id)
+        if team_state is None or team_state.active_attempt is None:
+            return
+        engineer_id = team_state.active_attempt.engineer_id
+        team_state.active_attempt = None
+        resource_state = self._engineer_resources_by_id.get(engineer_id)
+        if resource_state is not None:
+            resource_state.carrying_energy_unit = False
 
     def _advance_rebuild(self, match: "Match", dt: float) -> None:
         if dt <= 0:
@@ -1038,6 +1425,42 @@ def _string(
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{document.path}: `{field}` 必须是非空字符串")
     return value.strip()
+
+
+def _nonnegative_number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负数字")
+    return float(value)
+
+
+def _fraction(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 < value <= 1
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须在 (0, 1] 范围内")
+    return float(value)
 
 
 def _number(
