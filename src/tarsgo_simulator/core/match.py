@@ -250,9 +250,9 @@ class Match:
             self.ruleset.prepare_combat(self, dt)
             update_combat(
                 self.robots,
-                self.structures,
                 self.map,
                 can_attack=self.ruleset.can_attack,
+                structures=self.structures,
                 can_target=self.ruleset.can_target,
                 on_attack_committed=self.ruleset.on_attack_committed,
                 apply_damage=lambda target, amount, attacker: self.apply_damage(
