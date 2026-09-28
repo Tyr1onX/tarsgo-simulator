@@ -430,17 +430,82 @@ def _draw(
     if display_state is not None:
         if display_state.structure_statuses:
             tech_core_status = {
-                team_id: (cap, d1, d2, d3, active, outside)
-                for team_id, cap, d1, d2, d3, active, outside
+                team_id: (cap, d1, d2, d3, d4, active, outside)
+                for team_id, cap, d1, d2, d3, d4, active, outside
                 in display_state.tech_core_status
+            }
+            d4_status = {
+                team_id: (
+                    phase,
+                    current_step,
+                    activated_at,
+                    first_core_at,
+                    pending_remaining,
+                    retry_after,
+                    permanent,
+                    penalty,
+                )
+                for (
+                    team_id,
+                    phase,
+                    current_step,
+                    activated_at,
+                    first_core_at,
+                    pending_remaining,
+                    retry_after,
+                    permanent,
+                    penalty,
+                ) in display_state.d4_status
             }
             core_state = tech_core_status.get(player_team)
             if core_state is not None:
-                cap, d1, d2, d3, active, outside = core_state
-                if active is None:
-                    detail = f"CORE CAP:{cap} D1:{d1} D2:{d2} D3:{d3}"
-                else:
-                    detail = f"CORE D{active} ACTIVE CAP:{cap}"
+                cap, d1, d2, d3, d4, active, outside = core_state
+                detail = f"CORE CAP:{cap} D1:{d1} D2:{d2} D3:{d3} D4:{d4}"
+                d4_state = d4_status.get(player_team)
+                if d4_state is not None:
+                    (
+                        phase,
+                        current_step,
+                        activated_at,
+                        first_core_at,
+                        pending_remaining,
+                        retry_after,
+                        permanent,
+                        penalty,
+                    ) = d4_state
+                    if phase == "pending":
+                        detail = (
+                            f"{detail} | D4 WAIT "
+                            f"{max(0.0, 15.0 - pending_remaining):.1f}/15"
+                        )
+                    elif phase == "active":
+                        remaining = max(
+                            0.0,
+                            45.0 - (match.elapsed_time - activated_at),
+                        )
+                        detail = (
+                            f"{detail} | D4 STEP{current_step} "
+                            f"45:{remaining:.1f}"
+                        )
+                        if first_core_at >= 0:
+                            pair_remaining = max(
+                                0.0,
+                                5.0 - (match.elapsed_time - first_core_at),
+                            )
+                            detail = f"{detail} PAIR:{pair_remaining:.1f}"
+                    elif phase == "complete":
+                        detail = f"{detail} | D4 COMPLETE"
+                    elif permanent:
+                        detail = f"{detail} | D4 LOCKED"
+                        if penalty > 0:
+                            detail = f"{detail} PENALTY -{penalty}/10s"
+                    elif retry_after > match.elapsed_time:
+                        detail = (
+                            f"{detail} | D4 LOCK "
+                            f"{math.ceil(retry_after - match.elapsed_time)}s"
+                        )
+                if active is not None:
+                    detail = f"{detail} | D{active} ACTIVE"
                     if outside > 0:
                         detail = f"{detail} OUT {outside:.1f}/15"
             else:
@@ -603,8 +668,9 @@ def _draw(
                 robot_label = f"{robot_label} L{level} MAX"
             else:
                 robot_label = f"{robot_label} L{level} XP:{experience:g}"
-        if engineer_energy_units.get(robot.id):
-            robot_label = f"{robot_label} EU"
+        energy_unit_credits = engineer_energy_units.get(robot.id, 0)
+        if energy_unit_credits > 0:
+            robot_label = f"{robot_label} EU:{energy_unit_credits}"
         if robot.id in projectile_counts:
             robot_label = f"{robot_label} {projectile_counts[robot.id]}"
         heat_state = shooting_heat.get(robot.id)
