@@ -195,6 +195,8 @@ def test_shot_experience_uses_existing_attack_committed_hook() -> None:
     hero = _robot(match, "tarsgo-hero")
     infantry = _robot(match, "tarsgo-infantry-1")
     sentry = _robot(match, "tarsgo-sentry")
+    match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
+    match.ruleset._projectile_allowance_by_robot[infantry.id].allowed = 1
 
     match.ruleset.on_attack_committed(hero)
     match.ruleset.on_attack_committed(infantry)
@@ -209,6 +211,7 @@ def test_no_legal_attack_target_means_no_shot_experience() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
     hero.attack_cooldown = 0.0
+    match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
     hero.position = (100.0, 100.0)
     for robot in match.robots:
         if robot.team == BLUE:
@@ -335,6 +338,7 @@ def test_current_level_cap_stops_experience_exactly_at_level_five_threshold() ->
     target = _robot(match, "opponent-infantry-1")
 
     match.ruleset._grant_experience(hero.id, 99999)
+    match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
     state = _progress(match, hero.id)
     assert (state.level, state.experience) == (5, 2200)
 
