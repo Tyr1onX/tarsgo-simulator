@@ -319,6 +319,11 @@ def test_invincible_base_does_not_absorb_target_selection() -> None:
     attacker = _robot(match, "tarsgo-hero")
     target_robot = _robot(match, "opponent-infantry-1")
     base = _structure(match, BLUE, "base")
+    for robot in match.robots:
+        if robot.team == BLUE and robot is not target_robot:
+            robot.alive = False
+            robot.hp = 0
+            robot.path.clear()
 
     attacker.position = (2400.0, 750.0)
     attacker.attack_cooldown = 0.0
