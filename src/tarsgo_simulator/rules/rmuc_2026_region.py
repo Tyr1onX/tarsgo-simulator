@@ -627,6 +627,10 @@ class RMUC2026RegionalRules:
         self._robots_by_id: dict[str, Robot] = {}
         self._progression_by_robot: dict[str, _RobotProgressionState] = {}
         self._level_cap_by_team: dict[str, int] = {}
+        self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
+        self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
+        self._resource_zone_by_team: dict[str, Zone] = {}
+        self._assembly_zone_by_team: dict[str, Zone] = {}
 
     @property
     def time_limit(self) -> float:
