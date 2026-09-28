@@ -39,7 +39,7 @@ class _EffectivePerformance:
 
 @dataclass
 class _EngineerResourceState:
-    carrying_energy_unit: bool = False
+    energy_unit_credits: int = 0
 
 
 @dataclass
@@ -49,22 +49,48 @@ class _TechCoreAttempt:
     outside_zone_elapsed: float = 0.0
 
 
+@dataclass
+class _D4Attempt:
+    engineer_id: str
+    activated_at: float
+    current_step: int = 1
+    completed_core_slots: set[str] = field(default_factory=set)
+    first_core_completed_at: float | None = None
+    outside_zone_elapsed: float = 0.0
+    priority_takeover: bool = False
+
+
+@dataclass
+class _D4CoordinatorState:
+    active_team_id: str | None = None
+    pending_team_id: str | None = None
+    pending_engineer_id: str | None = None
+    priority_buffer_remaining: float = 0.0
+    priority_takeover: bool = False
+
+
 @dataclass(frozen=True)
 class _TechCoreDifficultyRule:
     available_after: float
     prerequisite: int | None
     first_level_cap: int | None
     first_periodic_gold_per_10s: int
-    repeat_periodic_gold_per_10s: int
+    repeat_periodic_gold_per_10s: int | None
     first_defense_bonus: float | None = None
+    first_base_hp_bonus: int | None = None
+    only_once: bool = False
 
 
 @dataclass
 class _TechCoreTeamState:
     completion_count_by_difficulty: dict[int, int] = field(
-        default_factory=lambda: {1: 0, 2: 0, 3: 0}
+        default_factory=lambda: {1: 0, 2: 0, 3: 0, 4: 0}
     )
     active_attempt: _TechCoreAttempt | None = None
+    d4_attempt: _D4Attempt | None = None
+    d4_retry_after: float = 0.0
+    permanently_locked_out_of_d4: bool = False
+    d4_priority_failure_gold_penalty: int = 0
 
 
 @dataclass
@@ -77,7 +103,7 @@ class _TeamStructureState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D3."""
+    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D4."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
