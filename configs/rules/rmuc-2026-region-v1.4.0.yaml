@@ -9,6 +9,23 @@ source_url: https://bbs.robomaster.com/wiki/20204847/809871?source=7
 last_verified: "2026-09-28"
 match_duration: 420
 
+economy:
+  initial_coins: 400
+  periodic_interval: 10
+  qualification_modifiers:
+    project_document: {S: 50, A: 25, B: 0, C: -25, D: -50}
+    technical_solution: {S: 150, A: 75, B: 0, C: -25, D: -50}
+  lab_pre_match_rating:
+    project_document: B
+    technical_solution: B
+  timed_grants:
+    - {elapsed: 60, coins: 50}
+    - {elapsed: 120, coins: 50}
+    - {elapsed: 180, coins: 50}
+    - {elapsed: 240, coins: 50}
+    - {elapsed: 300, coins: 50}
+    - {elapsed: 360, coins: 150}
+
 structures:
   base:
     max_hp: 5000
