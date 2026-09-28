@@ -384,6 +384,12 @@ def _draw(
         right = f"{match.team_name(opponent_team)}  {opponent_alive}/{len(opponent_robots)} alive  HP {opponent_hp}/{opponent_max_hp}"
     elif display_state.structure_statuses:
         attack_damage = dict(display_state.attack_damage)
+        coins = dict(display_state.coins)
+        economy = {
+            team_id: (gross, penalty, net)
+            for team_id, _coins, gross, penalty, net
+            in display_state.team_economy
+        }
         rebuild_opportunities = dict(display_state.rebuild_opportunities)
         structures = {
             (structure.team, structure.type): structure
@@ -393,13 +399,31 @@ def _draw(
         player_outpost = structures[(player_team, "outpost")]
         opponent_base = structures[(opponent_team, "base")]
         opponent_outpost = structures[(opponent_team, "outpost")]
+        player_gross, player_penalty, player_net = economy.get(
+            player_team, (0, 0, 0)
+        )
+        opponent_gross, opponent_penalty, opponent_net = economy.get(
+            opponent_team, (0, 0, 0)
+        )
+        player_rate = (
+            f"CORE {player_gross:+d}-{player_penalty}={player_net:+d}/10s"
+            if player_penalty
+            else f"CORE {player_net:+d}/10s"
+        )
+        opponent_rate = (
+            f"CORE {opponent_gross:+d}-{opponent_penalty}={opponent_net:+d}/10s"
+            if opponent_penalty
+            else f"CORE {opponent_net:+d}/10s"
+        )
         left = (
             f"{match.team_name(player_team)} B {player_base.hp} O {player_outpost.hp} "
+            f"C {coins.get(player_team, 0)} {player_rate} "
             f"R {rebuild_opportunities.get(player_team, 0)} "
             f"DMG {attack_damage.get(player_team, 0)}"
         )
         right = (
             f"{match.team_name(opponent_team)} B {opponent_base.hp} O {opponent_outpost.hp} "
+            f"C {coins.get(opponent_team, 0)} {opponent_rate} "
             f"R {rebuild_opportunities.get(opponent_team, 0)} "
             f"DMG {attack_damage.get(opponent_team, 0)}"
         )
