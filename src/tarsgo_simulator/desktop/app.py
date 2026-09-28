@@ -51,6 +51,12 @@ ZONE_STYLE = {
     "blue-resource": (BLUE_SUPPLY_COLOR, "RESOURCE"),
     "red-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
     "blue-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
+    "red-supply-buff": (RED_SUPPLY_COLOR, "SUPPLY BUFF"),
+    "blue-supply-buff": (BLUE_SUPPLY_COLOR, "SUPPLY BUFF"),
+    "red-base-buff": (RED_SUPPLY_COLOR, "BASE BUFF"),
+    "blue-base-buff": (BLUE_SUPPLY_COLOR, "BASE BUFF"),
+    "red-outpost-buff": (RED_SUPPLY_COLOR, "OUTPOST BUFF"),
+    "blue-outpost-buff": (BLUE_SUPPLY_COLOR, "OUTPOST BUFF"),
 }
 
 
@@ -102,6 +108,14 @@ def main(scenario_path: str | Path | None = None) -> None:
                         )
                         if event.key == pygame.K_e:
                             match.order_exchange_projectiles(robot_id)
+                        elif robot is not None and event.key == pygame.K_f:
+                            action = getattr(
+                                match.ruleset,
+                                "remote_exchange_projectiles",
+                                None,
+                            )
+                            if callable(action):
+                                action(match, robot)
                         elif robot is not None and event.key == pygame.K_g:
                             action = getattr(
                                 match.ruleset,
