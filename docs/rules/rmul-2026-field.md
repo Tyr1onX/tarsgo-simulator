@@ -2,6 +2,10 @@
 
 本文件记录 TARS-Go Simulator 对 **RoboMaster 2026 机甲大师高校联盟赛比赛规则手册 V1.2.0（2026-01-09）** 3V3 场地的二维表示边界。规则来源仍以官方 V1.2.0 手册为准；本文件不把社区 CAD、截图比例或旧版图纸当作官方尺寸来源。
 
+- 官方规则源：[RMUL 2026 比赛规则手册 V1.2.0](https://bbs-web-static.robomaster.com/b7160ccc6a6c47eb98cac2e10ca375631767932801094/RoboMaster%202026%20%E6%9C%BA%E7%94%B2%E5%A4%A7%E5%B8%88%E9%AB%98%E6%A0%A1%E8%81%94%E7%9B%9F%E8%B5%9B%E6%AF%94%E8%B5%9B%E8%A7%84%E5%88%99%E6%89%8B%E5%86%8C%20V1.2.0%EF%BC%8820260109%EF%BC%89.pdf)
+- Secondary cross-check：[Potential 战队 RMUL2026 地图开源图纸 V1.2.0 说明](https://bbs.robomaster.com/article/1639469?source=1)
+
+
 ## 证据边界
 
 本轮重新核对 V1.2.0 §3.2、§3.2.1～§3.2.4 以及图 3-1～图 3-9。可可靠确认：
