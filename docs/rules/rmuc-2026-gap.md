@@ -17,7 +17,7 @@ Regional V1.4.0 manual.
 - V1.4.0 match-result chain;
 - Hero and Infantry private Experience state;
 - complete Lv1-Lv10 Experience thresholds;
-- current per-team level cap of 5 with XP clamped at 2200;
+- initial per-team level cap of 5, with D2/D3 unlocks to 7/10;
 - deterministic Hero/Infantry committed-shot Experience;
 - known-source Robot / Outpost / Base actual-damage Experience;
 - known-source Robot kill Experience formula;
