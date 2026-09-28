@@ -5,25 +5,32 @@ player_controlled:
   - tarsgo-hero
   - tarsgo-infantry
 learning_goals:
-  - 在中央区域建立并维持控制
+  - 在 12 m × 8 m 战场二维表示中建立并维持中央区域控制
   - 观察控制区、Victory Point 和战亡扣分
-  - 用 Hero、Infantry、Sentry 阵容观察 RMUL 部分规则；地图为合成布局
+  - 用 Hero、Infantry、Sentry 阵容观察 RMUL 部分规则与场地语义
 setup:
   map:
-    width: 900
-    height: 520
+    width: 1200
+    height: 800
     obstacles: []
     zones:
-      - {id: center-control, x: 400, y: 210, width: 100, height: 100}
-      - {id: red-supply, x: 40, y: 150, width: 140, height: 220}
-      - {id: blue-supply, x: 720, y: 150, width: 140, height: 220}
+      # V1.2.0 confirms the 12 m × 8 m footprint and center-symmetric field
+      # semantics. These axis-aligned internal footprints are documented
+      # approximations because the figure dimensions could not be reliably
+      # extracted as text; see docs/rules/rmul-2026-field.md.
+      - {id: red-supply, x: 40, y: 250, width: 200, height: 300}
+      - {id: blue-supply, x: 960, y: 250, width: 200, height: 300}
+      - {id: center-control, x: 550, y: 350, width: 100, height: 100}
+      - {id: red-high-ground, x: 280, y: 200, width: 200, height: 400}
+      - {id: blue-high-ground, x: 720, y: 200, width: 200, height: 400}
   teams:
     red: tarsgo-rmul-2026
     blue: opponent-rmul-2026
   spawns:
-    tarsgo-hero: [120, 190]
-    tarsgo-infantry: [120, 260]
-    tarsgo-sentry: [120, 330]
-    opponent-hero: [780, 190]
-    opponent-infantry: [780, 260]
-    opponent-sentry: [780, 330]
+    # Synthetic placements inside the start/supply regions; not official coordinates.
+    tarsgo-hero: [120, 310]
+    tarsgo-infantry: [120, 400]
+    tarsgo-sentry: [120, 490]
+    opponent-hero: [1080, 490]
+    opponent-infantry: [1080, 400]
+    opponent-sentry: [1080, 310]
