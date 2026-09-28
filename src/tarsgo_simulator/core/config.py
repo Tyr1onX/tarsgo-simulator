@@ -26,6 +26,7 @@ class RuleMetadata:
     official_version: str | None
     source_url: str | None
     last_verified: str | None
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,15 @@ class TeamDefinition:
 
 
 @dataclass(frozen=True)
+class StructureDefinition:
+    id: str
+    type: str
+    side: str
+    team: str
+    position: tuple[float, float]
+
+
+@dataclass(frozen=True)
 class ScenarioDefinition:
     player_team: str
     player_controlled: frozenset[str]
@@ -57,6 +67,7 @@ class ScenarioDefinition:
     obstacles: tuple[Rectangle, ...]
     zones: tuple[Zone, ...]
     teams: dict[str, TeamDefinition]
+    structures: tuple[StructureDefinition, ...]
     spawns: dict[str, tuple[float, float]]
 
 
@@ -116,6 +127,10 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     if player_team not in {team.team_id for team in teams.values()}:
         raise ConfigError(f"{scenario_file}: `player_team` 必须是 setup.teams 中的一支队伍")
 
+    structures = _structures(
+        setup, scenario_file, map_width, map_height, teams
+    )
+
     player_controlled_values = _required(
         scenario_data, "player_controlled", "player_controlled", scenario_file
     )
@@ -141,6 +156,10 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     }
     if len(set(robot_ids)) != len(robot_ids):
         raise ConfigError(f"{scenario_file}: 比赛内所有机器人 id 必须全局唯一")
+    duplicate_damageable_ids = set(robot_ids) & {structure.id for structure in structures}
+    if duplicate_damageable_ids:
+        duplicates = ", ".join(sorted(duplicate_damageable_ids))
+        raise ConfigError(f"{scenario_file}: 机器人与结构 id 不得重复：{duplicates}")
     unknown_controlled = set(player_controlled_list) - set(robot_ids)
     if unknown_controlled:
         unknown = ", ".join(sorted(unknown_controlled))
@@ -169,6 +188,7 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         obstacles=obstacles,
         zones=zones,
         teams=teams,
+        structures=structures,
         spawns=spawns,
     )
     return MatchConfig(rule_document, scenario)
@@ -210,6 +230,7 @@ def _load_rule_document(
         official_version=_optional_string(data, "official_version", path),
         source_url=_optional_string(data, "source_url", path),
         last_verified=_optional_string(data, "last_verified", path),
+        stage=_optional_string(data, "stage", path),
     )
     return RuleDocument(metadata, data, path)
 
@@ -353,6 +374,59 @@ def _zones(
             raise ConfigError(f"{path}: `{field}` 超出地图边界")
         zone_ids.add(zone_id)
         result.append(zone)
+    return tuple(result)
+
+
+def _structures(
+    setup: dict[str, Any],
+    path: Path,
+    map_width: float,
+    map_height: float,
+    teams: dict[str, TeamDefinition],
+) -> tuple[StructureDefinition, ...]:
+    values = setup.get("structures", [])
+    if not isinstance(values, list):
+        raise ConfigError(f"{path}: `setup.structures` 必须是列表")
+
+    result = []
+    structure_ids: set[str] = set()
+    for index, value in enumerate(values):
+        field = f"setup.structures[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path}: `{field}` 必须是 YAML 字典")
+        if set(value) != {"id", "type", "side", "position"}:
+            raise ConfigError(
+                f"{path}: `{field}` 只能包含 id、type、side、position"
+            )
+        structure_id = _string(value, "id", f"{field}.id", path)
+        if structure_id in structure_ids:
+            raise ConfigError(f"{path}: 结构 id `{structure_id}` 重复")
+        side = _string(value, "side", f"{field}.side", path)
+        if side not in teams:
+            raise ConfigError(f"{path}: `{field}.side` 必须是 red 或 blue")
+        raw_position = _required(value, "position", f"{field}.position", path)
+        if not isinstance(raw_position, list) or len(raw_position) != 2:
+            raise ConfigError(f"{path}: `{field}.position` 必须是 [x, y]")
+        if any(
+            not isinstance(item, (int, float))
+            or isinstance(item, bool)
+            or not math.isfinite(item)
+            for item in raw_position
+        ):
+            raise ConfigError(f"{path}: `{field}.position` 必须是数字坐标")
+        position = (float(raw_position[0]), float(raw_position[1]))
+        if not (0 <= position[0] <= map_width and 0 <= position[1] <= map_height):
+            raise ConfigError(f"{path}: `{field}.position` 超出地图边界")
+        structure_ids.add(structure_id)
+        result.append(
+            StructureDefinition(
+                id=structure_id,
+                type=_string(value, "type", f"{field}.type", path),
+                side=side,
+                team=teams[side].team_id,
+                position=position,
+            )
+        )
     return tuple(result)
 
 
