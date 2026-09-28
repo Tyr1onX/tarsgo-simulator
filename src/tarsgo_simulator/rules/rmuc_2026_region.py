@@ -1439,6 +1439,7 @@ class RMUC2026RegionalRules:
         if allowance is None or allowance.allowed <= 0:
             return
         allowance.allowed -= 1
+        allowance.disengaged_elapsed = 0.0
         allowance.combat_activity_this_frame = True
 
         shot_experience = self._shot_experience.get(robot.type)
