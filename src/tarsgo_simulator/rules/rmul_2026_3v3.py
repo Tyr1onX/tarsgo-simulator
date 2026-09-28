@@ -1239,6 +1239,95 @@ def _parse_shooting_heat(
     return cooling_hz, parsed, infantry_launcher_profile
 
 
+def _parse_chassis_power(
+    document: RuleDocument,
+) -> tuple[float, float, float, dict[str, _ChassisPowerRule], str, float]:
+    data = _mapping(document.data, "chassis_power", document)
+    expected_keys = {
+        "detection_hz",
+        "buffer_energy_max",
+        "power_off_duration",
+        "robot_profiles",
+        "lab_power_demand",
+    }
+    if set(data) != expected_keys:
+        raise ConfigError(
+            f"{document.path}: chassis_power 字段不完整或包含未知字段"
+        )
+
+    detection_hz = _number(
+        data, "detection_hz", document, "chassis_power.detection_hz"
+    )
+    buffer_energy_max = _number(
+        data, "buffer_energy_max", document, "chassis_power.buffer_energy_max"
+    )
+    power_off_duration = _number(
+        data, "power_off_duration", document, "chassis_power.power_off_duration"
+    )
+
+    profiles = _mapping(data, "robot_profiles", document)
+    if set(profiles) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: chassis_power.robot_profiles 必须只包含 "
+            "hero、infantry、sentry"
+        )
+
+    demand = _mapping(data, "lab_power_demand", document)
+    if set(demand) != {"stationary", "moving"}:
+        raise ConfigError(
+            f"{document.path}: chassis_power.lab_power_demand "
+            "必须只包含 stationary、moving"
+        )
+    stationary = _nonnegative_number(
+        demand,
+        "stationary",
+        document,
+        "chassis_power.lab_power_demand.stationary",
+    )
+    moving = _mapping(demand, "moving", document)
+    if set(moving) != set(_RMUL_ROBOT_TYPES):
+        raise ConfigError(
+            f"{document.path}: chassis_power.lab_power_demand.moving "
+            "必须只包含 hero、infantry、sentry"
+        )
+
+    parsed: dict[str, _ChassisPowerRule] = {}
+    infantry_chassis_profile = ""
+    for robot_type in _RMUL_ROBOT_TYPES:
+        field = f"chassis_power.robot_profiles.{robot_type}"
+        profile = _mapping(profiles, robot_type, document)
+        expected_profile_keys = {"power_limit"}
+        if robot_type == "infantry":
+            expected_profile_keys.add("chassis_profile")
+        if set(profile) != expected_profile_keys:
+            raise ConfigError(
+                f"{document.path}: {field} 字段不完整或包含未知字段"
+            )
+        if robot_type == "infantry":
+            infantry_chassis_profile = _string(
+                profile, "chassis_profile", document, f"{field}.chassis_profile"
+            )
+        parsed[robot_type] = _ChassisPowerRule(
+            power_limit=_number(
+                profile, "power_limit", document, f"{field}.power_limit"
+            ),
+            moving_power_demand=_number(
+                moving,
+                robot_type,
+                document,
+                f"chassis_power.lab_power_demand.moving.{robot_type}",
+            ),
+        )
+
+    return (
+        detection_hz,
+        buffer_energy_max,
+        power_off_duration,
+        parsed,
+        infantry_chassis_profile,
+        stationary,
+    )
+
 def _string(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
 ) -> str:
@@ -1264,6 +1353,22 @@ def _number(
         raise ConfigError(f"{document.path}: `{field or key}` 必须是大于 0 的数字")
     return float(value)
 
+
+def _nonnegative_number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ConfigError(f"{document.path}: {field} 必须是非负数字")
+    return float(value)
 
 def _integer(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
