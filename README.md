@@ -17,7 +17,7 @@
 
 - Training-v0 Infantry 2v2：玩家可左键选择、Shift 多选或拖框选择两台己方步兵。
 - RMUL Rules Lab：双方各有 Hero、Infantry、Sentry；玩家控制己方 Hero 和 Infantry，Sentry 自动运行，对手三台由单机 AI 控制。战场使用 V1.2.0 已确认的 12 m × 8 m footprint（100 world units/m），并以二维 approximation 表示 supply/control/high-ground 语义区域。
-- RMUC 2026 Regional Rules Lab：双方各有 Hero、Engineer、Infantry ×2、Sentry，以及可受伤的 Base / Outpost。当前实现 V1.4.0 的 Base / Outpost 生命周期、420 秒胜负链、Hero / Infantry Experience + Performance，以及 Engineer Energy Unit / Tech Core D1-D3：D2 首次完成解锁 team level cap 5→7，D3 首次完成解锁 7→10。Hero 使用 long-range-priority，Infantry 使用 hp-priority chassis + cooling-priority launcher。Power / Heat Limit / Cooling 会随等级计算并展示为规则参数，但 RMUC Heat / Buffer gameplay 尚未实现。Difficulty 4、Economy / Field Buff、Drone / Radar / Dart 和 projectile physics 仍未实现。
+- RMUC 2026 Regional Rules Lab：双方各有 Hero、Engineer、Infantry ×2、Sentry，以及可受伤的 Base / Outpost。当前实现 V1.4.0 的 Base / Outpost 生命周期、420 秒胜负链、Hero / Infantry Experience + Performance，以及 Engineer Energy Unit / Tech Core D1-D4：D2 首次完成解锁 team level cap 5→7，D3 首次完成解锁 7→10；D4 实现双 Core 六步同步、45 秒总窗、跨队 Tech Core priority、普通 90 秒 retry lock 与 priority failure 永久锁定状态。Hero 使用 long-range-priority，Infantry 使用 hp-priority chassis + cooling-priority launcher。D4 的 50% Defense、Base +2000 / virtual shield、周期金币及 -25/10s penalty 仍只有 metadata，不执行 gameplay。RMUC Heat / Buffer、Economy / Field Buff、Drone / Radar / Dart 和 projectile physics 仍未实现。
 - 右键下令时，单台按指定位置移动；多台保持当前相对队形分别移动，路径会绕开障碍物。
 - Training-v0 中，对手两台步兵独立追击。
 - 机器人实体会互相阻挡，不能互相穿透或重叠。
@@ -37,7 +37,7 @@ python run_game.py --scenario configs/scenarios/rmul-2026-rules-lab.yaml
 
 完整规则边界见 [RMUL 2026 摘要](docs/rules/rmul-2026-3v3.md)、[场地二维表示](docs/rules/rmul-2026-field.md) 和 [差距分析](docs/rules/rmul-2026-gap.md)。
 
-`rmuc-2026-region-v1.4.0` 同样处于 **partial / experimental** 状态。当前 Experience 覆盖 Hero / Infantry 的 deterministic committed-shot、actual-damage 和 known-killer 路径；完整 Lv1～Lv10 Performance 表已录入。Engineer 可以在 synthetic resource zone 获取 Energy Unit，在 synthetic assembly zone 启动 Tech Core D1-D3，并通过显式 Rules Lab success confirmation 完成装配；D2/D3 首次完成分别把 team level cap 解锁至 7 / 10。装配机械位姿、Difficulty 4、周期金币、Defense Buff、Base +2000 / virtual shield、Unknown-source Experience redistribution 和动态 Heat / Buffer gameplay 均未实现。当前 2800 × 1500 Rules Lab 的 start/resource/assembly/rebuild rectangles 与 Base/Outpost 坐标都不是官方完整场地复刻。射击仍是 direct-damage approximation：17 mm 为 20 damage、42 mm 为 200 damage，没有装甲模块命中或实体弹丸。RMUC Rules Lab 中单选 Engineer 可用 `G` pickup Energy Unit，`1/2/3` start D1/D2/D3，`Enter` confirm abstracted assembly success。启动场景：
+`rmuc-2026-region-v1.4.0` 同样处于 **partial / experimental** 状态。当前 Experience 覆盖 Hero / Infantry 的 deterministic committed-shot、actual-damage 和 known-killer 路径；完整 Lv1～Lv10 Performance 表已录入。Engineer 可以在 synthetic resource zone 获取最多 2 个 rules-level Energy Unit credits，在 synthetic assembly zone 启动 Tech Core D1-D4。D4 使用 own/opponent 两个逻辑 Core slot、Step 1～6、Step 2/3/5/6 的 5 秒同步窗、45 秒总窗和跨队 15 秒 priority buffer；真实 Core pose/motion、overload/obstruction、临时激活战亡 Engineer，以及所有 Economy / Defense / Base bonus consumer 均未实现。当前 2800 × 1500 Rules Lab 的 start/resource/assembly/rebuild rectangles 与 Base/Outpost 坐标都不是官方完整场地复刻。射击仍是 direct-damage approximation：17 mm 为 20 damage、42 mm 为 200 damage，没有装甲模块命中或实体弹丸。RMUC Rules Lab 中单选 Engineer 可用 `G` pickup credit，`1/2/3/4` start/request D1-D4，`Enter` confirm D1-D3，`Q/W` confirm 当前 D4 step 的 own/opponent Core。启动场景：
 
 ```bash
 python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
