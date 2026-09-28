@@ -810,6 +810,7 @@ class RMUC2026RegionalRules:
         self._level_cap_by_team: dict[str, int] = {}
         self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
         self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
+        self._d4_coordinator = _D4CoordinatorState()
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
 
@@ -891,6 +892,7 @@ class RMUC2026RegionalRules:
                     state.completion_count_by_difficulty[1],
                     state.completion_count_by_difficulty[2],
                     state.completion_count_by_difficulty[3],
+                    state.completion_count_by_difficulty[4],
                     (
                         state.active_attempt.difficulty
                         if state.active_attempt is not None
@@ -907,11 +909,44 @@ class RMUC2026RegionalRules:
             engineer_energy_units=tuple(
                 (
                     engineer_id,
-                    state.carrying_energy_unit,
+                    state.energy_unit_credits,
                 )
                 for engineer_id, state in sorted(
                     self._engineer_resources_by_id.items()
                 )
+            ),
+            d4_status=tuple(
+                (
+                    team_id,
+                    (
+                        "complete"
+                        if state.completion_count_by_difficulty[4] >= 1
+                        else "active"
+                        if self._d4_coordinator.active_team_id == team_id
+                        else "pending"
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else "locked"
+                        if state.permanently_locked_out_of_d4
+                        else "idle"
+                    ),
+                    state.d4_attempt.current_step if state.d4_attempt is not None else 0,
+                    state.d4_attempt.activated_at if state.d4_attempt is not None else 0.0,
+                    (
+                        state.d4_attempt.first_core_completed_at
+                        if state.d4_attempt is not None
+                        and state.d4_attempt.first_core_completed_at is not None
+                        else -1.0
+                    ),
+                    (
+                        self._d4_coordinator.priority_buffer_remaining
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else 0.0
+                    ),
+                    state.d4_retry_after,
+                    state.permanently_locked_out_of_d4,
+                    state.d4_priority_failure_gold_penalty,
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
             ),
         )
 
