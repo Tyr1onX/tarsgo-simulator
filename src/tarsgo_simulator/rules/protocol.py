@@ -51,6 +51,8 @@ class RuleSetDisplayState:
     structure_statuses: tuple[tuple[str, int, int, str], ...] = ()
     rebuild_opportunities: tuple[tuple[str, int], ...] = ()
     rebuild_progress: tuple[tuple[str, str, float, float], ...] = ()
+    robot_progression: tuple[tuple[str, int, float, int], ...] = ()
+    robot_performance: tuple[tuple[str, int, int, int, int], ...] = ()
 
 
 class RuleSet(Protocol):
