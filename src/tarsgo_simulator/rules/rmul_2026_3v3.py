@@ -493,6 +493,8 @@ class RMUL2026Rules:
                     state.power_off_remaining = max(
                         0.0, state.power_off_remaining - tick_duration
                     )
+                    if state.power_off_remaining <= 1e-9:
+                        state.power_off_remaining = 0.0
 
         for robot in match.robots:
             state = self._robot_chassis_states[robot.id]
@@ -1328,6 +1330,7 @@ def _parse_chassis_power(
         stationary,
     )
 
+
 def _string(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
 ) -> str:
@@ -1369,6 +1372,7 @@ def _nonnegative_number(
     ):
         raise ConfigError(f"{document.path}: {field} 必须是非负数字")
     return float(value)
+
 
 def _integer(
     data: Mapping[str, Any], key: str, document: RuleDocument, field: str
