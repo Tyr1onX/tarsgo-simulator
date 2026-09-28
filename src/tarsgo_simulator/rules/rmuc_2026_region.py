@@ -38,6 +38,36 @@ class _EffectivePerformance:
 
 
 @dataclass
+class _EngineerResourceState:
+    carrying_energy_unit: bool = False
+
+
+@dataclass
+class _TechCoreAttempt:
+    engineer_id: str
+    difficulty: int
+    outside_zone_elapsed: float = 0.0
+
+
+@dataclass(frozen=True)
+class _TechCoreDifficultyRule:
+    available_after: float
+    prerequisite: int | None
+    first_level_cap: int | None
+    first_periodic_gold_per_10s: int
+    repeat_periodic_gold_per_10s: int
+    first_defense_bonus: float | None = None
+
+
+@dataclass
+class _TechCoreTeamState:
+    completion_count_by_difficulty: dict[int, int] = field(
+        default_factory=lambda: {1: 0, 2: 0, 3: 0}
+    )
+    active_attempt: _TechCoreAttempt | None = None
+
+
+@dataclass
 class _TeamStructureState:
     outpost_ever_destroyed: bool = False
     base_damage_lost: int = 0
@@ -47,7 +77,7 @@ class _TeamStructureState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 regional rules slice without experience/performance or full economy."""
+    """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D3."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
