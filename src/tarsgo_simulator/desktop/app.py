@@ -387,12 +387,29 @@ def _draw(
     screen.blit(right_surface, (screen.get_width() - WINDOW_MARGIN - right_surface.get_width(), 22))
     if display_state is not None:
         if display_state.structure_statuses:
+            tech_core_status = {
+                team_id: (cap, d1, d2, d3, active, outside)
+                for team_id, cap, d1, d2, d3, active, outside
+                in display_state.tech_core_status
+            }
+            core_state = tech_core_status.get(player_team)
+            if core_state is not None:
+                cap, d1, d2, d3, active, outside = core_state
+                if active is None:
+                    detail = f"CORE CAP:{cap} D1:{d1} D2:{d2} D3:{d3}"
+                else:
+                    detail = f"CORE D{active} ACTIVE CAP:{cap}"
+                    if outside > 0:
+                        detail = f"{detail} OUT {outside:.1f}/15"
+            else:
+                detail = "CORE unavailable"
             progress_parts = [
                 f"{robot_id} {progress:.1f}/{required:g}s"
                 for _team_id, robot_id, progress, required
                 in display_state.rebuild_progress
             ]
-            detail = "Rebuild: " + ", ".join(progress_parts) if progress_parts else "Rebuild: idle"
+            if progress_parts:
+                detail = f"{detail} | Rebuild: " + ", ".join(progress_parts)
         else:
             control_owner = (
                 match.team_name(display_state.control_owner)
@@ -512,6 +529,11 @@ def _draw(
         if display_state is not None
         else {}
     )
+    engineer_energy_units = (
+        dict(display_state.engineer_energy_units)
+        if display_state is not None
+        else {}
+    )
 
     for robot in match.robots:
         center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
@@ -539,6 +561,8 @@ def _draw(
                 robot_label = f"{robot_label} L{level} MAX"
             else:
                 robot_label = f"{robot_label} L{level} XP:{experience:g}"
+        if engineer_energy_units.get(robot.id):
+            robot_label = f"{robot_label} EU"
         if robot.id in projectile_counts:
             robot_label = f"{robot_label} {projectile_counts[robot.id]}"
         heat_state = shooting_heat.get(robot.id)
