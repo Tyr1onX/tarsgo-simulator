@@ -26,6 +26,41 @@ outpost_rebuild:
     red: red-outpost-rebuild
     blue: blue-outpost-rebuild
 
+tech_core:
+  leave_zone_fail_after: 15
+  zones:
+    red:
+      resource: red-resource
+      assembly: red-assembly
+    blue:
+      resource: blue-resource
+      assembly: blue-assembly
+  difficulties:
+    1:
+      available_after: 0
+      prerequisite: null
+      first:
+        periodic_gold_per_10s: 50
+      repeat:
+        periodic_gold_per_10s: 5
+    2:
+      available_after: 60
+      prerequisite: 1
+      first:
+        level_cap: 7
+        periodic_gold_per_10s: 25
+      repeat:
+        periodic_gold_per_10s: 10
+    3:
+      available_after: 120
+      prerequisite: 2
+      first:
+        level_cap: 10
+        defense_bonus: 0.25
+        periodic_gold_per_10s: 25
+      repeat:
+        periodic_gold_per_10s: 15
+
 experience:
   level_thresholds:
     - {level: 1, experience: 0}
