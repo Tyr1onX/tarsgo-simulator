@@ -102,6 +102,13 @@ class _TeamStructureState:
     base_armor_deployed: bool = False
 
 
+@dataclass
+class _TeamEconomyState:
+    coins: int = 0
+    tech_core_periodic_gold_per_10s: int = 0
+    d4_priority_penalty_active_from: float | None = None
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 regional Rules Lab slice with progression and Tech Core D1-D4."""
 
@@ -127,6 +134,144 @@ class RMUC2026RegionalRules:
         self._time_limit = _number(
             document.data, "match_duration", document, "match_duration"
         )
+
+        economy = _mapping(document.data, "economy", document)
+        if set(economy) != {
+            "initial_coins",
+            "periodic_interval",
+            "qualification_modifiers",
+            "lab_pre_match_rating",
+            "timed_grants",
+        }:
+            raise ConfigError(
+                f"{document.path}: `economy` 字段不完整或包含未知字段"
+            )
+        self._economy_initial_coins = _nonnegative_integer(
+            economy,
+            "initial_coins",
+            document,
+            "economy.initial_coins",
+        )
+        if self._economy_initial_coins != 400:
+            raise ConfigError(
+                f"{document.path}: RMUC 2026 Regional 初始金币必须为 400"
+            )
+
+        periodic_interval = _positive_integer(
+            economy,
+            "periodic_interval",
+            document,
+            "economy.periodic_interval",
+        )
+        if periodic_interval != 10:
+            raise ConfigError(
+                f"{document.path}: `economy.periodic_interval` 必须为 10 秒"
+            )
+        self._economy_periodic_interval = float(periodic_interval)
+
+        qualification_modifiers = _mapping(
+            economy, "qualification_modifiers", document
+        )
+        if set(qualification_modifiers) != {
+            "project_document",
+            "technical_solution",
+        }:
+            raise ConfigError(
+                f"{document.path}: `economy.qualification_modifiers` "
+                "必须包含 project_document、technical_solution"
+            )
+        expected_rating_modifiers = {
+            "project_document": {"S": 50, "A": 25, "B": 0, "C": -25, "D": -50},
+            "technical_solution": {"S": 150, "A": 75, "B": 0, "C": -25, "D": -50},
+        }
+        self._economy_rating_modifiers: dict[str, dict[str, int]] = {}
+        for category, expected in expected_rating_modifiers.items():
+            raw_table = _mapping(
+                qualification_modifiers,
+                category,
+                document,
+            )
+            if set(raw_table) != {"S", "A", "B", "C", "D"}:
+                raise ConfigError(
+                    f"{document.path}: `economy.qualification_modifiers.{category}` "
+                    "必须完整包含 S/A/B/C/D"
+                )
+            parsed = {
+                rating: _integer(
+                    raw_table,
+                    rating,
+                    document,
+                    f"economy.qualification_modifiers.{category}.{rating}",
+                )
+                for rating in ("S", "A", "B", "C", "D")
+            }
+            if parsed != expected:
+                raise ConfigError(
+                    f"{document.path}: `economy.qualification_modifiers.{category}` "
+                    "与 RMUC 2026 Regional V1.4.0 不匹配"
+                )
+            self._economy_rating_modifiers[category] = parsed
+
+        lab_rating = _mapping(economy, "lab_pre_match_rating", document)
+        if set(lab_rating) != {"project_document", "technical_solution"}:
+            raise ConfigError(
+                f"{document.path}: `economy.lab_pre_match_rating` "
+                "必须包含 project_document、technical_solution"
+            )
+        self._economy_lab_rating = {}
+        for category in ("project_document", "technical_solution"):
+            rating = _string(
+                lab_rating,
+                category,
+                document,
+                f"economy.lab_pre_match_rating.{category}",
+            )
+            if rating not in {"S", "A", "B", "C", "D"}:
+                raise ConfigError(
+                    f"{document.path}: `economy.lab_pre_match_rating.{category}` "
+                    "必须是 S/A/B/C/D"
+                )
+            self._economy_lab_rating[category] = rating
+
+        raw_timed_grants = economy.get("timed_grants")
+        if not isinstance(raw_timed_grants, list) or not raw_timed_grants:
+            raise ConfigError(
+                f"{document.path}: `economy.timed_grants` 必须是非空列表"
+            )
+        timed_grants: list[tuple[float, int]] = []
+        previous_elapsed = -1.0
+        for index, row in enumerate(raw_timed_grants):
+            field = f"economy.timed_grants[{index}]"
+            if not isinstance(row, dict) or set(row) != {"elapsed", "coins"}:
+                raise ConfigError(
+                    f"{document.path}: `{field}` 必须只包含 elapsed、coins"
+                )
+            elapsed = _number(row, "elapsed", document, f"{field}.elapsed")
+            coins = _positive_integer(row, "coins", document, f"{field}.coins")
+            if elapsed <= previous_elapsed:
+                raise ConfigError(
+                    f"{document.path}: `economy.timed_grants` elapsed 必须严格递增"
+                )
+            if elapsed >= self._time_limit:
+                raise ConfigError(
+                    f"{document.path}: `{field}.elapsed` 必须小于比赛时长"
+                )
+            timed_grants.append((elapsed, coins))
+            previous_elapsed = elapsed
+        expected_timed_grants = (
+            (60.0, 50),
+            (120.0, 50),
+            (180.0, 50),
+            (240.0, 50),
+            (300.0, 50),
+            (360.0, 150),
+        )
+        if tuple(timed_grants) != expected_timed_grants:
+            raise ConfigError(
+                f"{document.path}: `economy.timed_grants` "
+                "与 RMUC 2026 Regional V1.4.0 不匹配"
+            )
+        self._economy_timed_grants = tuple(timed_grants)
 
         structures = _mapping(document.data, "structures", document)
         if set(structures) != {"base", "outpost"}:
@@ -811,6 +956,9 @@ class RMUC2026RegionalRules:
         self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
         self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
         self._d4_coordinator = _D4CoordinatorState()
+        self._economy_by_team: dict[str, _TeamEconomyState] = {}
+        self._next_timed_gold_grant_index = 0
+        self._next_periodic_gold_tick = self._economy_periodic_interval
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
 
