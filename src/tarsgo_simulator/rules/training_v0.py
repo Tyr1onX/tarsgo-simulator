@@ -40,6 +40,9 @@ class TrainingV0Rules:
             raise ConfigError(f"training-v0 不支持机器人类型 `{robot_type}`")
         return self._infantry
 
+    def can_move(self, robot: Robot) -> bool:
+        return robot.alive
+
     def can_attack(self, robot: Robot) -> bool:
         return robot.alive
 
@@ -52,6 +55,9 @@ class TrainingV0Rules:
 
     def can_receive_damage(self, robot: Robot) -> bool:
         return robot.alive
+
+    def prepare_movement(self, match: "Match", dt: float) -> None:
+        """Training V0 has no chassis buffer state to advance."""
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
         """Training V0 has no shooting heat to advance."""
