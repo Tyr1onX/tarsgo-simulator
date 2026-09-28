@@ -9,7 +9,8 @@ from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import find_path
 from tarsgo_simulator.core.robot import MovementProposal, Robot
-from tarsgo_simulator.rules.protocol import MatchResult, RuleSet
+from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.rules.protocol import DamageableTarget, MatchResult, RuleSet
 from tarsgo_simulator.rules.registry import create_ruleset
 
 
@@ -61,6 +62,19 @@ class Match:
                     type=definition.type,
                 )
             )
+        self.structures: list[Structure] = []
+        for definition in scenario.structures:
+            parameters = self.ruleset.structure_parameters(definition.type)
+            self.structures.append(
+                Structure(
+                    id=definition.id,
+                    team=definition.team,
+                    type=definition.type,
+                    position=definition.position,
+                    hp=parameters.max_hp,
+                    max_hp=parameters.max_hp,
+                )
+            )
         self._validate_spawn_separation()
         self.elapsed_time = 0.0
         self.finished = False
@@ -101,7 +115,7 @@ class Match:
 
     def apply_damage(
         self,
-        target: Robot,
+        target: DamageableTarget,
         amount: int,
         *,
         source_robot: Robot | None = None,
@@ -109,10 +123,12 @@ class Match:
         bypass_invincibility: bool = False,
     ) -> int:
         """Apply HP loss and emit its damage and destruction facts exactly once."""
+        is_robot = any(robot is target for robot in self.robots)
+        is_structure = any(structure is target for structure in self.structures)
         if (
             self.finished
             or amount <= 0
-            or not any(robot is target for robot in self.robots)
+            or not (is_robot or is_structure)
             or not target.alive
         ):
             return 0
@@ -126,18 +142,30 @@ class Match:
         target.hp = max(0, previous_hp - amount)
         if target.hp == 0:
             target.alive = False
-            target.path.clear()
+            if isinstance(target, Robot):
+                target.path.clear()
 
         actual_damage = previous_hp - target.hp
         event_time = self.elapsed_time
         if self._active_update_start_time is not None and self._active_update_dt is not None:
             event_time = self._active_update_start_time + self._active_update_dt
+        damaged_event = (
+            MatchEventType.ROBOT_DAMAGED
+            if is_robot
+            else MatchEventType.STRUCTURE_DAMAGED
+        )
+        destroyed_event = (
+            MatchEventType.ROBOT_DESTROYED
+            if is_robot
+            else MatchEventType.STRUCTURE_DESTROYED
+        )
         if actual_damage > 0:
             self.current_events.append(
                 MatchEvent(
-                    type=MatchEventType.ROBOT_DAMAGED,
+                    type=damaged_event,
                     time=event_time,
-                    robot_id=target.id,
+                    robot_id=target.id if is_robot else None,
+                    structure_id=target.id if is_structure else None,
                     team_id=target.team,
                     attacker_id=source_robot.id if source_robot else None,
                     attacker_team_id=source_team_id,
@@ -147,9 +175,10 @@ class Match:
         if was_alive and not target.alive:
             self.current_events.append(
                 MatchEvent(
-                    type=MatchEventType.ROBOT_DESTROYED,
+                    type=destroyed_event,
                     time=event_time,
-                    robot_id=target.id,
+                    robot_id=target.id if is_robot else None,
+                    structure_id=target.id if is_structure else None,
                     team_id=target.team,
                 )
             )
@@ -221,8 +250,10 @@ class Match:
             self.ruleset.prepare_combat(self, dt)
             update_combat(
                 self.robots,
+                self.structures,
                 self.map,
                 can_attack=self.ruleset.can_attack,
+                can_target=self.ruleset.can_target,
                 on_attack_committed=self.ruleset.on_attack_committed,
                 apply_damage=lambda target, amount, attacker: self.apply_damage(
                     target, amount, source_robot=attacker
