@@ -2043,7 +2043,7 @@ def test_match_damage_entry_enforces_invincibility_unless_penalty_bypasses_it() 
 def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     match = _rules_lab_match()
     robot = _complete_rmul_respawn(match, RMUL_HERO)
-    robot.position = (450.0, 260.0)
+    robot.position = _zone_center(match, "center-control")
 
     match.update(0.0)
     assert match.ruleset.control_owner is None
@@ -2061,9 +2061,9 @@ def test_rmul_weak_excludes_control_until_supply_zone_clears_state() -> None:
     assert match.ruleset.can_attack(robot)
     assert match.ruleset.can_receive_damage(robot)
 
-    robot.position = (450.0, 260.0)
+    robot.position = _zone_center(match, "center-control")
     opponent = _robot(match, RMUL_OPPONENT_HERO)
-    opponent.position = (550.0, 260.0)
+    opponent.position = (700.0, 400.0)
     robot.attack_cooldown = 0
     opponent.attack_cooldown = 0
     match.ruleset.allowed_projectiles_by_robot[RMUL_OPPONENT_HERO] = 1
@@ -2121,7 +2121,7 @@ def test_rmul_reset_clears_repeated_death_and_temporary_lifecycle_state() -> Non
     assert match.ruleset._robot_lifecycles[RMUL_HERO].weak
     assert match.ruleset._robot_lifecycles[RMUL_HERO].invincible_remaining == 30
 
-    _robot(match, RMUL_INFANTRY).position = (450.0, 260.0)
+    _robot(match, RMUL_INFANTRY).position = _zone_center(match, "center-control")
     match.update(0.01)
     assert match.ruleset.control_owner == RMUL_TARS_TEAM
     assert match.ruleset.victory_points[RMUL_TARS_TEAM] == 160
