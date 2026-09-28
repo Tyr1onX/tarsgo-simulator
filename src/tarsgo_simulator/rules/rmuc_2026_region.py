@@ -161,6 +161,155 @@ class RMUC2026RegionalRules:
                 f"{document.path}: red / blue 前哨站重建区必须使用不同 zone id"
             )
 
+        tech_core = _mapping(document.data, "tech_core", document)
+        if set(tech_core) != {"leave_zone_fail_after", "zones", "difficulties"}:
+            raise ConfigError(
+                f"{document.path}: `tech_core` 字段不完整或包含未知字段"
+            )
+        self._tech_core_leave_zone_fail_after = _number(
+            tech_core,
+            "leave_zone_fail_after",
+            document,
+            "tech_core.leave_zone_fail_after",
+        )
+
+        tech_core_zones = _mapping(tech_core, "zones", document)
+        if set(tech_core_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `tech_core.zones` 必须包含 red、blue"
+            )
+        self._tech_core_zone_ids: dict[str, dict[str, str]] = {}
+        for side in ("red", "blue"):
+            side_zones = _mapping(tech_core_zones, side, document)
+            if set(side_zones) != {"resource", "assembly"}:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.zones.{side}` "
+                    "必须只包含 resource、assembly"
+                )
+            self._tech_core_zone_ids[side] = {
+                zone_type: _string(
+                    side_zones,
+                    zone_type,
+                    document,
+                    f"tech_core.zones.{side}.{zone_type}",
+                )
+                for zone_type in ("resource", "assembly")
+            }
+        all_tech_core_zone_ids = {
+            zone_id
+            for side_zones in self._tech_core_zone_ids.values()
+            for zone_id in side_zones.values()
+        }
+        if len(all_tech_core_zone_ids) != 4:
+            raise ConfigError(
+                f"{document.path}: Tech Core resource / assembly zone id 必须互不相同"
+            )
+
+        raw_difficulties = _mapping(tech_core, "difficulties", document)
+        if set(raw_difficulties) != {1, 2, 3}:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties` 本轮必须且只能包含 1、2、3"
+            )
+        self._tech_core_difficulties: dict[int, _TechCoreDifficultyRule] = {}
+        for difficulty in (1, 2, 3):
+            raw_rule = raw_difficulties.get(difficulty)
+            if not isinstance(raw_rule, dict) or set(raw_rule) != {
+                "available_after",
+                "prerequisite",
+                "first",
+                "repeat",
+            }:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}` "
+                    "字段不完整或包含未知字段"
+                )
+            available_after = _nonnegative_number(
+                raw_rule,
+                "available_after",
+                document,
+                f"tech_core.difficulties.{difficulty}.available_after",
+            )
+            prerequisite = raw_rule.get("prerequisite")
+            expected_prerequisite = None if difficulty == 1 else difficulty - 1
+            if prerequisite != expected_prerequisite:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.prerequisite` "
+                    f"必须是 {expected_prerequisite}"
+                )
+
+            first = _mapping(
+                raw_rule,
+                "first",
+                document,
+            )
+            repeat = _mapping(
+                raw_rule,
+                "repeat",
+                document,
+            )
+            if set(repeat) != {"periodic_gold_per_10s"}:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.repeat` "
+                    "本轮只保存 periodic_gold_per_10s metadata"
+                )
+            repeat_gold = _positive_integer(
+                repeat,
+                "periodic_gold_per_10s",
+                document,
+                f"tech_core.difficulties.{difficulty}.repeat.periodic_gold_per_10s",
+            )
+
+            expected_first_fields = {"periodic_gold_per_10s"}
+            if difficulty in {2, 3}:
+                expected_first_fields.add("level_cap")
+            if difficulty == 3:
+                expected_first_fields.add("defense_bonus")
+            if set(first) != expected_first_fields:
+                raise ConfigError(
+                    f"{document.path}: `tech_core.difficulties.{difficulty}.first` "
+                    "字段与当前 V1.4.0 slice 不匹配"
+                )
+            first_gold = _positive_integer(
+                first,
+                "periodic_gold_per_10s",
+                document,
+                f"tech_core.difficulties.{difficulty}.first.periodic_gold_per_10s",
+            )
+            first_level_cap = None
+            if difficulty in {2, 3}:
+                first_level_cap = _positive_integer(
+                    first,
+                    "level_cap",
+                    document,
+                    f"tech_core.difficulties.{difficulty}.first.level_cap",
+                )
+            first_defense_bonus = None
+            if difficulty == 3:
+                first_defense_bonus = _fraction(
+                    first,
+                    "defense_bonus",
+                    document,
+                    "tech_core.difficulties.3.first.defense_bonus",
+                )
+
+            self._tech_core_difficulties[difficulty] = _TechCoreDifficultyRule(
+                available_after=available_after,
+                prerequisite=prerequisite,
+                first_level_cap=first_level_cap,
+                first_periodic_gold_per_10s=first_gold,
+                repeat_periodic_gold_per_10s=repeat_gold,
+                first_defense_bonus=first_defense_bonus,
+            )
+
+        if self._tech_core_difficulties[2].first_level_cap != 7:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
+            )
+        if self._tech_core_difficulties[3].first_level_cap != 10:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 3 first level_cap 必须为 10"
+            )
+
         experience = _mapping(document.data, "experience", document)
         expected_experience_keys = {
             "level_thresholds",
