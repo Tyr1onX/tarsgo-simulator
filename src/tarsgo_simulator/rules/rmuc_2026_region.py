@@ -1010,6 +1010,7 @@ class RMUC2026RegionalRules:
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._advance_tech_core_attempts(match, dt)
 
         frame_start = match.elapsed_time - dt
         active_rebuild_dt = max(
@@ -1141,6 +1142,16 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                resource_state = self._engineer_resources_by_id.get(event.robot_id)
+                if resource_state is not None:
+                    resource_state.carrying_energy_unit = False
+                    team_state = self._tech_core_by_team.get(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.active_attempt is not None
+                        and team_state.active_attempt.engineer_id == event.robot_id
+                    ):
+                        team_state.active_attempt = None
                 continue
 
             if event.type == MatchEventType.STRUCTURE_DAMAGED:
@@ -1182,6 +1193,38 @@ class RMUC2026RegionalRules:
                 state = self._team_states[structure.team]
                 state.outpost_ever_destroyed = True
                 state.rebuild_progress_by_robot.clear()
+
+    def _advance_tech_core_attempts(self, match: "Match", dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, team_state in self._tech_core_by_team.items():
+            attempt = team_state.active_attempt
+            if attempt is None:
+                continue
+            engineer = self._robots_by_id.get(attempt.engineer_id)
+            if engineer is None or not engineer.alive:
+                self._fail_tech_core_attempt(team_id)
+                continue
+            assembly_zone = self._assembly_zone_by_team[team_id]
+            if assembly_zone.contains(engineer.position):
+                attempt.outside_zone_elapsed = 0.0
+                continue
+            attempt.outside_zone_elapsed += dt
+            if (
+                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                self._fail_tech_core_attempt(team_id)
+
+    def _fail_tech_core_attempt(self, team_id: str) -> None:
+        team_state = self._tech_core_by_team.get(team_id)
+        if team_state is None or team_state.active_attempt is None:
+            return
+        engineer_id = team_state.active_attempt.engineer_id
+        team_state.active_attempt = None
+        resource_state = self._engineer_resources_by_id.get(engineer_id)
+        if resource_state is not None:
+            resource_state.carrying_energy_unit = False
 
     def _advance_rebuild(self, match: "Match", dt: float) -> None:
         if dt <= 0:
