@@ -617,6 +617,14 @@ class RMUL2026Rules:
             robot.id: _RobotShootingState() for robot in match.robots
         }
         self._heat_cooling_accumulator = 0.0
+        self._robot_chassis_states = {
+            robot.id: _RobotChassisState(buffer_energy=self._buffer_energy_max)
+            for robot in match.robots
+        }
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot = {
+            robot.id: self._stationary_power_demand for robot in match.robots
+        }
         self.victory_points = {
             team.team_id: self._initial_victory_points
             for team in match.config.scenario.teams.values()
@@ -727,6 +735,14 @@ class RMUL2026Rules:
             if shooting is not None:
                 shooting.heat = 0.0
                 shooting.heat_locked = False
+            chassis = self._robot_chassis_states.get(event.robot_id)
+            if chassis is not None:
+                chassis.buffer_energy = self._buffer_energy_max
+                chassis.power_off_remaining = 0.0
+                chassis.blocked_this_frame = False
+                self._current_synthetic_power_by_robot[event.robot_id] = (
+                    self._stationary_power_demand
+                )
             lifecycle = self._robot_lifecycles.get(event.robot_id)
             if lifecycle is not None:
                 penalty = self._robot_penalties[event.robot_id]
