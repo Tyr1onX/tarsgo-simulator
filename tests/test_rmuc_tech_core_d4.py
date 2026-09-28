@@ -456,7 +456,7 @@ def test_priority_takeover_failure_permanently_locks_d4_and_records_penalty() ->
     _give_credits(match, red, 2)
     match.elapsed_time += 200.0
     assert not match.ruleset.start_tech_core_assembly(match, red, 4)
-    assert match.ruleset.display_state.coins == ()
+    assert match.ruleset._periodic_gold_rate(RED)[1:] == (25, -25)
 
 
 def test_engineer_death_fails_active_d4_with_normal_lockout() -> None:
@@ -519,7 +519,7 @@ def test_active_d4_outside_timer_resets_when_engineer_returns() -> None:
     assert match.ruleset._tech_core_by_team[RED].d4_attempt is not None
 
 
-def test_d4_success_does_not_apply_reward_gameplay() -> None:
+def test_d4_success_applies_only_periodic_gold_reward_gameplay() -> None:
     match = _match()
     engineer = _robot(match, "tarsgo-engineer")
     target = _robot(match, "tarsgo-infantry-1")
@@ -534,7 +534,7 @@ def test_d4_success_does_not_apply_reward_gameplay() -> None:
     )
     assert (red_base.hp, red_base.max_hp) == (5000, 5000)
     assert not hasattr(red_base, "shield")
-    assert match.ruleset.display_state.coins == ()
+    assert match.ruleset._periodic_gold_rate(RED) == (50, 0, 50)
 
     before = target.hp
     assert match.apply_damage(target, 20, source_team_id=BLUE) == 20
