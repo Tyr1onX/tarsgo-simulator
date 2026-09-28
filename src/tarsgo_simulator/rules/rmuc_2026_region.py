@@ -1339,6 +1339,7 @@ class RMUC2026RegionalRules:
         self._tech_core_by_team = {
             team_id: _TechCoreTeamState() for team_id in team_by_side.values()
         }
+        self._d4_coordinator = _D4CoordinatorState()
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
             for robot in match.robots
@@ -1399,6 +1400,7 @@ class RMUC2026RegionalRules:
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
         self._advance_tech_core_attempts(match, dt)
+        self._advance_d4(match, dt)
 
         frame_start = match.elapsed_time - dt
         active_rebuild_dt = max(
@@ -1532,14 +1534,24 @@ class RMUC2026RegionalRules:
                 self._grant_kill_experience(event)
                 resource_state = self._engineer_resources_by_id.get(event.robot_id)
                 if resource_state is not None:
-                    resource_state.carrying_energy_unit = False
+                    resource_state.energy_unit_credits = 0
                     team_state = self._tech_core_by_team.get(event.team_id)
                     if (
                         team_state is not None
                         and team_state.active_attempt is not None
                         and team_state.active_attempt.engineer_id == event.robot_id
                     ):
-                        team_state.active_attempt = None
+                        self._fail_tech_core_attempt(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.d4_attempt is not None
+                        and team_state.d4_attempt.engineer_id == event.robot_id
+                    ):
+                        self._fail_d4_attempt(
+                            event.team_id,
+                            match.elapsed_time,
+                            "engineer-destroyed",
+                        )
                 continue
 
             if event.type == MatchEventType.STRUCTURE_DAMAGED:
@@ -1608,11 +1620,89 @@ class RMUC2026RegionalRules:
         team_state = self._tech_core_by_team.get(team_id)
         if team_state is None or team_state.active_attempt is None:
             return
-        engineer_id = team_state.active_attempt.engineer_id
+        # The attempt's one Energy Unit credit was reserved at start.
+        # Failure consumes that reservation but preserves any unreserved credit.
         team_state.active_attempt = None
-        resource_state = self._engineer_resources_by_id.get(engineer_id)
-        if resource_state is not None:
-            resource_state.carrying_energy_unit = False
+
+    def _advance_d4(self, match: "Match", dt: float) -> None:
+        coordinator = self._d4_coordinator
+        if coordinator.pending_team_id is not None:
+            remaining_before = coordinator.priority_buffer_remaining
+            if dt + 1e-9 < remaining_before:
+                coordinator.priority_buffer_remaining = max(
+                    0.0,
+                    remaining_before - dt,
+                )
+                return
+
+            pending_team_id = coordinator.pending_team_id
+            pending_engineer_id = coordinator.pending_engineer_id
+            priority_takeover = coordinator.priority_takeover
+            leftover_dt = max(0.0, dt - remaining_before)
+            activation_time = match.elapsed_time - leftover_dt
+
+            other_team_id = next(
+                team_id
+                for team_id in self._tech_core_by_team
+                if team_id != pending_team_id
+            )
+            if self._tech_core_by_team[other_team_id].active_attempt is not None:
+                self._fail_tech_core_attempt(other_team_id)
+
+            if pending_engineer_id is None:
+                raise RuntimeError("D4 pending request missing engineer id")
+            self._activate_d4(
+                team_id=pending_team_id,
+                engineer_id=pending_engineer_id,
+                activated_at=activation_time,
+                priority_takeover=priority_takeover,
+            )
+            self._advance_active_d4(match, leftover_dt)
+            return
+
+        if coordinator.active_team_id is not None:
+            self._advance_active_d4(match, dt)
+
+    def _advance_active_d4(self, match: "Match", dt: float) -> None:
+        team_id = self._d4_coordinator.active_team_id
+        if team_id is None:
+            return
+        team_state = self._tech_core_by_team[team_id]
+        attempt = team_state.d4_attempt
+        if attempt is None:
+            self._d4_coordinator.active_team_id = None
+            return
+
+        engineer = self._robots_by_id.get(attempt.engineer_id)
+        if engineer is None or not engineer.alive:
+            self._fail_d4_attempt(team_id, match.elapsed_time, "engineer-destroyed")
+            return
+
+        assembly_zone = self._assembly_zone_by_team[team_id]
+        if assembly_zone.contains(engineer.position):
+            attempt.outside_zone_elapsed = 0.0
+        else:
+            attempt.outside_zone_elapsed += max(0.0, dt)
+            if (
+                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                self._fail_d4_attempt(team_id, match.elapsed_time, "left-assembly")
+                return
+
+        if (
+            attempt.first_core_completed_at is not None
+            and match.elapsed_time - attempt.first_core_completed_at
+            > self._d4_paired_step_window + 1e-9
+        ):
+            self._fail_d4_attempt(team_id, match.elapsed_time, "pair-timeout")
+            return
+
+        if (
+            match.elapsed_time - attempt.activated_at
+            > self._d4_total_window + 1e-9
+        ):
+            self._fail_d4_attempt(team_id, match.elapsed_time, "total-timeout")
 
     def _advance_rebuild(self, match: "Match", dt: float) -> None:
         if dt <= 0:
