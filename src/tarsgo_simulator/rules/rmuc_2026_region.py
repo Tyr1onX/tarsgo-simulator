@@ -1,4 +1,4 @@
-"""Partial RMUC 2026 Regional V1.4.0 rules including Experience/Performance."""
+"""Partial RMUC 2026 Regional V1.4.0 rules including progression and Tech Core."""
 
 from dataclasses import dataclass, field
 import math
