@@ -321,6 +321,15 @@ def _draw(
         if display_state is not None
         else {}
     )
+    shooting_heat = (
+        {
+            robot_id: (heat, limit, locked, permanently_locked)
+            for robot_id, heat, limit, locked, permanently_locked
+            in display_state.robot_shooting_heat
+        }
+        if display_state is not None
+        else {}
+    )
 
     for robot in match.robots:
         center = (
@@ -343,6 +352,11 @@ def _draw(
         robot_label = labels[robot.id]
         if robot.id in projectile_counts:
             robot_label = f"{robot_label} {projectile_counts[robot.id]}"
+        heat_state = shooting_heat.get(robot.id)
+        if heat_state is not None:
+            heat, limit, locked, permanently_locked = heat_state
+            lock_label = " PERM" if permanently_locked else " LOCK" if locked else ""
+            robot_label = f"{robot_label} H:{heat:g}/{limit:g}{lock_label}"
         label_surface = small_font.render(robot_label, True, TEXT_COLOR)
         screen.blit(label_surface, label_surface.get_rect(center=(center[0], center[1] + radius + 11)))
         robot_status = robot_statuses.get(robot.id)
