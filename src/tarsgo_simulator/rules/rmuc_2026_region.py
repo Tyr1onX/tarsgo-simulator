@@ -188,7 +188,12 @@ class RMUC2026RegionalRules:
             )
 
         tech_core = _mapping(document.data, "tech_core", document)
-        if set(tech_core) != {"leave_zone_fail_after", "zones", "difficulties"}:
+        if set(tech_core) != {
+            "leave_zone_fail_after",
+            "zones",
+            "difficulties",
+            "difficulty4",
+        }:
             raise ConfigError(
                 f"{document.path}: `tech_core` 字段不完整或包含未知字段"
             )
@@ -232,9 +237,9 @@ class RMUC2026RegionalRules:
             )
 
         raw_difficulties = _mapping(tech_core, "difficulties", document)
-        if set(raw_difficulties) != {1, 2, 3}:
+        if set(raw_difficulties) != {1, 2, 3, 4}:
             raise ConfigError(
-                f"{document.path}: `tech_core.difficulties` 本轮必须且只能包含 1、2、3"
+                f"{document.path}: `tech_core.difficulties` 必须完整包含 1～4"
             )
         self._tech_core_difficulties: dict[int, _TechCoreDifficultyRule] = {}
         for difficulty in (1, 2, 3):
@@ -263,16 +268,8 @@ class RMUC2026RegionalRules:
                     f"必须是 {expected_prerequisite}"
                 )
 
-            first = _mapping(
-                raw_rule,
-                "first",
-                document,
-            )
-            repeat = _mapping(
-                raw_rule,
-                "repeat",
-                document,
-            )
+            first = _mapping(raw_rule, "first", document)
+            repeat = _mapping(raw_rule, "repeat", document)
             if set(repeat) != {"periodic_gold_per_10s"}:
                 raise ConfigError(
                     f"{document.path}: `tech_core.difficulties.{difficulty}.repeat` "
@@ -327,6 +324,70 @@ class RMUC2026RegionalRules:
                 first_defense_bonus=first_defense_bonus,
             )
 
+        raw_d4 = raw_difficulties.get(4)
+        if not isinstance(raw_d4, dict) or set(raw_d4) != {
+            "available_after",
+            "prerequisite",
+            "only_once",
+            "first",
+            "repeat",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4` 字段不完整或包含未知字段"
+            )
+        if raw_d4.get("prerequisite") != 3:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.prerequisite` 必须是 3"
+            )
+        if raw_d4.get("only_once") is not True:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.only_once` 必须为 true"
+            )
+        if raw_d4.get("repeat") is not None:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.repeat` 必须为 null"
+            )
+        d4_first = _mapping(raw_d4, "first", document)
+        if set(d4_first) != {
+            "defense_bonus",
+            "base_hp_bonus",
+            "periodic_gold_per_10s",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulties.4.first` "
+                "必须保存 defense/base/gold metadata"
+            )
+        self._tech_core_difficulties[4] = _TechCoreDifficultyRule(
+            available_after=_nonnegative_number(
+                raw_d4,
+                "available_after",
+                document,
+                "tech_core.difficulties.4.available_after",
+            ),
+            prerequisite=3,
+            first_level_cap=None,
+            first_periodic_gold_per_10s=_positive_integer(
+                d4_first,
+                "periodic_gold_per_10s",
+                document,
+                "tech_core.difficulties.4.first.periodic_gold_per_10s",
+            ),
+            repeat_periodic_gold_per_10s=None,
+            first_defense_bonus=_fraction(
+                d4_first,
+                "defense_bonus",
+                document,
+                "tech_core.difficulties.4.first.defense_bonus",
+            ),
+            first_base_hp_bonus=_positive_integer(
+                d4_first,
+                "base_hp_bonus",
+                document,
+                "tech_core.difficulties.4.first.base_hp_bonus",
+            ),
+            only_once=True,
+        )
+
         if self._tech_core_difficulties[2].first_level_cap != 7:
             raise ConfigError(
                 f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
@@ -334,6 +395,100 @@ class RMUC2026RegionalRules:
         if self._tech_core_difficulties[3].first_level_cap != 10:
             raise ConfigError(
                 f"{document.path}: Tech Core Difficulty 3 first level_cap 必须为 10"
+            )
+        if self._tech_core_difficulties[4].available_after != 180:
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 available_after 必须为 180"
+            )
+        if (
+            self._tech_core_difficulties[4].first_defense_bonus != 0.5
+            or self._tech_core_difficulties[4].first_base_hp_bonus != 2000
+            or self._tech_core_difficulties[4].first_periodic_gold_per_10s != 50
+        ):
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 reward metadata 不匹配 V1.4.0"
+            )
+
+        difficulty4 = _mapping(tech_core, "difficulty4", document)
+        if set(difficulty4) != {
+            "total_window",
+            "paired_step_window",
+            "paired_steps",
+            "priority_buffer",
+            "retry_lockout",
+            "priority_failure",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4` 字段不完整或包含未知字段"
+            )
+        self._d4_total_window = _number(
+            difficulty4,
+            "total_window",
+            document,
+            "tech_core.difficulty4.total_window",
+        )
+        self._d4_paired_step_window = _number(
+            difficulty4,
+            "paired_step_window",
+            document,
+            "tech_core.difficulty4.paired_step_window",
+        )
+        paired_steps = difficulty4.get("paired_steps")
+        if (
+            not isinstance(paired_steps, list)
+            or any(
+                not isinstance(step, int) or isinstance(step, bool)
+                for step in paired_steps
+            )
+            or set(paired_steps) != {2, 3, 5, 6}
+            or len(paired_steps) != 4
+        ):
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4.paired_steps` "
+                "必须恰好是 2、3、5、6"
+            )
+        self._d4_paired_steps = frozenset(paired_steps)
+        self._d4_priority_buffer = _number(
+            difficulty4,
+            "priority_buffer",
+            document,
+            "tech_core.difficulty4.priority_buffer",
+        )
+        self._d4_retry_lockout = _number(
+            difficulty4,
+            "retry_lockout",
+            document,
+            "tech_core.difficulty4.retry_lockout",
+        )
+        priority_failure = _mapping(difficulty4, "priority_failure", document)
+        if set(priority_failure) != {
+            "permanent_lockout",
+            "periodic_gold_penalty_per_10s",
+        }:
+            raise ConfigError(
+                f"{document.path}: `tech_core.difficulty4.priority_failure` "
+                "字段不完整或包含未知字段"
+            )
+        if priority_failure.get("permanent_lockout") is not True:
+            raise ConfigError(
+                f"{document.path}: D4 priority failure permanent_lockout 必须为 true"
+            )
+        self._d4_priority_failure_gold_penalty = _positive_integer(
+            priority_failure,
+            "periodic_gold_penalty_per_10s",
+            document,
+            "tech_core.difficulty4.priority_failure.periodic_gold_penalty_per_10s",
+        )
+        if (
+            self._d4_total_window != 45
+            or self._d4_paired_step_window != 5
+            or self._d4_priority_buffer != 15
+            or self._d4_retry_lockout != 90
+            or self._d4_priority_failure_gold_penalty != 25
+        ):
+            raise ConfigError(
+                f"{document.path}: Tech Core Difficulty 4 timing/penalty metadata "
+                "不匹配 V1.4.0"
             )
 
         experience = _mapping(document.data, "experience", document)
