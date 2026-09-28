@@ -81,13 +81,13 @@ def test_initial_tech_core_state_is_empty_and_cap_five() -> None:
     assert match.ruleset._level_cap_by_team == {RED: 5, BLUE: 5}
     for team_id in (RED, BLUE):
         state = match.ruleset._tech_core_by_team[team_id]
-        assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0}
+        assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0, 4: 0}
         assert state.active_attempt is None
 
     for engineer_id in ("tarsgo-engineer", "opponent-engineer"):
         assert not match.ruleset._engineer_resources_by_id[
             engineer_id
-        ].carrying_energy_unit
+        ].energy_unit_credits
 
 
 def test_synthetic_resource_and_assembly_zones_are_bound_per_team() -> None:
@@ -99,16 +99,17 @@ def test_synthetic_resource_and_assembly_zones_are_bound_per_team() -> None:
     assert match.ruleset._assembly_zone_by_team[BLUE].id == "blue-assembly"
 
 
-def test_engineer_can_pickup_once_only_in_own_resource_zone() -> None:
+def test_engineer_can_pickup_two_rule_credits_only_in_own_resource_zone() -> None:
     match = _match()
     engineer = _robot(match, "tarsgo-engineer")
 
     _place_in_resource(match, engineer)
     assert match.ruleset.pickup_energy_unit(match, engineer)
+    assert match.ruleset.pickup_energy_unit(match, engineer)
     assert not match.ruleset.pickup_energy_unit(match, engineer)
 
     state = match.ruleset._engineer_resources_by_id[engineer.id]
-    assert state.carrying_energy_unit
+    assert state.energy_unit_credits == 2
 
 
 @pytest.mark.parametrize(
@@ -138,12 +139,12 @@ def test_difficulty_one_can_start_immediately_and_confirm_without_cap_change() -
     _complete_d1(match, engineer)
 
     state = match.ruleset._tech_core_by_team[RED]
-    assert state.completion_count_by_difficulty == {1: 1, 2: 0, 3: 0}
+    assert state.completion_count_by_difficulty == {1: 1, 2: 0, 3: 0, 4: 0}
     assert state.active_attempt is None
     assert match.ruleset._level_cap_by_team[RED] == 5
-    assert not match.ruleset._engineer_resources_by_id[
+    assert match.ruleset._engineer_resources_by_id[
         engineer.id
-    ].carrying_energy_unit
+    ].energy_unit_credits == 0
 
 
 def test_difficulty_two_requires_sixty_seconds_after_d1() -> None:
@@ -306,16 +307,6 @@ def test_start_requires_energy_unit_and_assembly_zone() -> None:
     assert not match.ruleset.start_tech_core_assembly(match, engineer, 1)
 
 
-def test_difficulty_four_is_explicitly_unsupported() -> None:
-    match = _match()
-    engineer = _robot(match, "tarsgo-engineer")
-    _pickup(match, engineer)
-    _place_in_assembly(match, engineer)
-    match.elapsed_time = 400.0
-
-    assert not match.ruleset.start_tech_core_assembly(match, engineer, 4)
-
-
 def test_continuous_fifteen_seconds_outside_assembly_fails_attempt() -> None:
     match = _match()
     engineer = _robot(match, "tarsgo-engineer")
@@ -333,7 +324,7 @@ def test_continuous_fifteen_seconds_outside_assembly_fails_attempt() -> None:
     assert state.active_attempt is None
     assert not match.ruleset._engineer_resources_by_id[
         engineer.id
-    ].carrying_energy_unit
+    ].energy_unit_credits
     assert state.completion_count_by_difficulty[1] == 0
 
 
@@ -373,11 +364,11 @@ def test_engineer_death_fails_active_attempt_and_clears_energy_unit() -> None:
     state = match.ruleset._tech_core_by_team[RED]
     assert not engineer.alive
     assert state.active_attempt is None
-    assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0}
+    assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0, 4: 0}
     assert match.ruleset._level_cap_by_team[RED] == 5
     assert not match.ruleset._engineer_resources_by_id[
         engineer.id
-    ].carrying_energy_unit
+    ].energy_unit_credits
 
 
 def test_engineer_death_before_start_uses_synthetic_recovery_simplification() -> None:
@@ -391,7 +382,7 @@ def test_engineer_death_before_start_uses_synthetic_recovery_simplification() ->
 
     assert not match.ruleset._engineer_resources_by_id[
         engineer.id
-    ].carrying_energy_unit
+    ].energy_unit_credits
     assert match.ruleset._tech_core_by_team[RED].active_attempt is None
 
 
@@ -408,7 +399,7 @@ def test_repeat_order_tracks_counts_and_keeps_cap_ten() -> None:
     _complete(match, engineer, 1)
 
     state = match.ruleset._tech_core_by_team[RED]
-    assert state.completion_count_by_difficulty == {1: 2, 2: 2, 3: 1}
+    assert state.completion_count_by_difficulty == {1: 2, 2: 2, 3: 1, 4: 0}
     assert match.ruleset._level_cap_by_team[RED] == 10
 
 
@@ -425,6 +416,13 @@ def test_reward_metadata_is_loaded_but_only_level_cap_is_consumed() -> None:
     assert rules._tech_core_difficulties[3].first_defense_bonus == pytest.approx(0.25)
     assert rules._tech_core_difficulties[3].first_periodic_gold_per_10s == 25
     assert rules._tech_core_difficulties[3].repeat_periodic_gold_per_10s == 15
+    assert rules._tech_core_difficulties[4].available_after == 180
+    assert rules._tech_core_difficulties[4].prerequisite == 3
+    assert rules._tech_core_difficulties[4].only_once
+    assert rules._tech_core_difficulties[4].first_defense_bonus == pytest.approx(0.50)
+    assert rules._tech_core_difficulties[4].first_base_hp_bonus == 2000
+    assert rules._tech_core_difficulties[4].first_periodic_gold_per_10s == 50
+    assert rules._tech_core_difficulties[4].repeat_periodic_gold_per_10s is None
 
     assert match.ruleset.display_state.coins == ()
 
@@ -439,13 +437,14 @@ def test_display_state_exposes_minimal_tech_core_and_energy_unit_status() -> Non
 
     display = match.ruleset.display_state
     tech_core = {
-        team_id: (cap, d1, d2, d3, active, outside)
-        for team_id, cap, d1, d2, d3, active, outside in display.tech_core_status
+        team_id: (cap, d1, d2, d3, d4, active, outside)
+        for team_id, cap, d1, d2, d3, d4, active, outside
+        in display.tech_core_status
     }
     energy_units = dict(display.engineer_energy_units)
 
-    assert tech_core[RED] == (5, 0, 0, 0, 1, pytest.approx(3.0))
-    assert energy_units[engineer.id]
+    assert tech_core[RED] == (5, 0, 0, 0, 0, 1, pytest.approx(3.0))
+    assert energy_units[engineer.id] == 0
 
 
 def test_reset_clears_tech_core_state_energy_unit_and_restores_cap_five() -> None:
@@ -462,9 +461,9 @@ def test_reset_clears_tech_core_state_energy_unit_and_restores_cap_five() -> Non
 
     assert match.ruleset._level_cap_by_team == {RED: 5, BLUE: 5}
     for state in match.ruleset._tech_core_by_team.values():
-        assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0}
+        assert state.completion_count_by_difficulty == {1: 0, 2: 0, 3: 0, 4: 0}
         assert state.active_attempt is None
     for resource_state in match.ruleset._engineer_resources_by_id.values():
-        assert not resource_state.carrying_energy_unit
+        assert not resource_state.energy_unit_credits
     progression = match.ruleset._progression_by_robot["tarsgo-hero"]
     assert (progression.level, progression.experience) == (1, 0.0)
