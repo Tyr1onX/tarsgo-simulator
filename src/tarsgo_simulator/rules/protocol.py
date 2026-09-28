@@ -43,6 +43,7 @@ class RuleSetDisplayState:
     robot_statuses: tuple[tuple[str, str], ...] = ()
     attack_damage: tuple[tuple[str, int], ...] = ()
     coins: tuple[tuple[str, int], ...] = ()
+    team_economy: tuple[tuple[str, int, int, int, int], ...] = ()
     robot_projectiles: tuple[tuple[str, str, int], ...] = ()
     robot_shooting_heat: tuple[tuple[str, float, float, bool, bool], ...] = ()
     robot_chassis_power: tuple[
