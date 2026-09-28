@@ -294,6 +294,14 @@ def test_death_resets_heat_and_temporary_lock_but_not_allowance() -> None:
     assert not state.permanently_locked
     assert rules.allowed_projectiles_by_robot[HERO] == 5
 
+    match.update(5.0)
+    assert robot.alive
+    assert rules._robot_lifecycles[HERO].weak
+    robot.position = (110.0, 260.0)
+    match.update(0.0)
+    assert not rules._robot_lifecycles[HERO].weak
+    assert rules.can_attack(robot)
+
 
 def test_death_and_respawn_do_not_clear_permanent_lock() -> None:
     match = _rules_lab_match()
