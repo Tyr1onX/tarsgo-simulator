@@ -775,6 +775,113 @@ class RMUC2026RegionalRules:
         """RMUC economy is intentionally outside this slice."""
         return False
 
+    def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
+        """Pick up the Rules Lab's synthetic renewable Energy Unit."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        resource_zone = self._resource_zone_by_team.get(engineer.team)
+        if (
+            resource_state is None
+            or resource_state.carrying_energy_unit
+            or resource_zone is None
+            or not resource_zone.contains(engineer.position)
+        ):
+            return False
+        resource_state.carrying_energy_unit = True
+        return True
+
+    def start_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+        difficulty: int,
+    ) -> bool:
+        """Start one explicit Rules Lab Tech Core D1-D3 assembly attempt."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or difficulty not in self._tech_core_difficulties
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        rule = self._tech_core_difficulties[difficulty]
+        if (
+            team_state is None
+            or resource_state is None
+            or not resource_state.carrying_energy_unit
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+            or team_state.active_attempt is not None
+            or match.elapsed_time + 1e-9 < rule.available_after
+        ):
+            return False
+
+        if (
+            rule.prerequisite is not None
+            and team_state.completion_count_by_difficulty[rule.prerequisite] < 1
+        ):
+            return False
+
+        team_state.active_attempt = _TechCoreAttempt(
+            engineer_id=engineer.id,
+            difficulty=difficulty,
+        )
+        return True
+
+    def confirm_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+    ) -> bool:
+        """Confirm that the abstracted physical D1-D3 assembly succeeded."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        if (
+            team_state is None
+            or team_state.active_attempt is None
+            or team_state.active_attempt.engineer_id != engineer.id
+            or resource_state is None
+            or not resource_state.carrying_energy_unit
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+        ):
+            return False
+
+        difficulty = team_state.active_attempt.difficulty
+        previous_count = team_state.completion_count_by_difficulty[difficulty]
+        team_state.completion_count_by_difficulty[difficulty] = previous_count + 1
+        team_state.active_attempt = None
+        resource_state.carrying_energy_unit = False
+
+        if previous_count == 0:
+            level_cap = self._tech_core_difficulties[difficulty].first_level_cap
+            if level_cap is not None:
+                self._level_cap_by_team[engineer.team] = max(
+                    self._level_cap_by_team[engineer.team],
+                    level_cap,
+                )
+        return True
+
     def can_receive_damage(self, target: DamageableTarget) -> bool:
         if not target.alive:
             return False
