@@ -180,6 +180,8 @@ class Match:
                     robot_id=target.id if is_robot else None,
                     structure_id=target.id if is_structure else None,
                     team_id=target.team,
+                    attacker_id=source_robot.id if source_robot else None,
+                    attacker_team_id=source_team_id,
                 )
             )
         return actual_damage
