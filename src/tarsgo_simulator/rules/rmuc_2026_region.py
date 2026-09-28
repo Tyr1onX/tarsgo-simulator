@@ -984,6 +984,233 @@ class RMUC2026RegionalRules:
             self._projectile_by_type[robot_type] = projectile
             self._chassis_power_limit_by_type[robot_type] = chassis_power_limit
 
+        projectile_allowance = _mapping(
+            document.data, "projectile_allowance", document
+        )
+        if set(projectile_allowance) != {
+            "disengaged_after",
+            "remote_effective_delay",
+            "zones",
+            "initial",
+            "purchase",
+            "sentry_supply",
+        }:
+            raise ConfigError(
+                f"{document.path}: `projectile_allowance` 字段不完整或包含未知字段"
+            )
+        self._projectile_disengaged_after = _number(
+            projectile_allowance,
+            "disengaged_after",
+            document,
+            "projectile_allowance.disengaged_after",
+        )
+        self._projectile_remote_effective_delay = _number(
+            projectile_allowance,
+            "remote_effective_delay",
+            document,
+            "projectile_allowance.remote_effective_delay",
+        )
+        if self._projectile_disengaged_after != 6:
+            raise ConfigError(
+                f"{document.path}: RMUC 脱战时长必须为 6 秒"
+            )
+        if self._projectile_remote_effective_delay != 6:
+            raise ConfigError(
+                f"{document.path}: RMUC 远程允许发弹量生效延迟必须为 6 秒"
+            )
+
+        projectile_zones = _mapping(projectile_allowance, "zones", document)
+        if set(projectile_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `projectile_allowance.zones` 必须包含 red、blue"
+            )
+        self._projectile_zone_ids: dict[str, dict[str, str]] = {}
+        all_projectile_zone_ids: set[str] = set()
+        for side in ("red", "blue"):
+            side_zones = _mapping(projectile_zones, side, document)
+            if set(side_zones) != {"supply", "base", "outpost"}:
+                raise ConfigError(
+                    f"{document.path}: `projectile_allowance.zones.{side}` "
+                    "必须只包含 supply、base、outpost"
+                )
+            self._projectile_zone_ids[side] = {}
+            for zone_type in ("supply", "base", "outpost"):
+                zone_id = _string(
+                    side_zones,
+                    zone_type,
+                    document,
+                    f"projectile_allowance.zones.{side}.{zone_type}",
+                )
+                if zone_id in all_projectile_zone_ids:
+                    raise ConfigError(
+                        f"{document.path}: projectile allowance zone id 必须互不相同"
+                    )
+                all_projectile_zone_ids.add(zone_id)
+                self._projectile_zone_ids[side][zone_type] = zone_id
+
+        initial = _mapping(projectile_allowance, "initial", document)
+        if set(initial) != {"hero", "infantry", "sentry", "drone"}:
+            raise ConfigError(
+                f"{document.path}: `projectile_allowance.initial` "
+                "必须包含 hero、infantry、sentry、drone"
+            )
+        expected_initial = {
+            "hero": ("42mm", 0),
+            "infantry": ("17mm", 0),
+            "sentry": ("17mm", 300),
+            "drone": ("17mm", 750),
+        }
+        self._projectile_initial: dict[str, tuple[str, int]] = {}
+        for robot_type, (expected_projectile, expected_allowance) in (
+            expected_initial.items()
+        ):
+            item = _mapping(initial, robot_type, document)
+            expected_keys = {"projectile", "allowance"}
+            if robot_type == "drone":
+                expected_keys.add("additional_acquisition")
+            if set(item) != expected_keys:
+                raise ConfigError(
+                    f"{document.path}: `projectile_allowance.initial.{robot_type}` "
+                    "字段不完整或包含未知字段"
+                )
+            projectile = _string(
+                item,
+                "projectile",
+                document,
+                f"projectile_allowance.initial.{robot_type}.projectile",
+            )
+            if projectile not in {"17mm", "42mm"}:
+                raise ConfigError(
+                    f"{document.path}: `projectile_allowance.initial.{robot_type}.projectile` "
+                    "只能是 17mm / 42mm"
+                )
+            allowance = _nonnegative_integer(
+                item,
+                "allowance",
+                document,
+                f"projectile_allowance.initial.{robot_type}.allowance",
+            )
+            if (projectile, allowance) != (
+                expected_projectile,
+                expected_allowance,
+            ):
+                raise ConfigError(
+                    f"{document.path}: `projectile_allowance.initial.{robot_type}` "
+                    "与 RMUC 2026 Regional V1.4.0 不匹配"
+                )
+            if robot_type == "drone" and item.get("additional_acquisition") is not False:
+                raise ConfigError(
+                    f"{document.path}: Drone additional_acquisition 必须为 false"
+                )
+            self._projectile_initial[robot_type] = (projectile, allowance)
+
+        for robot_type in ("hero", "infantry", "sentry"):
+            configured_projectile = self._projectile_by_type[robot_type]
+            if configured_projectile != self._projectile_initial[robot_type][0]:
+                raise ConfigError(
+                    f"{document.path}: {robot_type} launcher 与 projectile allowance 类型不一致"
+                )
+        if self._projectile_by_type["engineer"] is not None:
+            raise ConfigError(
+                f"{document.path}: engineer 不得拥有 projectile allowance launcher"
+            )
+
+        purchase = _mapping(projectile_allowance, "purchase", document)
+        if set(purchase) != {"17mm", "42mm"}:
+            raise ConfigError(
+                f"{document.path}: `projectile_allowance.purchase` 必须包含 17mm、42mm"
+            )
+        expected_purchase = {
+            "17mm": (1000, 10, 10, 150, 100),
+            "42mm": (100, 10, 1, 150, 10),
+        }
+        self._projectile_purchase_rules: dict[str, _ProjectilePurchaseRule] = {}
+        for projectile, expected in expected_purchase.items():
+            item = _mapping(purchase, projectile, document)
+            if set(item) != {"team_cap", "nonremote", "remote"}:
+                raise ConfigError(
+                    f"{document.path}: `projectile_allowance.purchase.{projectile}` "
+                    "字段不完整或包含未知字段"
+                )
+            nonremote = _mapping(item, "nonremote", document)
+            remote = _mapping(item, "remote", document)
+            if set(nonremote) != {"coins", "allowance"} or set(remote) != {
+                "coins",
+                "allowance",
+            }:
+                raise ConfigError(
+                    f"{document.path}: {projectile} purchase unit 字段必须为 coins、allowance"
+                )
+            parsed = (
+                _positive_integer(
+                    item,
+                    "team_cap",
+                    document,
+                    f"projectile_allowance.purchase.{projectile}.team_cap",
+                ),
+                _positive_integer(
+                    nonremote,
+                    "coins",
+                    document,
+                    f"projectile_allowance.purchase.{projectile}.nonremote.coins",
+                ),
+                _positive_integer(
+                    nonremote,
+                    "allowance",
+                    document,
+                    f"projectile_allowance.purchase.{projectile}.nonremote.allowance",
+                ),
+                _positive_integer(
+                    remote,
+                    "coins",
+                    document,
+                    f"projectile_allowance.purchase.{projectile}.remote.coins",
+                ),
+                _positive_integer(
+                    remote,
+                    "allowance",
+                    document,
+                    f"projectile_allowance.purchase.{projectile}.remote.allowance",
+                ),
+            )
+            if parsed != expected:
+                raise ConfigError(
+                    f"{document.path}: {projectile} projectile allowance purchase "
+                    "与 RMUC 2026 Regional V1.4.0 不匹配"
+                )
+            self._projectile_purchase_rules[projectile] = _ProjectilePurchaseRule(
+                team_cap=parsed[0],
+                nonremote_coins=parsed[1],
+                nonremote_allowance=parsed[2],
+                remote_coins=parsed[3],
+                remote_allowance=parsed[4],
+            )
+
+        sentry_supply = _mapping(
+            projectile_allowance, "sentry_supply", document
+        )
+        if set(sentry_supply) != {"interval", "allowance"}:
+            raise ConfigError(
+                f"{document.path}: `projectile_allowance.sentry_supply` "
+                "必须只包含 interval、allowance"
+            )
+        self._sentry_supply_interval = _number(
+            sentry_supply,
+            "interval",
+            document,
+            "projectile_allowance.sentry_supply.interval",
+        )
+        self._sentry_supply_allowance = _positive_integer(
+            sentry_supply,
+            "allowance",
+            document,
+            "projectile_allowance.sentry_supply.allowance",
+        )
+        if self._sentry_supply_interval != 60 or self._sentry_supply_allowance != 100:
+            raise ConfigError(
+                f"{document.path}: Sentry supply 必须为每 60 秒 100 发"
+            )
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -999,6 +1226,15 @@ class RMUC2026RegionalRules:
         self._economy_by_team: dict[str, _TeamEconomyState] = {}
         self._next_timed_gold_grant_index = 0
         self._next_periodic_gold_tick = self._economy_periodic_interval
+        self._projectile_allowance_by_robot: dict[
+            str, _ProjectileAllowanceState
+        ] = {}
+        self._projectile_purchase_by_team: dict[
+            str, _TeamProjectilePurchaseState
+        ] = {}
+        self._next_sentry_supply_grant = self._sentry_supply_interval
+        self._projectile_exchange_zones_by_team: dict[str, tuple[Zone, ...]] = {}
+        self._supply_buff_zone_by_team: dict[str, Zone] = {}
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
 
