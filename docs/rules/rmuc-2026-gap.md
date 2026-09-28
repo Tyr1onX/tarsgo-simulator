@@ -49,7 +49,15 @@ Regional V1.4.0 manual.
 - D4 15 s cross-team priority buffer;
 - D4 normal 90 s retry lockout;
 - D4 priority-takeover permanent lockout and -25/10s gold-penalty state;
-- Tech Core reward metadata with only D2/D3 level-cap rewards consumed;
+- RMUC private team coin wallet;
+- 400 baseline initial coins with complete S/A/B/C/D project-document and
+  technical-solution rating modifiers;
+- explicit Rules Lab B/B neutral pre-match rating;
+- official 60/120/180/240/300/360 s timed coin grants;
+- Tech Core D1-D4 first/repeat periodic-gold income accumulation;
+- global 10 s Rules Lab periodic settlement convention with large-dt catch-up;
+- D4 priority-failure -25/10s periodic penalty consumer with wallet floor at 0;
+- Tech Core reward metadata with D2/D3 level caps and periodic gold consumed;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -62,16 +70,16 @@ Regional V1.4.0 manual.
 - Tech Core physical movement / collision / obstruction sensing;
 - overload alarms and blocked-Core auto-award behavior;
 - temporary reactivation of a dead Engineer during opposing D4 takeover;
-- Tech Core periodic-gold gameplay;
 - Difficulty 3 defense-buff gameplay;
-- Difficulty 4 Base +2000 / virtual-shield / defense / gold rewards;
+- Difficulty 4 Base +2000 / virtual-shield / defense rewards;
 - Energy Mechanism and its Experience sources;
 - Hero deployment-mode Experience;
 - terrain-traversal Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
 - complete Field Buff system;
-- RMUC economy;
+- RMUC spending/action economy: non-remote and remote 17 mm / 42 mm allowed-
+  projectile purchases, remote healing, immediate respawn, and Drone air support;
 - complete RMUC respawn;
 - RMUC shooting-heat gameplay using dynamic Performance stats;
 - RMUC chassis-buffer / power-off gameplay using dynamic Performance stats;
@@ -134,7 +142,8 @@ synthetic approximations rather than official full-field coordinates.
 
 ## Next candidate
 
-The Tech Core rule-level flow now reaches D4. A later slice can consume the
-already-stored D3/D4 defense, Base-HP/virtual-shield, periodic-gold, and
-priority-failure penalty metadata. Those Economy / Field Buff consumers are not
-part of the current implementation.
+The RMUC income side now consumes the official timed grants, Tech Core periodic
+gold, and D4 priority-failure penalty. Later slices can independently add the
+spending/action side or consume the still-stored D3/D4 Defense and Base
+HP/virtual-shield rewards. Those consumers are intentionally not part of this
+implementation.
