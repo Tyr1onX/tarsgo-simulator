@@ -86,7 +86,7 @@ def test_lifecycle_state_is_private_per_ground_robot_and_starts_disengaged() -> 
         assert not state.weak
         assert state.invincible_remaining == 0
         assert state.minimum_invincible_remaining == 0
-        assert state.healing_hp_fraction == 0
+        assert state.healing_rounding_residual == 0
 
 
 def test_resupply_heals_ten_percent_max_hp_per_second_for_all_ground_robots() -> None:
@@ -115,9 +115,9 @@ def test_enhanced_resupply_healing_splits_large_frame_at_both_240s_and_disengage
 
     match.update(2.0)
 
-    # First second: 10%; second second: 25%. 150 * 0.35 = 52.5 -> 52 HP now.
-    assert hero.hp == 102
-    assert lifecycle.healing_hp_fraction == pytest.approx(0.5)
+    # First second: 10%; second second: 25%. 150 * 0.35 = 52.5 -> half-up 53.
+    assert hero.hp == 103
+    assert lifecycle.healing_rounding_residual == pytest.approx(-0.5)
     assert lifecycle.disengaged_elapsed == pytest.approx(7.0)
 
 
@@ -137,6 +137,30 @@ def test_combat_activity_keeps_late_resupply_healing_at_base_rate_and_restarts_d
 
     assert hero.hp == 65
     assert lifecycle.disengaged_elapsed == 0
+
+
+def test_resupply_half_up_rounding_is_stable_across_small_frames() -> None:
+    one_frame = _match()
+    split_frames = _match()
+    one_hero = _robot(one_frame, "tarsgo-hero")
+    split_hero = _robot(split_frames, "tarsgo-hero")
+
+    for match, hero in ((one_frame, one_hero), (split_frames, split_hero)):
+        hero.position = _own_supply_center(match, hero)
+        hero.hp = 50
+
+    one_frame.update(1.0)
+    for _ in range(10):
+        split_frames.update(0.1)
+
+    assert one_hero.hp == 65
+    assert split_hero.hp == 65
+    assert (
+        split_frames.ruleset._robot_lifecycle_by_robot[
+            split_hero.id
+        ].healing_rounding_residual
+        == pytest.approx(0.0)
+    )
 
 
 @pytest.mark.parametrize(
@@ -229,6 +253,25 @@ def test_respawn_progress_accelerates_in_supply_or_when_base_is_below_2000_hp() 
     assert lifecycle.respawn_progress == pytest.approx(5.0)
 
 
+def test_respawn_inside_supply_releases_weak_in_same_lifecycle_settlement() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    hero.position = _own_supply_center(match, hero)
+
+    _kill_and_register(match, hero)
+    required = lifecycle.respawn_required
+    assert required is not None
+
+    match.update(required / 4.0)
+
+    assert hero.alive
+    assert not lifecycle.weak
+    assert lifecycle.invincible_remaining == pytest.approx(10.0)
+    assert lifecycle.minimum_invincible_remaining == pytest.approx(10.0)
+    assert lifecycle.disengaged_elapsed == 0
+
+
 def test_automatic_respawn_invincibility_blocks_hp_loss() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
@@ -317,7 +360,7 @@ def test_reset_clears_rmuc_lifecycle_state() -> None:
     lifecycle.weak = True
     lifecycle.invincible_remaining = 12.0
     lifecycle.minimum_invincible_remaining = 2.0
-    lifecycle.healing_hp_fraction = 0.75
+    lifecycle.healing_rounding_residual = -0.25
 
     match.reset()
 
@@ -330,4 +373,4 @@ def test_reset_clears_rmuc_lifecycle_state() -> None:
     assert not reset.weak
     assert reset.invincible_remaining == 0
     assert reset.minimum_invincible_remaining == 0
-    assert reset.healing_hp_fraction == 0
+    assert reset.healing_rounding_residual == 0
