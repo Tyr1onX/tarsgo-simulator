@@ -1,4 +1,4 @@
-"""Partial RMUC 2026 Regional V1.4.0 rules including progression and Tech Core."""
+"""Partial RMUC 2026 Regional V1.4.0 rules including progression, economy, and Heat."""
 
 from dataclasses import dataclass, field
 import math
@@ -158,7 +158,7 @@ class _EffectiveHeatParameters:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 Regional Rules Lab with progression, Tech Core, and economy."""
+    """V1.4.0 Regional Rules Lab with progression, economy, allowance, and Heat."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
@@ -1418,6 +1418,18 @@ class RMUC2026RegionalRules:
                     self._projectile_allowance_by_robot.items()
                 )
             ),
+            robot_shooting_heat=tuple(
+                (
+                    robot_id,
+                    state.heat,
+                    self._effective_heat_parameters(robot_id).heat_limit,
+                    state.temporarily_locked,
+                    state.permanently_locked,
+                )
+                for robot_id, state in sorted(
+                    self._shooting_heat_by_robot.items()
+                )
+            ),
             structure_statuses=tuple(structure_statuses),
             rebuild_opportunities=tuple(
                 (team_id, state.outpost_rebuild_opportunities)
@@ -1537,11 +1549,15 @@ class RMUC2026RegionalRules:
 
     def can_attack(self, robot: Robot) -> bool:
         allowance = self._projectile_allowance_by_robot.get(robot.id)
+        shooting_heat = self._shooting_heat_by_robot.get(robot.id)
         return (
             robot.alive
             and robot.damage > 0
             and allowance is not None
             and allowance.allowed > 0
+            and shooting_heat is not None
+            and not shooting_heat.temporarily_locked
+            and not shooting_heat.permanently_locked
         )
 
     def can_target(self, target: DamageableTarget) -> bool:
@@ -1552,13 +1568,31 @@ class RMUC2026RegionalRules:
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
-        """Consume one legal projectile intent and grant its shot Experience."""
+        """Commit one legal shot using pre-shot effective Heat parameters."""
         allowance = self._projectile_allowance_by_robot.get(robot.id)
-        if allowance is None or allowance.allowed <= 0:
+        shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        if (
+            allowance is None
+            or allowance.allowed <= 0
+            or shooting_heat is None
+            or shooting_heat.temporarily_locked
+            or shooting_heat.permanently_locked
+        ):
             return
+
         allowance.allowed -= 1
         allowance.disengaged_elapsed = 0.0
         allowance.combat_activity_this_frame = True
+
+        heat_parameters = self._effective_heat_parameters(robot.id)
+        shooting_heat.heat += self._shooting_heat_per_shot[
+            heat_parameters.projectile_type
+        ]
+        if shooting_heat.heat + 1e-9 >= heat_parameters.permanent_threshold:
+            shooting_heat.permanently_locked = True
+            shooting_heat.temporarily_locked = False
+        elif shooting_heat.heat > heat_parameters.heat_limit + 1e-9:
+            shooting_heat.temporarily_locked = True
 
         shot_experience = self._shot_experience.get(robot.type)
         if shot_experience is not None:
@@ -1940,7 +1974,38 @@ class RMUC2026RegionalRules:
         """No RMUC chassis performance simulation in this slice."""
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
-        """No heat/projectile physics in this slice."""
+        """Cool RMUC shooting Heat at 10 Hz before this frame commits shots."""
+        if dt <= 0:
+            return
+
+        self._heat_cooling_accumulator += dt
+        ticks = math.floor(
+            self._heat_cooling_accumulator * self._shooting_heat_detection_hz
+            + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        tick_duration = 1.0 / self._shooting_heat_detection_hz
+        self._heat_cooling_accumulator = max(
+            0.0,
+            self._heat_cooling_accumulator - ticks * tick_duration,
+        )
+        for _ in range(ticks):
+            for robot_id, state in self._shooting_heat_by_robot.items():
+                robot = self._robots_by_id[robot_id]
+                if not robot.alive or state.heat <= 0:
+                    continue
+                parameters = self._effective_heat_parameters(robot_id)
+                state.heat = max(
+                    0.0,
+                    state.heat
+                    - parameters.cooling_per_second
+                    / self._shooting_heat_detection_hz,
+                )
+                if state.heat <= 1e-9:
+                    state.heat = 0.0
+                    state.temporarily_locked = False
 
     def reset(self, match: "Match") -> None:
         expected_roster = {
@@ -2025,6 +2090,11 @@ class RMUC2026RegionalRules:
             team_id: _TeamProjectilePurchaseState()
             for team_id in team_by_side.values()
         }
+        self._shooting_heat_by_robot = {
+            robot_id: _ShootingHeatState()
+            for robot_id in self._projectile_allowance_by_robot
+        }
+        self._heat_cooling_accumulator = 0.0
         self._next_sentry_supply_grant = self._sentry_supply_interval
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
@@ -2264,6 +2334,35 @@ class RMUC2026RegionalRules:
                 )
             self._next_periodic_gold_tick += self._economy_periodic_interval
 
+    def _effective_heat_parameters(
+        self,
+        robot_id: str,
+    ) -> _EffectiveHeatParameters:
+        robot_type = self._robot_types_by_id[robot_id]
+        projectile_type = self._projectile_by_type.get(robot_type)
+        if projectile_type not in {"17mm", "42mm"}:
+            raise KeyError(robot_id)
+
+        if robot_type in _EXPERIENCE_ROBOT_TYPES:
+            performance = self._effective_performance(robot_id)
+            heat_limit = float(performance.heat_limit)
+            cooling_per_second = float(performance.cooling_per_second)
+        elif robot_type == "sentry":
+            heat_limit = self._sentry_heat_limit
+            cooling_per_second = self._sentry_cooling_per_second
+        else:
+            raise KeyError(robot_id)
+
+        return _EffectiveHeatParameters(
+            projectile_type=projectile_type,
+            heat_limit=heat_limit,
+            cooling_per_second=cooling_per_second,
+            permanent_threshold=(
+                heat_limit
+                + self._shooting_heat_permanent_margin[projectile_type]
+            ),
+        )
+
     def _effective_performance_for_type(
         self, robot_type: str, level: int
     ) -> _EffectivePerformance:
@@ -2388,6 +2487,10 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                shooting_heat = self._shooting_heat_by_robot.get(event.robot_id)
+                if shooting_heat is not None:
+                    shooting_heat.heat = 0.0
+                    shooting_heat.temporarily_locked = False
                 resource_state = self._engineer_resources_by_id.get(event.robot_id)
                 if resource_state is not None:
                     resource_state.energy_unit_credits = 0
