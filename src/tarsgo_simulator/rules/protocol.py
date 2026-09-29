@@ -45,6 +45,7 @@ class RuleSetDisplayState:
     coins: tuple[tuple[str, int], ...] = ()
     team_economy: tuple[tuple[str, int, int, int, int], ...] = ()
     robot_projectiles: tuple[tuple[str, str, int], ...] = ()
+    robot_projectile_reserves: tuple[tuple[str, int], ...] = ()
     robot_shooting_heat: tuple[tuple[str, float, float, bool, bool], ...] = ()
     robot_chassis_power: tuple[
         tuple[str, float, float, float, float, float], ...
