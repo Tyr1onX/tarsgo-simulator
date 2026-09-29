@@ -12,6 +12,7 @@ learning_goals:
   - 验证七分钟比赛结束与基地被毁后的胜负链
   - 体验 Engineer Energy Unit 与 Tech Core D1-D4 对 team level cap / economy 的影响
   - 体验 17mm / 42mm 允许发弹量、本地/远程金币兑换与 Sentry 补给累积
+  - 验证 Base / Central / Trapezoid / Outpost 静态 Defense Buff Point 占领语义
 setup:
   map:
     width: 2800
@@ -34,6 +35,12 @@ setup:
       - {id: blue-base-buff, x: 2460, y: 650, width: 180, height: 200}
       - {id: red-outpost-buff, x: 720, y: 930, width: 220, height: 180}
       - {id: blue-outpost-buff, x: 1860, y: 390, width: 220, height: 180}
+      # Synthetic static Defense Buff Point geometry. Red/blue Central IDs are
+      # geometric labels only; both Central points are independently contestable.
+      - {id: red-central-elevated-buff, x: 1250, y: 570, width: 120, height: 140}
+      - {id: blue-central-elevated-buff, x: 1430, y: 790, width: 120, height: 140}
+      - {id: red-trapezoid-buff, x: 970, y: 350, width: 180, height: 160}
+      - {id: blue-trapezoid-buff, x: 1650, y: 990, width: 180, height: 160}
   teams:
     red: tarsgo-rmuc-2026-region
     blue: opponent-rmuc-2026-region
