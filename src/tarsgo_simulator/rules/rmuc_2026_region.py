@@ -3738,6 +3738,16 @@ class RMUC2026RegionalRules:
             and self._projectile_by_type.get(robot.type)
             == self._fortress_reserve_projectile
         }
+        team_ids = tuple(team_by_side.values())
+        self._enemy_fortress_occupation = {
+            (robot.id, fortress_team_id): _EnemyFortressOccupationState()
+            for robot in match.robots
+            if robot.type in self._enemy_fortress_eligible_types
+            for fortress_team_id in team_ids
+            if fortress_team_id != robot.team
+        }
+        self._enemy_fortress_death_retention_started = set()
+        self._outposts_destroyed_this_frame = set()
 
         self._terrain_zones_by_side_and_type = {
             side: {
@@ -4113,6 +4123,8 @@ class RMUC2026RegionalRules:
         self._grant_experience(event.attacker_id, amount)
 
     def _consume_events(self, match: "Match") -> None:
+        self._enemy_fortress_death_retention_started.clear()
+        self._outposts_destroyed_this_frame.clear()
         structure_by_id = {structure.id: structure for structure in match.structures}
         for event in match.current_events:
             is_enemy_damage = (
@@ -4145,6 +4157,21 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                for key, occupation in self._enemy_fortress_occupation.items():
+                    if key[0] != event.robot_id:
+                        continue
+                    if (
+                        occupation.occupy_remaining > 0
+                        or occupation.occupation_elapsed > 0
+                        or occupation.retention_remaining > 0
+                    ):
+                        occupation.occupy_remaining = 0.0
+                        occupation.retention_remaining = (
+                            self._enemy_fortress_retention
+                        )
+                        self._enemy_fortress_death_retention_started.add(
+                            key
+                        )
                 fortress_state = self._fortress_state_by_team.get(event.team_id)
                 if (
                     fortress_state is not None
@@ -4235,6 +4262,7 @@ class RMUC2026RegionalRules:
                 state = self._team_states[structure.team]
                 state.outpost_ever_destroyed = True
                 state.rebuild_progress_by_robot.clear()
+                self._outposts_destroyed_this_frame.add(structure.team)
 
     def _advance_tech_core_attempts(self, match: "Match", dt: float) -> None:
         if dt <= 0:
