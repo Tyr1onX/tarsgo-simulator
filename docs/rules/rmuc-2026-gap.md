@@ -94,7 +94,7 @@ Regional V1.4.0 manual.
 - out-of-combat six-second RMUC-private lifecycle state shared by projectile exchange and Resupply healing;
 - own Resupply healing at 10% max HP/s, rising to 25% max HP/s after elapsed 240 s while out of combat, with half-up cumulative integer settlement;
 - automatic respawn progress using death-time elapsed, future immediate-respawn count, 1/s normal progress, and 4/s acceleration in own Resupply or below 2000 Base HP;
-- automatic respawn at 10% max HP with 30 s Invincibility and Weakened state;
+- automatic respawn at 10% current max HP with half-up integer settlement, 30 s Invincibility, and Weakened state;
 - Weakened launcher lock, static/Terrain/Fortress/Assembly Buff Point and Outpost-rebuild exclusion, including Tech Core start/confirmation gates and continuous Assembly absence semantics;
 - same-lifecycle-settlement Weakened release when automatic respawn finishes inside a legal Base/Outpost/Resupply release point, with the official 10 s minimum post-respawn Invincibility;
 - remote 17mm / 42mm exchange with immediate wallet/cap reservation and six-second delivery;
@@ -173,7 +173,6 @@ Regional V1.4.0 manual.
   and the implemented Fortress own/enemy rule-level effects: Assembly invincibility,
   Attack Buff, Radar Vulnerability, and other field effects;
 - remote healing, paid immediate respawn, and Drone air-support spending;
-- final audit of integer rounding for the 10% automatic-respawn HP clause;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
