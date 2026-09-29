@@ -77,6 +77,21 @@ chassis_power:
     stationary: 0
     moving_over_limit: 5
 
+field_defense_buffs:
+  occupy_release_delay: 2
+  defense:
+    base: 0.50
+    central: 0.25
+    trapezoid: 0.50
+    outpost: 0.25
+  zones:
+    red:
+      central: red-central-elevated-buff
+      trapezoid: red-trapezoid-buff
+    blue:
+      central: blue-central-elevated-buff
+      trapezoid: blue-trapezoid-buff
+
 structures:
   base:
     max_hp: 5000
