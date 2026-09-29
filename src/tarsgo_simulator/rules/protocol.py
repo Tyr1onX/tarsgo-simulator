@@ -83,6 +83,13 @@ class RuleSet(Protocol):
 
     def can_receive_damage(self, target: DamageableTarget) -> bool: ...
 
+    def resolve_damage(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+    ) -> int: ...
+
     def prepare_movement(self, match: "Match", dt: float) -> None: ...
 
     def prepare_combat(self, match: "Match", dt: float) -> None: ...
