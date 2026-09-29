@@ -100,6 +100,8 @@ class _TeamStructureState:
     outpost_rebuild_opportunities: int = 0
     rebuild_progress_by_robot: dict[str, float] = field(default_factory=dict)
     base_armor_deployed: bool = False
+    tech_core_defense: float = 0.0
+    base_virtual_shield: int = 0
 
 
 @dataclass
@@ -1452,21 +1454,42 @@ class RMUC2026RegionalRules:
             base = self._base_by_team[team_id]
             outpost = self._outpost_by_team[team_id]
             state = self._team_states[team_id]
+            defense_label = (
+                f"DEF {int(state.tech_core_defense * 100)}%"
+                if state.tech_core_defense > 0
+                else ""
+            )
+
+            base_status_parts = []
+            if state.base_armor_deployed:
+                base_status_parts.append("ARMOR")
+            if defense_label:
+                base_status_parts.append(defense_label)
+            if state.base_virtual_shield > 0:
+                base_status_parts.append(f"SH:{state.base_virtual_shield}")
             structure_statuses.append(
                 (
                     base.id,
                     base.hp,
                     base.max_hp,
-                    "ARMOR" if state.base_armor_deployed else "",
+                    " ".join(base_status_parts),
                 )
             )
-            outpost_status = ""
+
+            outpost_status_parts = []
             if not outpost.alive:
-                outpost_status = "DESTROYED"
+                outpost_status_parts.append("DESTROYED")
             elif state.outpost_ever_destroyed:
-                outpost_status = "REBUILT"
+                outpost_status_parts.append("REBUILT")
+            if defense_label:
+                outpost_status_parts.append(defense_label)
             structure_statuses.append(
-                (outpost.id, outpost.hp, outpost.max_hp, outpost_status)
+                (
+                    outpost.id,
+                    outpost.hp,
+                    outpost.max_hp,
+                    " ".join(outpost_status_parts),
+                )
             )
 
         rebuild_progress = []
@@ -1480,6 +1503,14 @@ class RMUC2026RegionalRules:
         return RuleSetDisplayState(
             victory_points=(),
             control_owner=None,
+            robot_statuses=tuple(
+                (
+                    robot.id,
+                    f"DEF {int(self._team_states[robot.team].tech_core_defense * 100)}%",
+                )
+                for robot in sorted(self._robots_by_id.values(), key=lambda item: item.id)
+                if self._team_states[robot.team].tech_core_defense > 0
+            ),
             attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
             coins=tuple(
                 (team_id, state.coins)
@@ -1879,12 +1910,7 @@ class RMUC2026RegionalRules:
         )
 
         if previous_count == 0:
-            level_cap = self._tech_core_difficulties[difficulty].first_level_cap
-            if level_cap is not None:
-                self._level_cap_by_team[engineer.team] = max(
-                    self._level_cap_by_team[engineer.team],
-                    level_cap,
-                )
+            self._apply_tech_core_first_rewards(engineer.team, difficulty)
         return True
 
     def confirm_d4_step(
@@ -2024,6 +2050,33 @@ class RMUC2026RegionalRules:
         self._d4_coordinator.priority_buffer_remaining = 0.0
         self._d4_coordinator.priority_takeover = False
 
+    def _apply_tech_core_first_rewards(
+        self,
+        team_id: str,
+        difficulty: int,
+    ) -> None:
+        rule = self._tech_core_difficulties[difficulty]
+        if rule.first_level_cap is not None:
+            self._level_cap_by_team[team_id] = max(
+                self._level_cap_by_team[team_id],
+                rule.first_level_cap,
+            )
+
+        structure_state = self._team_states[team_id]
+        if rule.first_defense_bonus is not None:
+            structure_state.tech_core_defense = max(
+                structure_state.tech_core_defense,
+                rule.first_defense_bonus,
+            )
+
+        if rule.first_base_hp_bonus is not None:
+            base = self._base_by_team[team_id]
+            bonus = rule.first_base_hp_bonus
+            missing_hp = max(0, base.max_hp - base.hp)
+            hp_gain = min(bonus, missing_hp)
+            base.hp += hp_gain
+            structure_state.base_virtual_shield += bonus - hp_gain
+
     def _complete_d4_attempt(self, team_id: str) -> None:
         team_state = self._tech_core_by_team[team_id]
         if team_state.completion_count_by_difficulty[4] != 0:
@@ -2034,6 +2087,7 @@ class RMUC2026RegionalRules:
             4,
             first_completion=True,
         )
+        self._apply_tech_core_first_rewards(team_id, 4)
         team_state.d4_attempt = None
         self._d4_coordinator.active_team_id = None
 
@@ -2073,6 +2127,40 @@ class RMUC2026RegionalRules:
             outpost = self._outpost_by_team.get(target.team)
             return outpost is None or not outpost.alive
         return True
+
+    def resolve_damage(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+    ) -> int:
+        """Apply Tech Core Defense, then consume Base Virtual Shield."""
+        if (
+            amount <= 0
+            or source_team_id not in self.attack_damage_by_team
+            or source_team_id == target.team
+        ):
+            return amount
+
+        state = self._team_states.get(target.team)
+        if state is None:
+            return amount
+
+        defense = state.tech_core_defense
+        resolved = int(math.floor(amount * (1.0 - defense) + 0.5))
+        resolved = max(0, resolved)
+
+        if (
+            resolved > 0
+            and isinstance(target, Structure)
+            and target.type == "base"
+            and state.base_virtual_shield > 0
+        ):
+            absorbed = min(state.base_virtual_shield, resolved)
+            state.base_virtual_shield -= absorbed
+            resolved -= absorbed
+
+        return resolved
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Settle synthetic RMUC chassis power at 10 Hz before movement."""
