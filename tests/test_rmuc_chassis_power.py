@@ -434,14 +434,14 @@ def test_power_off_does_not_modify_economy_or_projectile_state() -> None:
 def test_power_off_does_not_reset_disengage_timer() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
-    allowance = match.ruleset._projectile_allowance_by_robot[hero.id]
-    allowance.disengaged_elapsed = 2
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    lifecycle.disengaged_elapsed = 2
     chassis = _chassis(match, hero.id)
     chassis.power_off_remaining = 1
 
     match.update(0.5)
 
-    assert allowance.disengaged_elapsed == pytest.approx(2.5)
+    assert lifecycle.disengaged_elapsed == pytest.approx(2.5)
 
 
 def test_engineer_power_off_does_not_cancel_active_tech_core_attempt_inside_zone() -> None:
