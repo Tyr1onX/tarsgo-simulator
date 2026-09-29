@@ -14,6 +14,7 @@ learning_goals:
   - 体验 17mm / 42mm 允许发弹量、本地/远程金币兑换与 Sentry 补给累积
   - 验证 Base / Central / Trapezoid / Outpost 静态 Defense Buff Point 占领语义
   - 验证 Road / Elevated Ground / Launch Ramp / Tunnel Terrain Crossing Buff 顺序与持续时间
+  - 验证己方 Fortress 启用、单机器人占领、50% Defense 与动态 Shooting Heat Cooling
 setup:
   map:
     width: 2800
@@ -42,6 +43,9 @@ setup:
       - {id: blue-central-elevated-buff, x: 1430, y: 790, width: 120, height: 140}
       - {id: red-trapezoid-buff, x: 970, y: 350, width: 180, height: 160}
       - {id: blue-trapezoid-buff, x: 1650, y: 990, width: 180, height: 160}
+      # Synthetic own-Fortress Buff Point geometry; rule effects only.
+      - {id: red-fortress-buff, x: 1120, y: 180, width: 160, height: 120}
+      - {id: blue-fortress-buff, x: 1520, y: 1200, width: 160, height: 120}
       # Synthetic Terrain Crossing RFID trigger rectangles. They model only
       # ordered referee detections, not terrain elevation, slope, or tunnel physics.
       - {id: red-terrain-road-lower, x: 980, y: 1180, width: 60, height: 60}

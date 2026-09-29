@@ -172,6 +172,12 @@ class _CentralDefenseBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass
+class _FortressBuffState:
+    owner_robot_id: str | None = None
+    release_remaining: float = 0.0
+
+
 @dataclass(frozen=True)
 class _TerrainCrossingRule:
     sequence_window: float
@@ -1676,6 +1682,74 @@ class RMUC2026RegionalRules:
                 parsed_side[terrain_type] = zone_ids
             self._terrain_zone_ids[side] = parsed_side
 
+        fortress = _mapping(document.data, "fortress_own_buff", document)
+        if set(fortress) != {
+            "defense",
+            "cooling_hp_step",
+            "cooling_cap",
+            "eligible_types",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff` "
+                "字段不完整或包含未知字段"
+            )
+        fortress_defense = float(
+            _number(
+                fortress,
+                "defense",
+                document,
+                "fortress_own_buff.defense",
+            )
+        )
+        fortress_cooling_hp_step = _positive_integer(
+            fortress,
+            "cooling_hp_step",
+            document,
+            "fortress_own_buff.cooling_hp_step",
+        )
+        fortress_cooling_cap = _positive_integer(
+            fortress,
+            "cooling_cap",
+            document,
+            "fortress_own_buff.cooling_cap",
+        )
+        eligible_types = fortress.get("eligible_types")
+        if (
+            fortress_defense != 0.50
+            or fortress_cooling_hp_step != 40
+            or fortress_cooling_cap != 75
+            or eligible_types != ["infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: own Fortress 必须为 "
+                "Defense 50%、Δ/40、cap 75、Infantry/Sentry"
+            )
+        self._fortress_defense = fortress_defense
+        self._fortress_cooling_hp_step = fortress_cooling_hp_step
+        self._fortress_cooling_cap = fortress_cooling_cap
+        self._fortress_eligible_types = frozenset(eligible_types)
+
+        fortress_zones = _mapping(fortress, "zones", document)
+        if set(fortress_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.zones` "
+                "必须包含 red、blue"
+            )
+        self._fortress_zone_ids = {
+            side: _string(
+                fortress_zones,
+                side,
+                document,
+                f"fortress_own_buff.zones.{side}",
+            )
+            for side in ("red", "blue")
+        }
+        if len(set(self._fortress_zone_ids.values())) != 2:
+            raise ConfigError(
+                f"{document.path}: Fortress zone id 不得重复"
+            )
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1716,6 +1790,8 @@ class RMUC2026RegionalRules:
             str, _CentralDefenseBuffState
         ] = {}
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
+        self._fortress_zone_by_team: dict[str, Zone] = {}
+        self._fortress_state_by_team: dict[str, _FortressBuffState] = {}
         self._terrain_crossing_by_robot: dict[
             str, _TerrainCrossingState
         ] = {}
@@ -2454,6 +2530,7 @@ class RMUC2026RegionalRules:
             state.tech_core_defense,
             self._current_field_defense(target),
             self._current_terrain_defense(target),
+            self._current_fortress_defense(target),
         )
 
     def _current_field_defense(self, robot: Robot) -> float:
@@ -2493,6 +2570,77 @@ class RMUC2026RegionalRules:
                 best = max(best, self._field_defense_by_type["outpost"])
 
         return best
+
+    def _is_fortress_occupant(self, robot: Robot) -> bool:
+        state = self._fortress_state_by_team.get(robot.team)
+        return (
+            robot.alive
+            and robot.type in self._fortress_eligible_types
+            and state is not None
+            and state.owner_robot_id == robot.id
+            and self._team_states[robot.team].outpost_ever_destroyed
+        )
+
+    def _current_fortress_defense(self, robot: Robot) -> float:
+        return self._fortress_defense if self._is_fortress_occupant(robot) else 0.0
+
+    def _fortress_cooling_bonus(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_cooling_cap,
+            math.floor(delta / self._fortress_cooling_hp_step),
+        )
+
+    def _advance_fortress_occupancy(self, dt: float) -> None:
+        for team_id, zone in self._fortress_zone_by_team.items():
+            state = self._fortress_state_by_team[team_id]
+            if not self._team_states[team_id].outpost_ever_destroyed:
+                state.owner_robot_id = None
+                state.release_remaining = 0.0
+                continue
+
+            owner = (
+                self._robots_by_id.get(state.owner_robot_id)
+                if state.owner_robot_id is not None
+                else None
+            )
+            if (
+                owner is not None
+                and owner.alive
+                and owner.team == team_id
+                and owner.type in self._fortress_eligible_types
+                and zone.contains(owner.position)
+            ):
+                state.release_remaining = self._field_occupy_release_delay
+            elif state.owner_robot_id is not None:
+                state.release_remaining = max(
+                    0.0,
+                    state.release_remaining - dt,
+                )
+                if state.release_remaining <= 1e-9:
+                    state.owner_robot_id = None
+                    state.release_remaining = 0.0
+
+            if state.owner_robot_id is not None:
+                continue
+
+            candidates = sorted(
+                (
+                    robot
+                    for robot in self._robots_by_id.values()
+                    if robot.alive
+                    and robot.team == team_id
+                    and robot.type in self._fortress_eligible_types
+                    and zone.contains(robot.position)
+                ),
+                key=lambda robot: robot.id,
+            )
+            if candidates:
+                state.owner_robot_id = candidates[0].id
+                state.release_remaining = self._field_occupy_release_delay
 
     def _current_terrain_defense(self, robot: Robot) -> float:
         if not robot.alive:
@@ -2557,6 +2705,11 @@ class RMUC2026RegionalRules:
             parts.append(
                 f"TCool ×{multiplier:g} "
                 f"{terrain_state.tunnel_cooling_remaining:.1f}s"
+            )
+
+        if self._is_fortress_occupant(robot):
+            parts.append(
+                f"FORT DEF50 FC:+{self._fortress_cooling_bonus(robot)}"
             )
         return " ".join(parts)
 
@@ -2882,6 +3035,7 @@ class RMUC2026RegionalRules:
         """Refresh field/terrain rules around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
         self._advance_field_defense_occupancy(match, frame_dt)
+        self._advance_fortress_occupancy(frame_dt)
         self._advance_terrain_crossing_timers(frame_dt)
 
         if dt > 0:
@@ -3069,6 +3223,7 @@ class RMUC2026RegionalRules:
                 for zone_ids in side_zones.values()
                 for zone_id in zone_ids
             }
+            | set(self._fortress_zone_ids.values())
         )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
@@ -3133,6 +3288,14 @@ class RMUC2026RegionalRules:
         }
         self._field_occupy_remaining = {}
         self._field_buff_elapsed = match.elapsed_time
+        self._fortress_zone_by_team = {
+            team_by_side[side]: zones_by_id[self._fortress_zone_ids[side]]
+            for side in ("red", "blue")
+        }
+        self._fortress_state_by_team = {
+            team_id: _FortressBuffState()
+            for team_id in team_by_side.values()
+        }
 
         self._terrain_zones_by_side_and_type = {
             side: {
@@ -3172,6 +3335,8 @@ class RMUC2026RegionalRules:
         for zone in self._supply_buff_zone_by_team.values():
             interrupt_zones[zone.id] = zone
         for zone in self._assembly_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._fortress_zone_by_team.values():
             interrupt_zones[zone.id] = zone
         self._terrain_interrupt_zones_by_id = interrupt_zones
         self._terrain_crossing_by_robot = {
@@ -3378,19 +3543,29 @@ class RMUC2026RegionalRules:
         if robot_type in _EXPERIENCE_ROBOT_TYPES:
             performance = self._effective_performance(robot_id)
             heat_limit = float(performance.heat_limit)
-            cooling_per_second = float(performance.cooling_per_second)
+            base_cooling_per_second = float(performance.cooling_per_second)
         elif robot_type == "sentry":
             heat_limit = self._sentry_heat_limit
-            cooling_per_second = self._sentry_cooling_per_second
+            base_cooling_per_second = self._sentry_cooling_per_second
         else:
             raise KeyError(robot_id)
+
+        cooling_candidates = [base_cooling_per_second]
+        robot = self._robots_by_id[robot_id]
+        fortress_bonus = self._fortress_cooling_bonus(robot)
+        if fortress_bonus > 0:
+            cooling_candidates.append(base_cooling_per_second + fortress_bonus)
 
         terrain_state = self._terrain_crossing_by_robot.get(robot_id)
         if (
             terrain_state is not None
             and terrain_state.tunnel_cooling_remaining > 0
         ):
-            cooling_per_second *= self._terrain_rules["tunnel"].cooling_multiplier
+            cooling_candidates.append(
+                base_cooling_per_second
+                * self._terrain_rules["tunnel"].cooling_multiplier
+            )
+        cooling_per_second = max(cooling_candidates)
 
         return _EffectiveHeatParameters(
             projectile_type=projectile_type,
@@ -3526,6 +3701,13 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                fortress_state = self._fortress_state_by_team.get(event.team_id)
+                if (
+                    fortress_state is not None
+                    and fortress_state.owner_robot_id == event.robot_id
+                ):
+                    fortress_state.owner_robot_id = None
+                    fortress_state.release_remaining = 0.0
                 terrain = self._terrain_crossing_by_robot.get(event.robot_id)
                 if terrain is not None:
                     terrain.standard_defense = 0.0

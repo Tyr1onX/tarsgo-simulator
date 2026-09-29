@@ -125,6 +125,15 @@ terrain_crossing:
       launch_ramp: [blue-terrain-launch-first, blue-terrain-launch-second]
       tunnel: [blue-terrain-tunnel-end-a, blue-terrain-tunnel-middle, blue-terrain-tunnel-end-b]
 
+fortress_own_buff:
+  defense: 0.50
+  cooling_hp_step: 40
+  cooling_cap: 75
+  eligible_types: [infantry, sentry]
+  zones:
+    red: red-fortress-buff
+    blue: blue-fortress-buff
+
 structures:
   base:
     max_hp: 5000

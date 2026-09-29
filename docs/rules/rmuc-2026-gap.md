@@ -118,6 +118,16 @@ Regional V1.4.0 manual.
   existing Hero/Infantry progression and level-cap clamp;
 - death clears active Terrain buffs/sequences while preserving first-acquired
   XP history until match reset;
+- own Fortress activation permanently after first own-Outpost destruction;
+- own Fortress single-owner Infantry/Sentry occupancy with the shared 2-second
+  Occupy-release semantics;
+- own Fortress 50% Defense integrated into the existing max-based effective
+  Defense calculation;
+- live Fortress Cooling bonus `w=floor((Base max_hp-Base hp)/40)`, capped at 75;
+- Fortress `base+w` Cooling and Tunnel `base×2` Cooling compared as complete
+  final candidates rather than added;
+- Fortress Cooling consumed by the existing 10 Hz Shooting Heat path without
+  changing Heat Limit/Q2;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -134,15 +144,16 @@ Regional V1.4.0 manual.
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
-- remaining Field Buff system beyond static Defense and Terrain Crossing:
-  Fortress, Resupply healing/respawn, Assembly invincibility, Attack Buff,
-  Vulnerability, and other field effects;
+- remaining Field Buff system beyond static Defense, Terrain Crossing, and the
+  implemented own Fortress Defense/Cooling: enemy Fortress occupation,
+  Fortress reserved Projectile Allowance, Resupply healing/respawn, Assembly
+  invincibility, Attack Buff, Vulnerability, and other field effects;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
-- Energy Mechanism / Fortress / non-Tunnel Field Buff cooling modifiers;
+- Energy Mechanism / non-Fortress / non-Tunnel Field Buff cooling modifiers;
 - muzzle-velocity limit and speed-based launcher locks;
 - actual motor / wheel / electrical chassis-power physics and telemetry;
 - voltage/current and supercapacitor physics;
@@ -198,12 +209,12 @@ insertion/translation/rotation, and sensor validation remain deferred.
 
 Performance now directly drives both RMUC Hero/Infantry Heat Limit/Cooling and
 chassis power limit. Shooting Heat and the base 60 J chassis Buffer / 5-second
-movement power-off consumer are implemented independently. Tunnel Cooling ×2 is now the first external Heat-cooling consumer. Other Heat
-cooling modifiers and Buffer/power modifiers from Energy Mechanism, Fortress,
-Resupply, Assembly, terrain-specific Buffer effects, or Sentry posture remain
-deferred. Static Base/Central/Trapezoid/Outpost Defense Buff Points and
-rule-level Terrain Crossing are implemented separately from real terrain
-physics.
+movement power-off consumer are implemented independently. Tunnel Cooling ×2 and own Fortress dynamic Cooling are active external
+Heat-cooling consumers. Other Heat cooling modifiers and Buffer/power modifiers
+from Energy Mechanism, Resupply, Assembly, terrain-specific Buffer effects, or
+Sentry posture remain deferred. Static Base/Central/Trapezoid/Outpost Defense
+Buff Points, own Fortress Defense/Cooling, and rule-level Terrain Crossing are
+implemented separately from real terrain physics.
 
 ### Direct-damage boundary
 
@@ -221,8 +232,9 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include Fortress, Resupply/Assembly, Energy Mechanism,
-Attack/Vulnerability modifiers, remote healing/instant respawn, and Drone/Radar
-systems. Tech Core Defense, Base Virtual Shield, static Defense points, and
+both active consumers. Remaining candidates include the deferred Fortress reserved-ammo/enemy effects,
+Resupply/Assembly, Energy Mechanism, Attack/Vulnerability modifiers, remote
+healing/instant respawn, and Drone/Radar systems. Tech Core Defense, Base
+Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.
