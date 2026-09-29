@@ -2662,6 +2662,68 @@ class RMUC2026RegionalRules:
             and self._team_states[robot.team].outpost_ever_destroyed
         )
 
+    def _fortress_reserve_limit(self, robot: Robot) -> int:
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_reserve_cap,
+            self._fortress_reserve_base
+            + self._fortress_reserve_per_step
+            * math.floor(delta / self._fortress_reserve_hp_step),
+        )
+
+    def _sync_fortress_reserved(
+        self,
+        robot: Robot,
+        *,
+        allow_initialize: bool,
+    ) -> _FortressReservedProjectileState | None:
+        state = self._fortress_reserved_by_robot.get(robot.id)
+        if state is None:
+            return None
+
+        limit = self._fortress_reserve_limit(robot)
+        if not state.initialized:
+            if not allow_initialize:
+                return state
+            state.reserved = limit
+            state.last_limit = limit
+            state.initialized = True
+            return state
+
+        if limit > state.last_limit:
+            state.reserved += limit - state.last_limit
+        elif limit < state.last_limit:
+            state.reserved = min(state.reserved, limit)
+        state.last_limit = limit
+        return state
+
+    def _sync_initialized_fortress_reserves(
+        self,
+        team_id: str | None = None,
+    ) -> None:
+        for robot_id, state in self._fortress_reserved_by_robot.items():
+            if not state.initialized:
+                continue
+            robot = self._robots_by_id[robot_id]
+            if team_id is not None and robot.team != team_id:
+                continue
+            self._sync_fortress_reserved(
+                robot,
+                allow_initialize=False,
+            )
+
+    def _usable_fortress_reserved(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        state = self._sync_fortress_reserved(
+            robot,
+            allow_initialize=True,
+        )
+        if state is None:
+            return 0
+        return state.reserved
+
     def _current_fortress_defense(self, robot: Robot) -> float:
         return self._fortress_defense if self._is_fortress_occupant(robot) else 0.0
 
@@ -2696,6 +2758,10 @@ class RMUC2026RegionalRules:
                 and zone.contains(owner.position)
             ):
                 state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    owner,
+                    allow_initialize=True,
+                )
             elif state.owner_robot_id is not None:
                 state.release_remaining = max(
                     0.0,
@@ -2722,6 +2788,10 @@ class RMUC2026RegionalRules:
             if candidates:
                 state.owner_robot_id = candidates[0].id
                 state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    candidates[0],
+                    allow_initialize=True,
+                )
 
     def _current_terrain_defense(self, robot: Robot) -> float:
         if not robot.alive:
