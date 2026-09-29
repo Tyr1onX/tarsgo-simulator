@@ -172,6 +172,38 @@ class _CentralDefenseBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass(frozen=True)
+class _TerrainCrossingRule:
+    sequence_window: float
+    defense: float
+    defense_duration: float
+    reacquire_cooldown: float = 0.0
+    cooling_multiplier: float = 1.0
+    cooling_duration: float = 0.0
+
+
+@dataclass
+class _TerrainSequenceState:
+    terrain_type: str | None = None
+    expected_zone_ids: tuple[str, ...] = ()
+    next_index: int = 0
+    expires_at: float = 0.0
+
+
+@dataclass
+class _TerrainCrossingState:
+    standard_defense: float = 0.0
+    standard_defense_remaining: float = 0.0
+    tunnel_defense_remaining: float = 0.0
+    tunnel_cooling_remaining: float = 0.0
+    road_reacquire_remaining: float = 0.0
+    sequence: _TerrainSequenceState = field(
+        default_factory=_TerrainSequenceState
+    )
+    first_acquired_types: set[str] = field(default_factory=set)
+    occupied_rfid_zone_ids: set[str] = field(default_factory=set)
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 Regional Rules Lab with progression, economy, Heat, and chassis power."""
 
@@ -1495,6 +1527,155 @@ class RMUC2026RegionalRules:
             all_field_zone_ids.update(parsed_zones.values())
             self._field_zone_ids[side] = parsed_zones
 
+        terrain_crossing = _mapping(document.data, "terrain_crossing", document)
+        if set(terrain_crossing) != {
+            "first_experience",
+            "launch_ramp",
+            "elevated_ground",
+            "road",
+            "tunnel",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `terrain_crossing` 字段不完整或包含未知字段"
+            )
+        first_experience = _positive_integer(
+            terrain_crossing,
+            "first_experience",
+            document,
+            "terrain_crossing.first_experience",
+        )
+        if first_experience != 300:
+            raise ConfigError(
+                f"{document.path}: Terrain Crossing 首次 Experience 必须为 300"
+            )
+        self._terrain_first_experience = float(first_experience)
+
+        expected_terrain_rules = {
+            "launch_ramp": {
+                "keys": {"sequence_window", "defense", "defense_duration"},
+                "sequence_window": 10.0,
+                "defense": 0.25,
+                "defense_duration": 30.0,
+            },
+            "elevated_ground": {
+                "keys": {"sequence_window", "defense", "defense_duration"},
+                "sequence_window": 5.0,
+                "defense": 0.25,
+                "defense_duration": 30.0,
+            },
+            "road": {
+                "keys": {
+                    "sequence_window",
+                    "defense",
+                    "defense_duration",
+                    "reacquire_cooldown",
+                },
+                "sequence_window": 3.0,
+                "defense": 0.25,
+                "defense_duration": 5.0,
+                "reacquire_cooldown": 15.0,
+            },
+            "tunnel": {
+                "keys": {
+                    "sequence_window",
+                    "defense",
+                    "defense_duration",
+                    "cooling_multiplier",
+                    "cooling_duration",
+                },
+                "sequence_window": 3.0,
+                "defense": 0.50,
+                "defense_duration": 10.0,
+                "cooling_multiplier": 2.0,
+                "cooling_duration": 120.0,
+            },
+        }
+        self._terrain_rules: dict[str, _TerrainCrossingRule] = {}
+        for terrain_type, expected in expected_terrain_rules.items():
+            item = _mapping(terrain_crossing, terrain_type, document)
+            if set(item) != expected["keys"]:
+                raise ConfigError(
+                    f"{document.path}: `terrain_crossing.{terrain_type}` "
+                    "字段不完整或包含未知字段"
+                )
+            parsed = {
+                key: float(
+                    _number(
+                        item,
+                        key,
+                        document,
+                        f"terrain_crossing.{terrain_type}.{key}",
+                    )
+                )
+                for key in expected["keys"]
+            }
+            for key, expected_value in expected.items():
+                if key == "keys":
+                    continue
+                if abs(parsed[key] - expected_value) > 1e-9:
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.{terrain_type}.{key} "
+                        "与 RMUC 2026 Regional V1.4.0 不匹配"
+                    )
+            self._terrain_rules[terrain_type] = _TerrainCrossingRule(
+                sequence_window=parsed["sequence_window"],
+                defense=parsed["defense"],
+                defense_duration=parsed["defense_duration"],
+                reacquire_cooldown=parsed.get("reacquire_cooldown", 0.0),
+                cooling_multiplier=parsed.get("cooling_multiplier", 1.0),
+                cooling_duration=parsed.get("cooling_duration", 0.0),
+            )
+
+        terrain_zones = _mapping(terrain_crossing, "zones", document)
+        if set(terrain_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `terrain_crossing.zones` 必须包含 red、blue"
+            )
+        self._terrain_zone_ids: dict[
+            str, dict[str, tuple[str, ...]]
+        ] = {}
+        all_terrain_zone_ids: set[str] = set()
+        expected_lengths = {
+            "road": 2,
+            "elevated_ground": 2,
+            "launch_ramp": 2,
+            "tunnel": 3,
+        }
+        for side in ("red", "blue"):
+            side_zones = _mapping(terrain_zones, side, document)
+            if set(side_zones) != set(expected_lengths):
+                raise ConfigError(
+                    f"{document.path}: terrain_crossing.zones.{side} "
+                    "必须包含 road、elevated_ground、launch_ramp、tunnel"
+                )
+            parsed_side: dict[str, tuple[str, ...]] = {}
+            for terrain_type, expected_length in expected_lengths.items():
+                raw_zone_ids = side_zones.get(terrain_type)
+                if (
+                    not isinstance(raw_zone_ids, list)
+                    or len(raw_zone_ids) != expected_length
+                    or not all(
+                        isinstance(zone_id, str) and zone_id
+                        for zone_id in raw_zone_ids
+                    )
+                ):
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.zones.{side}."
+                        f"{terrain_type} 必须是 {expected_length} 个非空 zone id"
+                    )
+                zone_ids = tuple(raw_zone_ids)
+                if (
+                    len(set(zone_ids)) != len(zone_ids)
+                    or any(zone_id in all_terrain_zone_ids for zone_id in zone_ids)
+                ):
+                    raise ConfigError(
+                        f"{document.path}: Terrain Crossing RFID zone id 不得重复"
+                    )
+                all_terrain_zone_ids.update(zone_ids)
+                parsed_side[terrain_type] = zone_ids
+            self._terrain_zone_ids[side] = parsed_side
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1535,6 +1716,14 @@ class RMUC2026RegionalRules:
             str, _CentralDefenseBuffState
         ] = {}
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
+        self._terrain_crossing_by_robot: dict[
+            str, _TerrainCrossingState
+        ] = {}
+        self._terrain_zones_by_side_and_type: dict[
+            str, dict[str, tuple[Zone, ...]]
+        ] = {}
+        self._terrain_zone_lookup: dict[str, tuple[str, str, int]] = {}
+        self._terrain_interrupt_zones_by_id: dict[str, Zone] = {}
 
     @property
     def time_limit(self) -> float:
@@ -1597,12 +1786,12 @@ class RMUC2026RegionalRules:
             victory_points=(),
             control_owner=None,
             robot_statuses=tuple(
-                (
-                    robot.id,
-                    f"DEF {int(self._effective_defense(robot) * 100)}%",
+                (robot.id, status)
+                for robot in sorted(
+                    self._robots_by_id.values(),
+                    key=lambda item: item.id,
                 )
-                for robot in sorted(self._robots_by_id.values(), key=lambda item: item.id)
-                if self._effective_defense(robot) > 0
+                if (status := self._robot_status_label(robot))
             ),
             attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
             coins=tuple(
@@ -2264,6 +2453,7 @@ class RMUC2026RegionalRules:
         return max(
             state.tech_core_defense,
             self._current_field_defense(target),
+            self._current_terrain_defense(target),
         )
 
     def _current_field_defense(self, robot: Robot) -> float:
@@ -2303,6 +2493,232 @@ class RMUC2026RegionalRules:
                 best = max(best, self._field_defense_by_type["outpost"])
 
         return best
+
+    def _current_terrain_defense(self, robot: Robot) -> float:
+        if not robot.alive:
+            return 0.0
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if state is None:
+            return 0.0
+        best = 0.0
+        if state.standard_defense_remaining > 0:
+            best = max(best, state.standard_defense)
+        if state.tunnel_defense_remaining > 0:
+            best = max(best, self._terrain_rules["tunnel"].defense)
+        return best
+
+    def _terrain_defense_display(
+        self,
+        robot: Robot,
+    ) -> tuple[float, float]:
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if state is None or not robot.alive:
+            return 0.0, 0.0
+        options: list[tuple[float, float]] = []
+        if state.standard_defense_remaining > 0:
+            options.append(
+                (state.standard_defense, state.standard_defense_remaining)
+            )
+        if state.tunnel_defense_remaining > 0:
+            options.append(
+                (
+                    self._terrain_rules["tunnel"].defense,
+                    state.tunnel_defense_remaining,
+                )
+            )
+        if not options:
+            return 0.0, 0.0
+        max_defense = max(value for value, _remaining in options)
+        max_remaining = max(
+            remaining
+            for value, remaining in options
+            if abs(value - max_defense) <= 1e-9
+        )
+        return max_defense, max_remaining
+
+    def _robot_status_label(self, robot: Robot) -> str:
+        parts: list[str] = []
+        effective_defense = self._effective_defense(robot)
+        if effective_defense > 0:
+            parts.append(f"DEF {int(effective_defense * 100)}%")
+
+        terrain_defense, terrain_remaining = self._terrain_defense_display(robot)
+        if terrain_defense > 0 and terrain_remaining > 0:
+            parts.append(
+                f"TDEF {int(terrain_defense * 100)}% {terrain_remaining:.1f}s"
+            )
+
+        terrain_state = self._terrain_crossing_by_robot.get(robot.id)
+        if (
+            terrain_state is not None
+            and terrain_state.tunnel_cooling_remaining > 0
+        ):
+            multiplier = self._terrain_rules["tunnel"].cooling_multiplier
+            parts.append(
+                f"TCool ×{multiplier:g} "
+                f"{terrain_state.tunnel_cooling_remaining:.1f}s"
+            )
+        return " ".join(parts)
+
+    def _advance_terrain_crossing_timers(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for state in self._terrain_crossing_by_robot.values():
+            state.standard_defense_remaining = max(
+                0.0,
+                state.standard_defense_remaining - dt,
+            )
+            if state.standard_defense_remaining <= 1e-9:
+                state.standard_defense_remaining = 0.0
+                state.standard_defense = 0.0
+
+            state.tunnel_defense_remaining = max(
+                0.0,
+                state.tunnel_defense_remaining - dt,
+            )
+            if state.tunnel_defense_remaining <= 1e-9:
+                state.tunnel_defense_remaining = 0.0
+
+            state.tunnel_cooling_remaining = max(
+                0.0,
+                state.tunnel_cooling_remaining - dt,
+            )
+            if state.tunnel_cooling_remaining <= 1e-9:
+                state.tunnel_cooling_remaining = 0.0
+
+            state.road_reacquire_remaining = max(
+                0.0,
+                state.road_reacquire_remaining - dt,
+            )
+            if state.road_reacquire_remaining <= 1e-9:
+                state.road_reacquire_remaining = 0.0
+
+    @staticmethod
+    def _reset_terrain_sequence(state: _TerrainCrossingState) -> None:
+        state.sequence = _TerrainSequenceState()
+
+    def _process_terrain_crossing_rfid(
+        self,
+        match: "Match",
+        event_time: float,
+    ) -> None:
+        del match
+        for robot in self._robots_by_id.values():
+            state = self._terrain_crossing_by_robot[robot.id]
+            if not robot.alive:
+                state.occupied_rfid_zone_ids.clear()
+                self._reset_terrain_sequence(state)
+                continue
+
+            if (
+                state.sequence.terrain_type is not None
+                and event_time > state.sequence.expires_at + 1e-9
+            ):
+                self._reset_terrain_sequence(state)
+
+            current_zone_ids = {
+                zone_id
+                for zone_id, zone in self._terrain_interrupt_zones_by_id.items()
+                if zone.contains(robot.position)
+            }
+            entered_zone_ids = sorted(
+                current_zone_ids - state.occupied_rfid_zone_ids
+            )
+
+            for zone_id in entered_zone_ids:
+                self._process_terrain_rfid_entry(
+                    robot,
+                    state,
+                    zone_id,
+                    event_time,
+                )
+
+            state.occupied_rfid_zone_ids = current_zone_ids
+
+    def _process_terrain_rfid_entry(
+        self,
+        robot: Robot,
+        state: _TerrainCrossingState,
+        zone_id: str,
+        event_time: float,
+    ) -> None:
+        sequence = state.sequence
+        if sequence.terrain_type is not None:
+            if (
+                event_time <= sequence.expires_at + 1e-9
+                and sequence.next_index < len(sequence.expected_zone_ids)
+                and zone_id == sequence.expected_zone_ids[sequence.next_index]
+            ):
+                sequence.next_index += 1
+                if sequence.next_index >= len(sequence.expected_zone_ids):
+                    terrain_type = sequence.terrain_type
+                    self._reset_terrain_sequence(state)
+                    self._grant_terrain_crossing_buff(robot, terrain_type)
+                return
+
+            self._reset_terrain_sequence(state)
+            return
+
+        lookup = self._terrain_zone_lookup.get(zone_id)
+        if lookup is None:
+            return
+        side, terrain_type, index = lookup
+        zones = self._terrain_zones_by_side_and_type[side][terrain_type]
+        if terrain_type == "tunnel":
+            if index == 0:
+                expected = tuple(zone.id for zone in zones)
+            elif index == len(zones) - 1:
+                expected = tuple(zone.id for zone in reversed(zones))
+            else:
+                return
+        else:
+            if index != 0:
+                return
+            expected = tuple(zone.id for zone in zones)
+
+        state.sequence = _TerrainSequenceState(
+            terrain_type=terrain_type,
+            expected_zone_ids=expected,
+            next_index=1,
+            expires_at=event_time
+            + self._terrain_rules[terrain_type].sequence_window,
+        )
+
+    def _grant_terrain_crossing_buff(
+        self,
+        robot: Robot,
+        terrain_type: str,
+    ) -> bool:
+        if not robot.alive:
+            return False
+        state = self._terrain_crossing_by_robot[robot.id]
+        rule = self._terrain_rules[terrain_type]
+
+        if terrain_type == "road" and state.road_reacquire_remaining > 0:
+            return False
+
+        if terrain_type in {"launch_ramp", "elevated_ground", "road"}:
+            if state.standard_defense_remaining > 0:
+                state.standard_defense = 0.50
+                state.standard_defense_remaining = max(
+                    state.standard_defense_remaining,
+                    rule.defense_duration,
+                )
+            else:
+                state.standard_defense = rule.defense
+                state.standard_defense_remaining = rule.defense_duration
+            if terrain_type == "road":
+                state.road_reacquire_remaining = rule.reacquire_cooldown
+        elif terrain_type == "tunnel":
+            state.tunnel_defense_remaining = rule.defense_duration
+            state.tunnel_cooling_remaining = rule.cooling_duration
+        else:
+            raise KeyError(terrain_type)
+
+        if terrain_type not in state.first_acquired_types:
+            state.first_acquired_types.add(terrain_type)
+            self._grant_experience(robot.id, self._terrain_first_experience)
+        return True
 
     def _outpost_buff_eligible(self, robot: Robot, point_team: str) -> bool:
         own_outpost = self._outpost_by_team.get(robot.team)
@@ -2463,39 +2879,43 @@ class RMUC2026RegionalRules:
             )
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
-        """Refresh field Defense occupancy, then cool Shooting Heat at 10 Hz."""
-        self._advance_field_defense_occupancy(match, max(0.0, dt))
-        if dt <= 0:
-            return
+        """Refresh field/terrain rules around the existing 10 Hz Heat loop."""
+        frame_dt = max(0.0, dt)
+        self._advance_field_defense_occupancy(match, frame_dt)
+        self._advance_terrain_crossing_timers(frame_dt)
 
-        self._heat_cooling_accumulator += dt
-        ticks = math.floor(
-            self._heat_cooling_accumulator * self._shooting_heat_detection_hz
-            + 1e-9
-        )
-        if ticks <= 0:
-            return
-
-        tick_duration = 1.0 / self._shooting_heat_detection_hz
-        self._heat_cooling_accumulator = max(
-            0.0,
-            self._heat_cooling_accumulator - ticks * tick_duration,
-        )
-        for _ in range(ticks):
-            for robot_id, state in self._shooting_heat_by_robot.items():
-                robot = self._robots_by_id[robot_id]
-                if not robot.alive or state.heat <= 0:
-                    continue
-                parameters = self._effective_heat_parameters(robot_id)
-                state.heat = max(
+        if dt > 0:
+            self._heat_cooling_accumulator += dt
+            ticks = math.floor(
+                self._heat_cooling_accumulator * self._shooting_heat_detection_hz
+                + 1e-9
+            )
+            if ticks > 0:
+                tick_duration = 1.0 / self._shooting_heat_detection_hz
+                self._heat_cooling_accumulator = max(
                     0.0,
-                    state.heat
-                    - parameters.cooling_per_second
-                    / self._shooting_heat_detection_hz,
+                    self._heat_cooling_accumulator - ticks * tick_duration,
                 )
-                if state.heat <= 1e-9:
-                    state.heat = 0.0
-                    state.temporarily_locked = False
+                for _ in range(ticks):
+                    for robot_id, state in self._shooting_heat_by_robot.items():
+                        robot = self._robots_by_id[robot_id]
+                        if not robot.alive or state.heat <= 0:
+                            continue
+                        parameters = self._effective_heat_parameters(robot_id)
+                        state.heat = max(
+                            0.0,
+                            state.heat
+                            - parameters.cooling_per_second
+                            / self._shooting_heat_detection_hz,
+                        )
+                        if state.heat <= 1e-9:
+                            state.heat = 0.0
+                            state.temporarily_locked = False
+
+        self._process_terrain_crossing_rfid(
+            match,
+            min(match.elapsed_time + frame_dt, self._time_limit),
+        )
 
     def reset(self, match: "Match") -> None:
         expected_roster = {
@@ -2643,6 +3063,12 @@ class RMUC2026RegionalRules:
                 for side_zones in self._field_zone_ids.values()
                 for zone_id in side_zones.values()
             }
+            | {
+                zone_id
+                for side_zones in self._terrain_zone_ids.values()
+                for zone_ids in side_zones.values()
+                for zone_id in zone_ids
+            }
         )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
@@ -2707,6 +3133,51 @@ class RMUC2026RegionalRules:
         }
         self._field_occupy_remaining = {}
         self._field_buff_elapsed = match.elapsed_time
+
+        self._terrain_zones_by_side_and_type = {
+            side: {
+                terrain_type: tuple(
+                    zones_by_id[zone_id]
+                    for zone_id in self._terrain_zone_ids[side][terrain_type]
+                )
+                for terrain_type in (
+                    "road",
+                    "elevated_ground",
+                    "launch_ramp",
+                    "tunnel",
+                )
+            }
+            for side in ("red", "blue")
+        }
+        self._terrain_zone_lookup = {
+            zone.id: (side, terrain_type, index)
+            for side, terrain_by_type in self._terrain_zones_by_side_and_type.items()
+            for terrain_type, zones in terrain_by_type.items()
+            for index, zone in enumerate(zones)
+        }
+        interrupt_zones = {
+            zone.id: zone
+            for terrain_by_type in self._terrain_zones_by_side_and_type.values()
+            for zones in terrain_by_type.values()
+            for zone in zones
+        }
+        for zone in self._field_base_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_outpost_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_trapezoid_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_central_zones:
+            interrupt_zones[zone.id] = zone
+        for zone in self._supply_buff_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._assembly_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        self._terrain_interrupt_zones_by_id = interrupt_zones
+        self._terrain_crossing_by_robot = {
+            robot.id: _TerrainCrossingState()
+            for robot in match.robots
+        }
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
@@ -2914,6 +3385,13 @@ class RMUC2026RegionalRules:
         else:
             raise KeyError(robot_id)
 
+        terrain_state = self._terrain_crossing_by_robot.get(robot_id)
+        if (
+            terrain_state is not None
+            and terrain_state.tunnel_cooling_remaining > 0
+        ):
+            cooling_per_second *= self._terrain_rules["tunnel"].cooling_multiplier
+
         return _EffectiveHeatParameters(
             projectile_type=projectile_type,
             heat_limit=heat_limit,
@@ -3048,6 +3526,14 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                terrain = self._terrain_crossing_by_robot.get(event.robot_id)
+                if terrain is not None:
+                    terrain.standard_defense = 0.0
+                    terrain.standard_defense_remaining = 0.0
+                    terrain.tunnel_defense_remaining = 0.0
+                    terrain.tunnel_cooling_remaining = 0.0
+                    terrain.occupied_rfid_zone_ids.clear()
+                    self._reset_terrain_sequence(terrain)
                 shooting_heat = self._shooting_heat_by_robot.get(event.robot_id)
                 if shooting_heat is not None:
                     shooting_heat.heat = 0.0

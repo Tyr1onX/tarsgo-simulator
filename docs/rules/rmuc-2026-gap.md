@@ -104,7 +104,20 @@ Regional V1.4.0 manual.
   occupancy eligibility;
 - official two-second Occupy-status expiration delay for the implemented static
   Defense Buff Points;
-- Robot effective Defense resolved as max(Tech Core Defense, field Defense);
+- Robot effective Defense resolved as max(Tech Core Defense, static field Defense,
+  Terrain Crossing Defense);
+- synthetic ordered Terrain Crossing RFID sequences for Road, Elevated Ground,
+  Launch Ramp, and Tunnel;
+- official crossing windows: Road/Tunnel 3 s, Elevated Ground 5 s, Launch Ramp 10 s;
+- Launch Ramp / Elevated Ground 25% Defense for 30 s;
+- Road 25% Defense for 5 s plus 15 s reacquire restriction;
+- standard Terrain Defense retrigger upgrade to 50% with max-duration rule;
+- Tunnel 50% Defense for 10 s plus independent Cooling ×2 for 120 s;
+- Tunnel Cooling consumed by the existing 10 Hz Shooting Heat path;
+- +300 first-acquisition Terrain Experience for each terrain type using the
+  existing Hero/Infantry progression and level-cap clamp;
+- death clears active Terrain buffs/sequences while preserving first-acquired
+  XP history until match reset;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -119,18 +132,17 @@ Regional V1.4.0 manual.
 - temporary reactivation of a dead Engineer during opposing D4 takeover;
 - Energy Mechanism and its Experience sources;
 - Hero deployment-mode Experience;
-- terrain-traversal Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
-- remaining Field Buff system beyond the implemented static Defense points:
-  Terrain Crossing, Fortress, Resupply healing/respawn, Assembly invincibility,
-  Attack Buff, Vulnerability, and other field effects;
+- remaining Field Buff system beyond static Defense and Terrain Crossing:
+  Fortress, Resupply healing/respawn, Assembly invincibility, Attack Buff,
+  Vulnerability, and other field effects;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
-- Energy Mechanism / Fortress / Field Buff cooling modifiers;
+- Energy Mechanism / Fortress / non-Tunnel Field Buff cooling modifiers;
 - muzzle-velocity limit and speed-based launcher locks;
 - actual motor / wheel / electrical chassis-power physics and telemetry;
 - voltage/current and supercapacitor physics;
@@ -186,10 +198,12 @@ insertion/translation/rotation, and sensor validation remain deferred.
 
 Performance now directly drives both RMUC Hero/Infantry Heat Limit/Cooling and
 chassis power limit. Shooting Heat and the base 60 J chassis Buffer / 5-second
-movement power-off consumer are implemented independently. External Heat cooling
-modifiers and Buffer/power modifiers from Energy Mechanism, Fortress, terrain
-traversal, Resupply, Assembly, or Sentry posture remain deferred. Static
-Base/Central/Trapezoid/Outpost Defense Buff Points are implemented separately.
+movement power-off consumer are implemented independently. Tunnel Cooling ×2 is now the first external Heat-cooling consumer. Other Heat
+cooling modifiers and Buffer/power modifiers from Energy Mechanism, Fortress,
+Resupply, Assembly, terrain-specific Buffer effects, or Sentry posture remain
+deferred. Static Base/Central/Trapezoid/Outpost Defense Buff Points and
+rule-level Terrain Crossing are implemented separately from real terrain
+physics.
 
 ### Direct-damage boundary
 
@@ -207,7 +221,8 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include Terrain Crossing, Fortress, Resupply/Assembly,
-Energy Mechanism, Attack/Vulnerability modifiers, remote healing/instant
-respawn, and Drone/Radar systems. Tech Core Defense, Base Virtual Shield, and
-the static Base/Central/Trapezoid/Outpost Defense points are active consumers.
+both active consumers. Remaining candidates include Fortress, Resupply/Assembly, Energy Mechanism,
+Attack/Vulnerability modifiers, remote healing/instant respawn, and Drone/Radar
+systems. Tech Core Defense, Base Virtual Shield, static Defense points, and
+rule-level Terrain Crossing are active consumers; real terrain physics remains
+deferred.

@@ -13,6 +13,7 @@ learning_goals:
   - 体验 Engineer Energy Unit 与 Tech Core D1-D4 对 team level cap / economy 的影响
   - 体验 17mm / 42mm 允许发弹量、本地/远程金币兑换与 Sentry 补给累积
   - 验证 Base / Central / Trapezoid / Outpost 静态 Defense Buff Point 占领语义
+  - 验证 Road / Elevated Ground / Launch Ramp / Tunnel Terrain Crossing Buff 顺序与持续时间
 setup:
   map:
     width: 2800
@@ -41,6 +42,26 @@ setup:
       - {id: blue-central-elevated-buff, x: 1430, y: 790, width: 120, height: 140}
       - {id: red-trapezoid-buff, x: 970, y: 350, width: 180, height: 160}
       - {id: blue-trapezoid-buff, x: 1650, y: 990, width: 180, height: 160}
+      # Synthetic Terrain Crossing RFID trigger rectangles. They model only
+      # ordered referee detections, not terrain elevation, slope, or tunnel physics.
+      - {id: red-terrain-road-lower, x: 980, y: 1180, width: 60, height: 60}
+      - {id: red-terrain-road-upper, x: 1130, y: 1070, width: 60, height: 60}
+      - {id: red-terrain-elevated-lower, x: 1000, y: 900, width: 60, height: 60}
+      - {id: red-terrain-elevated-upper, x: 1160, y: 790, width: 60, height: 60}
+      - {id: red-terrain-launch-first, x: 900, y: 520, width: 60, height: 60}
+      - {id: red-terrain-launch-second, x: 1080, y: 520, width: 60, height: 60}
+      - {id: red-terrain-tunnel-end-a, x: 900, y: 690, width: 60, height: 60}
+      - {id: red-terrain-tunnel-middle, x: 1040, y: 690, width: 60, height: 60}
+      - {id: red-terrain-tunnel-end-b, x: 1180, y: 690, width: 60, height: 60}
+      - {id: blue-terrain-road-lower, x: 1760, y: 260, width: 60, height: 60}
+      - {id: blue-terrain-road-upper, x: 1610, y: 370, width: 60, height: 60}
+      - {id: blue-terrain-elevated-lower, x: 1740, y: 540, width: 60, height: 60}
+      - {id: blue-terrain-elevated-upper, x: 1580, y: 650, width: 60, height: 60}
+      - {id: blue-terrain-launch-first, x: 1840, y: 920, width: 60, height: 60}
+      - {id: blue-terrain-launch-second, x: 1660, y: 920, width: 60, height: 60}
+      - {id: blue-terrain-tunnel-end-a, x: 1840, y: 750, width: 60, height: 60}
+      - {id: blue-terrain-tunnel-middle, x: 1700, y: 750, width: 60, height: 60}
+      - {id: blue-terrain-tunnel-end-b, x: 1560, y: 750, width: 60, height: 60}
   teams:
     red: tarsgo-rmuc-2026-region
     blue: opponent-rmuc-2026-region
