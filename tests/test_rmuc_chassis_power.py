@@ -495,7 +495,7 @@ def test_powered_off_robot_remains_collision_blocker() -> None:
     mover.position = (940.0, 750.0)
     blocker.path.clear()
     mover.path = [(1060.0, 750.0)]
-    mover.speed = 200
+    mover.speed = 600
     blocker_state = _chassis(match, blocker.id)
     blocker_state.power_off_remaining = 3
     blocker_state.blocked_this_frame = True
