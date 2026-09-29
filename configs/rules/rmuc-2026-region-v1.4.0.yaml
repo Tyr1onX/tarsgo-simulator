@@ -6,7 +6,7 @@ stage: regional
 status: official-partial
 official_version: "1.4.0"
 source_url: https://bbs.robomaster.com/wiki/20204847/809871?source=7
-last_verified: "2026-09-28"
+last_verified: "2026-09-29"
 match_duration: 420
 
 economy:
