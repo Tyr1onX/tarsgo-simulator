@@ -2689,6 +2689,8 @@ class RMUC2026RegionalRules:
         robot: Robot,
         terrain_type: str,
     ) -> bool:
+        if not robot.alive:
+            return False
         state = self._terrain_crossing_by_robot[robot.id]
         rule = self._terrain_rules[terrain_type]
 
