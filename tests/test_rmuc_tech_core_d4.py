@@ -602,3 +602,29 @@ def test_reset_clears_d4_coordinator_lockouts_penalty_and_resources() -> None:
         assert state.d4_priority_failure_gold_penalty == 0
     for resource in match.ruleset._engineer_resources_by_id.values():
         assert resource.energy_unit_credits == 0
+
+
+def test_weakened_engineer_cannot_request_or_progress_d4_assembly() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[engineer.id]
+    resource = match.ruleset._engineer_resources_by_id[engineer.id]
+    team_state = match.ruleset._tech_core_by_team[engineer.team]
+
+    _prepare_d4(match, engineer)
+    lifecycle.weak = True
+
+    assert not match.ruleset.start_tech_core_assembly(match, engineer, 4)
+    assert resource.energy_unit_credits == 2
+
+    lifecycle.weak = False
+    assert match.ruleset.start_tech_core_assembly(match, engineer, 4)
+    lifecycle.weak = True
+
+    assert not match.ruleset.confirm_d4_step(match, engineer, "own", 1)
+    match.update(14.9)
+    assert team_state.d4_attempt is not None
+    assert team_state.d4_attempt.outside_zone_elapsed == pytest.approx(14.9)
+
+    match.update(0.1)
+    assert team_state.d4_attempt is None
