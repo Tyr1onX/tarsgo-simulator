@@ -2530,6 +2530,7 @@ class RMUC2026RegionalRules:
             state.tech_core_defense,
             self._current_field_defense(target),
             self._current_terrain_defense(target),
+            self._current_fortress_defense(target),
         )
 
     def _current_field_defense(self, robot: Robot) -> float:
@@ -2569,6 +2570,77 @@ class RMUC2026RegionalRules:
                 best = max(best, self._field_defense_by_type["outpost"])
 
         return best
+
+    def _is_fortress_occupant(self, robot: Robot) -> bool:
+        state = self._fortress_state_by_team.get(robot.team)
+        return (
+            robot.alive
+            and robot.type in self._fortress_eligible_types
+            and state is not None
+            and state.owner_robot_id == robot.id
+            and self._team_states[robot.team].outpost_ever_destroyed
+        )
+
+    def _current_fortress_defense(self, robot: Robot) -> float:
+        return self._fortress_defense if self._is_fortress_occupant(robot) else 0.0
+
+    def _fortress_cooling_bonus(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_cooling_cap,
+            math.floor(delta / self._fortress_cooling_hp_step),
+        )
+
+    def _advance_fortress_occupancy(self, dt: float) -> None:
+        for team_id, zone in self._fortress_zone_by_team.items():
+            state = self._fortress_state_by_team[team_id]
+            if not self._team_states[team_id].outpost_ever_destroyed:
+                state.owner_robot_id = None
+                state.release_remaining = 0.0
+                continue
+
+            owner = (
+                self._robots_by_id.get(state.owner_robot_id)
+                if state.owner_robot_id is not None
+                else None
+            )
+            if (
+                owner is not None
+                and owner.alive
+                and owner.team == team_id
+                and owner.type in self._fortress_eligible_types
+                and zone.contains(owner.position)
+            ):
+                state.release_remaining = self._field_occupy_release_delay
+            elif state.owner_robot_id is not None:
+                state.release_remaining = max(
+                    0.0,
+                    state.release_remaining - dt,
+                )
+                if state.release_remaining <= 1e-9:
+                    state.owner_robot_id = None
+                    state.release_remaining = 0.0
+
+            if state.owner_robot_id is not None:
+                continue
+
+            candidates = sorted(
+                (
+                    robot
+                    for robot in self._robots_by_id.values()
+                    if robot.alive
+                    and robot.team == team_id
+                    and robot.type in self._fortress_eligible_types
+                    and zone.contains(robot.position)
+                ),
+                key=lambda robot: robot.id,
+            )
+            if candidates:
+                state.owner_robot_id = candidates[0].id
+                state.release_remaining = self._field_occupy_release_delay
 
     def _current_terrain_defense(self, robot: Robot) -> float:
         if not robot.alive:
@@ -2633,6 +2705,11 @@ class RMUC2026RegionalRules:
             parts.append(
                 f"TCool ×{multiplier:g} "
                 f"{terrain_state.tunnel_cooling_remaining:.1f}s"
+            )
+
+        if self._is_fortress_occupant(robot):
+            parts.append(
+                f"FORT DEF50 FC:+{self._fortress_cooling_bonus(robot)}"
             )
         return " ".join(parts)
 
@@ -2958,6 +3035,7 @@ class RMUC2026RegionalRules:
         """Refresh field/terrain rules around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
         self._advance_field_defense_occupancy(match, frame_dt)
+        self._advance_fortress_occupancy(frame_dt)
         self._advance_terrain_crossing_timers(frame_dt)
 
         if dt > 0:
