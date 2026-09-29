@@ -370,9 +370,9 @@ def test_d3_and_d4_rewards_do_not_break_economy_state() -> None:
     assert match.apply_damage(target, 20, source_team_id=BLUE) == 15
     assert target.hp == before - 15
 
-    coins_before_d4 = match.ruleset._economy_by_team[RED].coins
     _advance_to(match, 180.0)
     _give_credits(match, engineer, 2)
+    coins_before_d4 = match.ruleset._economy_by_team[RED].coins
     _complete_d4(match, engineer)
 
     base = next(
