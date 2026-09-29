@@ -360,16 +360,17 @@ def test_normal_d4_failure_does_not_create_gold_penalty() -> None:
     assert match.ruleset._periodic_gold_rate(RED) == (0, 0, 0)
 
 
-def test_d3_and_d4_non_gold_rewards_remain_unconsumed() -> None:
+def test_d3_and_d4_rewards_do_not_break_economy_state() -> None:
     match = _match()
     engineer = _robot(match, "tarsgo-engineer")
     target = _robot(match, "tarsgo-infantry-1")
 
     _complete_d3(match, engineer)
     before = target.hp
-    assert match.apply_damage(target, 20, source_team_id=BLUE) == 20
-    assert target.hp == before - 20
+    assert match.apply_damage(target, 20, source_team_id=BLUE) == 15
+    assert target.hp == before - 15
 
+    coins_before_d4 = match.ruleset._economy_by_team[RED].coins
     _advance_to(match, 180.0)
     _give_credits(match, engineer, 2)
     _complete_d4(match, engineer)
@@ -381,6 +382,9 @@ def test_d3_and_d4_non_gold_rewards_remain_unconsumed() -> None:
     )
     assert (base.hp, base.max_hp) == (5000, 5000)
     assert not hasattr(base, "shield")
+    assert match.ruleset._team_states[RED].base_virtual_shield == 2000
+    assert match.ruleset._team_states[RED].tech_core_defense == pytest.approx(0.50)
+    assert match.ruleset._economy_by_team[RED].coins == coins_before_d4
 
 
 def test_display_state_exposes_coins_gross_penalty_and_net_rate() -> None:
