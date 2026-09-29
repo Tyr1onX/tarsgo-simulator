@@ -439,9 +439,13 @@ def test_death_history_prevents_duplicate_terrain_xp() -> None:
     hero = _robot(match, "tarsgo-hero")
     assert match.ruleset._grant_terrain_crossing_buff(hero, "launch_ramp")
     xp_before = match.ruleset._progression_by_robot[hero.id].experience
+    hp_before = hero.hp
 
-    assert match.apply_damage(hero, 100000, source_team_id=BLUE) == hero.hp
+    assert match.apply_damage(hero, 100000, source_team_id=BLUE) == hp_before
     match.update(0)
+    hero.alive = True
+    hero.hp = hero.max_hp
+
     assert match.ruleset._grant_terrain_crossing_buff(hero, "launch_ramp")
     assert match.ruleset._progression_by_robot[hero.id].experience == xp_before
 
