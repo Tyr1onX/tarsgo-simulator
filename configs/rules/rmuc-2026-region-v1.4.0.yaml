@@ -92,6 +92,39 @@ field_defense_buffs:
       central: blue-central-elevated-buff
       trapezoid: blue-trapezoid-buff
 
+terrain_crossing:
+  first_experience: 300
+  launch_ramp:
+    sequence_window: 10
+    defense: 0.25
+    defense_duration: 30
+  elevated_ground:
+    sequence_window: 5
+    defense: 0.25
+    defense_duration: 30
+  road:
+    sequence_window: 3
+    defense: 0.25
+    defense_duration: 5
+    reacquire_cooldown: 15
+  tunnel:
+    sequence_window: 3
+    defense: 0.50
+    defense_duration: 10
+    cooling_multiplier: 2.0
+    cooling_duration: 120
+  zones:
+    red:
+      road: [red-terrain-road-lower, red-terrain-road-upper]
+      elevated_ground: [red-terrain-elevated-lower, red-terrain-elevated-upper]
+      launch_ramp: [red-terrain-launch-first, red-terrain-launch-second]
+      tunnel: [red-terrain-tunnel-end-a, red-terrain-tunnel-middle, red-terrain-tunnel-end-b]
+    blue:
+      road: [blue-terrain-road-lower, blue-terrain-road-upper]
+      elevated_ground: [blue-terrain-elevated-lower, blue-terrain-elevated-upper]
+      launch_ramp: [blue-terrain-launch-first, blue-terrain-launch-second]
+      tunnel: [blue-terrain-tunnel-end-a, blue-terrain-tunnel-middle, blue-terrain-tunnel-end-b]
+
 structures:
   base:
     max_hp: 5000
