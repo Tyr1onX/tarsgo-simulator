@@ -137,6 +137,28 @@ def test_four_terrain_sequences_timeout(
     assert match.ruleset._current_terrain_defense(hero) == 0
 
 
+def test_road_sequence_accepts_exact_three_second_boundary() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lower, upper = _terrain_zones(match, "road")
+
+    _enter(match, hero, lower)
+    _leave(match, hero, 3.0)
+    _enter(match, hero, upper)
+
+    assert "road" in _terrain_state(match, hero.id).first_acquired_types
+
+
+def test_engineer_can_trigger_terrain_sequence_without_progression_xp() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+
+    _complete_sequence(match, engineer, "road")
+
+    assert match.ruleset._current_terrain_defense(engineer) == pytest.approx(0.25)
+    assert engineer.id not in match.ruleset._progression_by_robot
+
+
 def test_tunnel_sequence_can_run_from_either_end() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
@@ -307,6 +329,24 @@ def test_tech_core_static_and_terrain_defense_use_max() -> None:
 
     match.ruleset._team_states[RED].tech_core_defense = 0.50
     assert match.ruleset._effective_defense(hero) == pytest.approx(0.50)
+
+
+def test_terrain_defense_damage_event_scoreboard_and_xp_use_final_hp_loss() -> None:
+    match = _match()
+    target = _robot(match, "tarsgo-infantry-1")
+    attacker = _robot(match, "opponent-hero")
+    assert match.ruleset._grant_terrain_crossing_buff(target, "launch_ramp")
+
+    before_hp = target.hp
+    assert match.apply_damage(target, 20, source_robot=attacker) == 15
+    assert target.hp == before_hp - 15
+    event = match.current_events[-1]
+    assert event.damage == 15
+
+    match.update(0)
+
+    assert match.ruleset.attack_damage_by_team[BLUE] == 15
+    assert match.ruleset._progression_by_robot[attacker.id].experience == 60
 
 
 def test_tunnel_cooling_multiplier_changes_effective_cooling_not_heat_limit() -> None:
