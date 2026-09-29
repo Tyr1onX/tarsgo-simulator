@@ -96,6 +96,15 @@ Regional V1.4.0 manual.
 - multiple pending remote deliveries with large-dt end-of-frame settlement;
 - Sentry 100-round minute supply accrual at 60..360 s, accumulation, and whole-pending claim;
 - Tech Core reward metadata with D2/D3 level caps and periodic gold consumed;
+- static own Base Buff Point 50% robot Defense;
+- two independently owned Central Elevated Ground Buff Points with 25% Defense
+  for Hero / Infantry / Sentry;
+- static own Trapezoid Elevated Ground 50% robot Defense;
+- Outpost Buff Point 25% Defense with own-Outpost-alive and pre-300-second enemy
+  occupancy eligibility;
+- official two-second Occupy-status expiration delay for the implemented static
+  Defense Buff Points;
+- Robot effective Defense resolved as max(Tech Core Defense, field Defense);
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -113,7 +122,9 @@ Regional V1.4.0 manual.
 - terrain-traversal Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
-- complete Field Buff system;
+- remaining Field Buff system beyond the implemented static Defense points:
+  Terrain Crossing, Fortress, Resupply healing/respawn, Assembly invincibility,
+  Attack Buff, Vulnerability, and other field effects;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
@@ -176,8 +187,9 @@ insertion/translation/rotation, and sensor validation remain deferred.
 Performance now directly drives both RMUC Hero/Infantry Heat Limit/Cooling and
 chassis power limit. Shooting Heat and the base 60 J chassis Buffer / 5-second
 movement power-off consumer are implemented independently. External Heat cooling
-modifiers and Buffer/power modifiers from Field Buff, Energy Mechanism,
-Fortress, terrain traversal, or Sentry posture remain deferred.
+modifiers and Buffer/power modifiers from Energy Mechanism, Fortress, terrain
+traversal, Resupply, Assembly, or Sentry posture remain deferred. Static
+Base/Central/Trapezoid/Outpost Defense Buff Points are implemented separately.
 
 ### Direct-damage boundary
 
@@ -195,7 +207,7 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include external Field/Energy/
-terrain/Sentry modifiers, remote healing/instant respawn, Drone air support,
-while Tech Core D3/D4 Defense and the D4 Base HP / Virtual Shield reward are
-now active consumers.
+both active consumers. Remaining candidates include Terrain Crossing, Fortress, Resupply/Assembly,
+Energy Mechanism, Attack/Vulnerability modifiers, remote healing/instant
+respawn, and Drone/Radar systems. Tech Core Defense, Base Virtual Shield, and
+the static Base/Central/Trapezoid/Outpost Defense points are active consumers.
