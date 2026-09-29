@@ -49,7 +49,8 @@ def _field(match: Match, robot: Robot) -> float:
 def _destroy_outpost(match: Match, team_id: str) -> None:
     outpost = match.ruleset._outpost_by_team[team_id]
     attacker = BLUE if team_id == RED else RED
-    assert match.apply_damage(outpost, 100000, source_team_id=attacker) == outpost.hp
+    hp_before = outpost.hp
+    assert match.apply_damage(outpost, 100000, source_team_id=attacker) == hp_before
     match.update(0)
 
 
