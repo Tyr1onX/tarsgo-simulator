@@ -69,6 +69,14 @@ shooting_heat:
     heat_limit: 260
     cooling_per_second: 30
 
+chassis_power:
+  detection_hz: 10
+  buffer_energy_max: 60
+  power_off_duration: 5
+  lab_power_demand:
+    stationary: 0
+    moving_over_limit: 5
+
 structures:
   base:
     max_hp: 5000
