@@ -653,6 +653,11 @@ def _draw(
         if display_state is not None
         else {}
     )
+    fortress_reserves = (
+        dict(display_state.robot_projectile_reserves)
+        if display_state is not None
+        else {}
+    )
     shooting_heat = (
         {
             robot_id: (heat, limit, locked, permanently_locked)
@@ -717,6 +722,8 @@ def _draw(
             robot_label = f"{robot_label} EU:{energy_unit_credits}"
         if robot.id in projectile_counts:
             robot_label = f"{robot_label} {projectile_counts[robot.id]}"
+        if robot.id in fortress_reserves:
+            robot_label = f"{robot_label} FR:{fortress_reserves[robot.id]}"
         heat_state = shooting_heat.get(robot.id)
         if heat_state is not None:
             heat, limit, locked, permanently_locked = heat_state

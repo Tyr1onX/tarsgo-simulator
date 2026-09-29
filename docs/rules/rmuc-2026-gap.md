@@ -128,6 +128,14 @@ Regional V1.4.0 manual.
   final candidates rather than added;
 - Fortress Cooling consumed by the existing 10 Hz Shooting Heat path without
   changing Heat Limit/Q2;
+- own Fortress reserved 17 mm Projectile Allowance with
+  `N=min(500, 100+2*floor(Base HP loss/15))`;
+- reserve kept separate from robot own allowance, coins, and purchased-17mm cap;
+- Fortress occupant shot consumption prioritizes reserve then falls back to own
+  allowance through the existing single `on_attack_committed()` path;
+- Rules Lab reserve provisioning state prevents leave/re-entry refill farming,
+  expands only by increased N capacity, and clamps when N decreases;
+- reserve persists off-point and through death but resets between matches;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -145,8 +153,8 @@ Regional V1.4.0 manual.
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
 - remaining Field Buff system beyond static Defense, Terrain Crossing, and the
-  implemented own Fortress Defense/Cooling: enemy Fortress occupation,
-  Fortress reserved Projectile Allowance, Resupply healing/respawn, Assembly
+  implemented own Fortress Defense/Cooling/reserved allowance: enemy Fortress
+  occupation, Resupply healing/respawn, Assembly
   invincibility, Attack Buff, Vulnerability, and other field effects;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
@@ -232,8 +240,8 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include the deferred Fortress reserved-ammo/enemy effects,
-Resupply/Assembly, Energy Mechanism, Attack/Vulnerability modifiers, remote
+both active consumers. Remaining candidates include deferred enemy-Fortress/Vulnerability/Base-armor
+effects, Resupply/Assembly, Energy Mechanism, Attack/Vulnerability modifiers, remote
 healing/instant respawn, and Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains

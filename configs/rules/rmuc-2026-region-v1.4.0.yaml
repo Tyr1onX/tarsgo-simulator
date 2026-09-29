@@ -130,6 +130,12 @@ fortress_own_buff:
   cooling_hp_step: 40
   cooling_cap: 75
   eligible_types: [infantry, sentry]
+  reserved_projectiles:
+    projectile: 17mm
+    base: 100
+    hp_step: 15
+    per_step: 2
+    cap: 500
   zones:
     red: red-fortress-buff
     blue: blue-fortress-buff

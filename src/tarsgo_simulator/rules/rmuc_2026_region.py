@@ -178,6 +178,13 @@ class _FortressBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass
+class _FortressReservedProjectileState:
+    reserved: int = 0
+    last_limit: int = 0
+    initialized: bool = False
+
+
 @dataclass(frozen=True)
 class _TerrainCrossingRule:
     sequence_window: float
@@ -1688,6 +1695,7 @@ class RMUC2026RegionalRules:
             "cooling_hp_step",
             "cooling_cap",
             "eligible_types",
+            "reserved_projectiles",
             "zones",
         }:
             raise ConfigError(
@@ -1729,6 +1737,69 @@ class RMUC2026RegionalRules:
         self._fortress_cooling_hp_step = fortress_cooling_hp_step
         self._fortress_cooling_cap = fortress_cooling_cap
         self._fortress_eligible_types = frozenset(eligible_types)
+
+        reserved_projectiles = _mapping(
+            fortress,
+            "reserved_projectiles",
+            document,
+        )
+        if set(reserved_projectiles) != {
+            "projectile",
+            "base",
+            "hp_step",
+            "per_step",
+            "cap",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.reserved_projectiles` "
+                "字段不完整或包含未知字段"
+            )
+        reserve_projectile = _string(
+            reserved_projectiles,
+            "projectile",
+            document,
+            "fortress_own_buff.reserved_projectiles.projectile",
+        )
+        reserve_base = _positive_integer(
+            reserved_projectiles,
+            "base",
+            document,
+            "fortress_own_buff.reserved_projectiles.base",
+        )
+        reserve_hp_step = _positive_integer(
+            reserved_projectiles,
+            "hp_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.hp_step",
+        )
+        reserve_per_step = _positive_integer(
+            reserved_projectiles,
+            "per_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.per_step",
+        )
+        reserve_cap = _positive_integer(
+            reserved_projectiles,
+            "cap",
+            document,
+            "fortress_own_buff.reserved_projectiles.cap",
+        )
+        if (
+            reserve_projectile != "17mm"
+            or reserve_base != 100
+            or reserve_hp_step != 15
+            or reserve_per_step != 2
+            or reserve_cap != 500
+        ):
+            raise ConfigError(
+                f"{document.path}: Fortress reserve 必须为 "
+                "17mm、100+2*floor(Δ/15)、cap 500"
+            )
+        self._fortress_reserve_projectile = reserve_projectile
+        self._fortress_reserve_base = reserve_base
+        self._fortress_reserve_hp_step = reserve_hp_step
+        self._fortress_reserve_per_step = reserve_per_step
+        self._fortress_reserve_cap = reserve_cap
 
         fortress_zones = _mapping(fortress, "zones", document)
         if set(fortress_zones) != {"red", "blue"}:
@@ -1792,6 +1863,9 @@ class RMUC2026RegionalRules:
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
         self._fortress_zone_by_team: dict[str, Zone] = {}
         self._fortress_state_by_team: dict[str, _FortressBuffState] = {}
+        self._fortress_reserved_by_robot: dict[
+            str, _FortressReservedProjectileState
+        ] = {}
         self._terrain_crossing_by_robot: dict[
             str, _TerrainCrossingState
         ] = {}
@@ -1891,6 +1965,13 @@ class RMUC2026RegionalRules:
                 for robot_id, state in sorted(
                     self._projectile_allowance_by_robot.items()
                 )
+            ),
+            robot_projectile_reserves=tuple(
+                (robot_id, state.reserved)
+                for robot_id, state in sorted(
+                    self._fortress_reserved_by_robot.items()
+                )
+                if state.initialized
             ),
             robot_shooting_heat=tuple(
                 (
@@ -2043,11 +2124,12 @@ class RMUC2026RegionalRules:
     def can_attack(self, robot: Robot) -> bool:
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = self._usable_fortress_reserved(robot)
         return (
             robot.alive
             and robot.damage > 0
             and allowance is not None
-            and allowance.allowed > 0
+            and (allowance.allowed > 0 or usable_fortress_reserved > 0)
             and shooting_heat is not None
             and not shooting_heat.temporarily_locked
             and not shooting_heat.permanently_locked
@@ -2061,19 +2143,28 @@ class RMUC2026RegionalRules:
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
-        """Commit one legal shot using pre-shot effective Heat parameters."""
+        """Commit one legal shot using Fortress reserve first when available."""
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = self._usable_fortress_reserved(robot)
         if (
             allowance is None
-            or allowance.allowed <= 0
+            or (
+                allowance.allowed <= 0
+                and usable_fortress_reserved <= 0
+            )
             or shooting_heat is None
             or shooting_heat.temporarily_locked
             or shooting_heat.permanently_locked
         ):
             return
 
-        allowance.allowed -= 1
+        if usable_fortress_reserved > 0:
+            reserve_state = self._fortress_reserved_by_robot[robot.id]
+            reserve_state.reserved -= 1
+        else:
+            allowance.allowed -= 1
+
         allowance.disengaged_elapsed = 0.0
         allowance.combat_activity_this_frame = True
 
@@ -2434,6 +2525,7 @@ class RMUC2026RegionalRules:
             hp_gain = min(bonus, missing_hp)
             base.hp += hp_gain
             structure_state.base_virtual_shield += bonus - hp_gain
+            self._sync_initialized_fortress_reserves(team_id)
 
     def _complete_d4_attempt(self, team_id: str) -> None:
         team_state = self._tech_core_by_team[team_id]
@@ -2581,6 +2673,68 @@ class RMUC2026RegionalRules:
             and self._team_states[robot.team].outpost_ever_destroyed
         )
 
+    def _fortress_reserve_limit(self, robot: Robot) -> int:
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_reserve_cap,
+            self._fortress_reserve_base
+            + self._fortress_reserve_per_step
+            * math.floor(delta / self._fortress_reserve_hp_step),
+        )
+
+    def _sync_fortress_reserved(
+        self,
+        robot: Robot,
+        *,
+        allow_initialize: bool,
+    ) -> _FortressReservedProjectileState | None:
+        state = self._fortress_reserved_by_robot.get(robot.id)
+        if state is None:
+            return None
+
+        limit = self._fortress_reserve_limit(robot)
+        if not state.initialized:
+            if not allow_initialize:
+                return state
+            state.reserved = limit
+            state.last_limit = limit
+            state.initialized = True
+            return state
+
+        if limit > state.last_limit:
+            state.reserved += limit - state.last_limit
+        elif limit < state.last_limit:
+            state.reserved = min(state.reserved, limit)
+        state.last_limit = limit
+        return state
+
+    def _sync_initialized_fortress_reserves(
+        self,
+        team_id: str | None = None,
+    ) -> None:
+        for robot_id, state in self._fortress_reserved_by_robot.items():
+            if not state.initialized:
+                continue
+            robot = self._robots_by_id[robot_id]
+            if team_id is not None and robot.team != team_id:
+                continue
+            self._sync_fortress_reserved(
+                robot,
+                allow_initialize=False,
+            )
+
+    def _usable_fortress_reserved(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        state = self._sync_fortress_reserved(
+            robot,
+            allow_initialize=True,
+        )
+        if state is None:
+            return 0
+        return state.reserved
+
     def _current_fortress_defense(self, robot: Robot) -> float:
         return self._fortress_defense if self._is_fortress_occupant(robot) else 0.0
 
@@ -2615,6 +2769,10 @@ class RMUC2026RegionalRules:
                 and zone.contains(owner.position)
             ):
                 state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    owner,
+                    allow_initialize=True,
+                )
             elif state.owner_robot_id is not None:
                 state.release_remaining = max(
                     0.0,
@@ -2641,6 +2799,10 @@ class RMUC2026RegionalRules:
             if candidates:
                 state.owner_robot_id = candidates[0].id
                 state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    candidates[0],
+                    allow_initialize=True,
+                )
 
     def _current_terrain_defense(self, robot: Robot) -> float:
         if not robot.alive:
@@ -3296,6 +3458,13 @@ class RMUC2026RegionalRules:
             team_id: _FortressBuffState()
             for team_id in team_by_side.values()
         }
+        self._fortress_reserved_by_robot = {
+            robot.id: _FortressReservedProjectileState()
+            for robot in match.robots
+            if robot.type in self._fortress_eligible_types
+            and self._projectile_by_type.get(robot.type)
+            == self._fortress_reserve_projectile
+        }
 
         self._terrain_zones_by_side_and_type = {
             side: {
@@ -3346,6 +3515,7 @@ class RMUC2026RegionalRules:
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._sync_initialized_fortress_reserves()
         self._advance_projectile_allowance(match, dt)
         self._advance_tech_core_attempts(match, dt)
         self._advance_d4(match, dt)
