@@ -172,6 +172,12 @@ class _CentralDefenseBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass
+class _FortressBuffState:
+    owner_robot_id: str | None = None
+    release_remaining: float = 0.0
+
+
 @dataclass(frozen=True)
 class _TerrainCrossingRule:
     sequence_window: float
@@ -1676,6 +1682,74 @@ class RMUC2026RegionalRules:
                 parsed_side[terrain_type] = zone_ids
             self._terrain_zone_ids[side] = parsed_side
 
+        fortress = _mapping(document.data, "fortress_own_buff", document)
+        if set(fortress) != {
+            "defense",
+            "cooling_hp_step",
+            "cooling_cap",
+            "eligible_types",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff` "
+                "字段不完整或包含未知字段"
+            )
+        fortress_defense = float(
+            _number(
+                fortress,
+                "defense",
+                document,
+                "fortress_own_buff.defense",
+            )
+        )
+        fortress_cooling_hp_step = _positive_integer(
+            fortress,
+            "cooling_hp_step",
+            document,
+            "fortress_own_buff.cooling_hp_step",
+        )
+        fortress_cooling_cap = _positive_integer(
+            fortress,
+            "cooling_cap",
+            document,
+            "fortress_own_buff.cooling_cap",
+        )
+        eligible_types = fortress.get("eligible_types")
+        if (
+            fortress_defense != 0.50
+            or fortress_cooling_hp_step != 40
+            or fortress_cooling_cap != 75
+            or eligible_types != ["infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: own Fortress 必须为 "
+                "Defense 50%、Δ/40、cap 75、Infantry/Sentry"
+            )
+        self._fortress_defense = fortress_defense
+        self._fortress_cooling_hp_step = fortress_cooling_hp_step
+        self._fortress_cooling_cap = fortress_cooling_cap
+        self._fortress_eligible_types = frozenset(eligible_types)
+
+        fortress_zones = _mapping(fortress, "zones", document)
+        if set(fortress_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.zones` "
+                "必须包含 red、blue"
+            )
+        self._fortress_zone_ids = {
+            side: _string(
+                fortress_zones,
+                side,
+                document,
+                f"fortress_own_buff.zones.{side}",
+            )
+            for side in ("red", "blue")
+        }
+        if len(set(self._fortress_zone_ids.values())) != 2:
+            raise ConfigError(
+                f"{document.path}: Fortress zone id 不得重复"
+            )
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1716,6 +1790,8 @@ class RMUC2026RegionalRules:
             str, _CentralDefenseBuffState
         ] = {}
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
+        self._fortress_zone_by_team: dict[str, Zone] = {}
+        self._fortress_state_by_team: dict[str, _FortressBuffState] = {}
         self._terrain_crossing_by_robot: dict[
             str, _TerrainCrossingState
         ] = {}
