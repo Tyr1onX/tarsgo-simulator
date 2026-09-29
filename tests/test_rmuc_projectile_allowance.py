@@ -83,11 +83,12 @@ def test_committed_sentry_shot_consumes_one_round() -> None:
     match = _match()
     sentry = _robot(match, "tarsgo-sentry")
     state = match.ruleset._projectile_allowance_by_robot[sentry.id]
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[sentry.id]
 
     match.ruleset.on_attack_committed(sentry)
 
     assert state.allowed == 299
-    assert state.disengaged_elapsed == 0
+    assert lifecycle.disengaged_elapsed == 0
 
 
 def test_no_legal_target_does_not_consume_allowance() -> None:
@@ -255,8 +256,9 @@ def test_remote_hero_exchange_is_allowed_at_match_start_and_delayed() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
     state = match.ruleset._projectile_allowance_by_robot[hero.id]
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
 
-    assert state.disengaged_elapsed == pytest.approx(6.0)
+    assert lifecycle.disengaged_elapsed == pytest.approx(6.0)
     assert match.ruleset.remote_exchange_projectiles(match, hero)
 
     assert match.ruleset._economy_by_team[RED].coins == 250
@@ -302,11 +304,12 @@ def test_committed_shot_resets_disengage_and_remote_requires_six_new_seconds() -
     match = _match()
     hero = _robot(match, "tarsgo-hero")
     state = match.ruleset._projectile_allowance_by_robot[hero.id]
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
     state.allowed = 2
 
     match.ruleset.on_attack_committed(hero)
     assert state.allowed == 1
-    assert state.disengaged_elapsed == 0
+    assert lifecycle.disengaged_elapsed == 0
     assert not match.ruleset.remote_exchange_projectiles(match, hero)
 
     # Flush the frame containing the committed shot; the continuous six-second
@@ -322,18 +325,18 @@ def test_damage_resets_disengage_and_repeated_activity_restarts_timer() -> None:
     match = _match()
     infantry = _robot(match, "tarsgo-infantry-1")
     attacker = _robot(match, "opponent-sentry")
-    state = match.ruleset._projectile_allowance_by_robot[infantry.id]
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[infantry.id]
 
-    state.disengaged_elapsed = 0
+    lifecycle.disengaged_elapsed = 0
     match.update(5.0)
-    assert state.disengaged_elapsed == pytest.approx(5.0)
+    assert lifecycle.disengaged_elapsed == pytest.approx(5.0)
 
     assert match.apply_damage(infantry, 20, source_robot=attacker) == 20
     match.update(0)
-    assert state.disengaged_elapsed == 0
+    assert lifecycle.disengaged_elapsed == 0
     match.update(1.0)
 
-    assert state.disengaged_elapsed == pytest.approx(1.0)
+    assert lifecycle.disengaged_elapsed == pytest.approx(1.0)
     assert not match.ruleset.remote_exchange_projectiles(match, infantry)
 
 
@@ -554,10 +557,10 @@ def test_reset_restores_allowance_purchase_pending_supply_and_disengaged_default
     assert states["tarsgo-infantry-1"].allowed == 0
     assert states["tarsgo-infantry-2"].allowed == 0
     assert states["tarsgo-sentry"].allowed == 300
+    assert all(state.pending_remote_deliveries == [] for state in states.values())
     assert all(
-        state.pending_remote_deliveries == []
-        and state.disengaged_elapsed == pytest.approx(6.0)
-        for state in states.values()
+        state.disengaged_elapsed == pytest.approx(6.0)
+        for state in match.ruleset._robot_lifecycle_by_robot.values()
     )
     for purchase in match.ruleset._projectile_purchase_by_team.values():
         assert purchase.purchased_17mm == 0
@@ -568,7 +571,7 @@ def test_reset_restores_allowance_purchase_pending_supply_and_disengaged_default
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda data: data["projectile_allowance"].__setitem__("disengaged_after", 0),
+        lambda data: data["robot_lifecycle"].__setitem__("disengaged_after", 0),
         lambda data: data["projectile_allowance"]["initial"]["hero"].__setitem__(
             "projectile", "17mm"
         ),
