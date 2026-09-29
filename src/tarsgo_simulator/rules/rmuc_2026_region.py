@@ -1389,13 +1389,13 @@ class RMUC2026RegionalRules:
                 f"{document.path}: `chassis_power.lab_power_demand` "
                 "必须只包含 stationary、moving_over_limit"
             )
-        stationary = _number(
+        stationary = _nonnegative_integer(
             lab_power_demand,
             "stationary",
             document,
             "chassis_power.lab_power_demand.stationary",
         )
-        moving_over_limit = _number(
+        moving_over_limit = _positive_integer(
             lab_power_demand,
             "moving_over_limit",
             document,
