@@ -2390,9 +2390,12 @@ class RMUC2026RegionalRules:
                 elif not eligible:
                     self._field_occupy_remaining[key] = 0.0
                 else:
-                    self._field_occupy_remaining[key] = max(
+                    remaining = max(
                         0.0,
                         self._field_occupy_remaining.get(key, 0.0) - dt,
+                    )
+                    self._field_occupy_remaining[key] = (
+                        0.0 if remaining <= 1e-9 else remaining
                     )
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
