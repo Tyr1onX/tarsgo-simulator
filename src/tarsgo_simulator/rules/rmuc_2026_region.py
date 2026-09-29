@@ -157,6 +157,13 @@ class _EffectiveHeatParameters:
     permanent_threshold: float
 
 
+@dataclass
+class _ChassisPowerState:
+    buffer_energy: float
+    power_off_remaining: float = 0.0
+    blocked_this_frame: bool = False
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 Regional Rules Lab with progression, economy, allowance, and Heat."""
 
@@ -1327,6 +1334,81 @@ class RMUC2026RegionalRules:
         self._sentry_heat_limit = float(sentry_heat_limit)
         self._sentry_cooling_per_second = float(sentry_cooling)
 
+        chassis_power = _mapping(document.data, "chassis_power", document)
+        if set(chassis_power) != {
+            "detection_hz",
+            "buffer_energy_max",
+            "power_off_duration",
+            "lab_power_demand",
+        }:
+            raise ConfigError(
+                f"{document.path}: `chassis_power` 字段不完整或包含未知字段"
+            )
+        detection_hz = _positive_integer(
+            chassis_power,
+            "detection_hz",
+            document,
+            "chassis_power.detection_hz",
+        )
+        if detection_hz != 10:
+            raise ConfigError(
+                f"{document.path}: RMUC chassis power detection_hz 必须为 10"
+            )
+        self._chassis_power_detection_hz = float(detection_hz)
+
+        buffer_energy_max = _number(
+            chassis_power,
+            "buffer_energy_max",
+            document,
+            "chassis_power.buffer_energy_max",
+        )
+        power_off_duration = _number(
+            chassis_power,
+            "power_off_duration",
+            document,
+            "chassis_power.power_off_duration",
+        )
+        if buffer_energy_max != 60:
+            raise ConfigError(
+                f"{document.path}: RMUC 基础 Buffer Energy 上限必须为 60 J"
+            )
+        if power_off_duration != 5:
+            raise ConfigError(
+                f"{document.path}: RMUC Buffer 耗尽底盘断电必须为 5 秒"
+            )
+        self._chassis_buffer_energy_max = float(buffer_energy_max)
+        self._chassis_power_off_duration = float(power_off_duration)
+
+        lab_power_demand = _mapping(
+            chassis_power,
+            "lab_power_demand",
+            document,
+        )
+        if set(lab_power_demand) != {"stationary", "moving_over_limit"}:
+            raise ConfigError(
+                f"{document.path}: `chassis_power.lab_power_demand` "
+                "必须只包含 stationary、moving_over_limit"
+            )
+        stationary = _number(
+            lab_power_demand,
+            "stationary",
+            document,
+            "chassis_power.lab_power_demand.stationary",
+        )
+        moving_over_limit = _number(
+            lab_power_demand,
+            "moving_over_limit",
+            document,
+            "chassis_power.lab_power_demand.moving_over_limit",
+        )
+        if stationary != 0 or moving_over_limit != 5:
+            raise ConfigError(
+                f"{document.path}: Rules Lab synthetic power 必须为 "
+                "stationary=0、moving_over_limit=5"
+            )
+        self._chassis_stationary_power_demand = float(stationary)
+        self._chassis_moving_over_limit = float(moving_over_limit)
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1350,6 +1432,9 @@ class RMUC2026RegionalRules:
         ] = {}
         self._shooting_heat_by_robot: dict[str, _ShootingHeatState] = {}
         self._heat_cooling_accumulator = 0.0
+        self._chassis_power_by_robot: dict[str, _ChassisPowerState] = {}
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot: dict[str, float] = {}
         self._next_sentry_supply_grant = self._sentry_supply_interval
         self._projectile_exchange_zones_by_team: dict[str, tuple[Zone, ...]] = {}
         self._supply_buff_zone_by_team: dict[str, Zone] = {}
