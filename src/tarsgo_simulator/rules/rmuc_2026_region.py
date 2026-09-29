@@ -3524,6 +3524,14 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                terrain = self._terrain_crossing_by_robot.get(event.robot_id)
+                if terrain is not None:
+                    terrain.standard_defense = 0.0
+                    terrain.standard_defense_remaining = 0.0
+                    terrain.tunnel_defense_remaining = 0.0
+                    terrain.tunnel_cooling_remaining = 0.0
+                    terrain.occupied_rfid_zone_ids.clear()
+                    self._reset_terrain_sequence(terrain)
                 shooting_heat = self._shooting_heat_by_robot.get(event.robot_id)
                 if shooting_heat is not None:
                     shooting_heat.heat = 0.0
