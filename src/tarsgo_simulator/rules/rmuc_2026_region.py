@@ -166,6 +166,12 @@ class _ChassisPowerState:
     blocked_this_frame: bool = False
 
 
+@dataclass
+class _CentralDefenseBuffState:
+    owner_team_id: str | None = None
+    release_remaining: float = 0.0
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 Regional Rules Lab with progression, economy, Heat, and chassis power."""
 
@@ -1411,6 +1417,84 @@ class RMUC2026RegionalRules:
         self._chassis_stationary_power_demand = float(stationary)
         self._chassis_moving_over_limit = float(moving_over_limit)
 
+        field_defense = _mapping(document.data, "field_defense_buffs", document)
+        if set(field_defense) != {
+            "occupy_release_delay",
+            "defense",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `field_defense_buffs` 字段不完整或包含未知字段"
+            )
+        occupy_release_delay = _number(
+            field_defense,
+            "occupy_release_delay",
+            document,
+            "field_defense_buffs.occupy_release_delay",
+        )
+        if occupy_release_delay != 2:
+            raise ConfigError(
+                f"{document.path}: Buff Point Occupy 失效延迟必须为 2 秒"
+            )
+        self._field_occupy_release_delay = float(occupy_release_delay)
+
+        defense = _mapping(field_defense, "defense", document)
+        if set(defense) != {"base", "central", "trapezoid", "outpost"}:
+            raise ConfigError(
+                f"{document.path}: `field_defense_buffs.defense` "
+                "必须包含 base、central、trapezoid、outpost"
+            )
+        expected_field_defense = {
+            "base": 0.50,
+            "central": 0.25,
+            "trapezoid": 0.50,
+            "outpost": 0.25,
+        }
+        self._field_defense_by_type: dict[str, float] = {}
+        for buff_type, expected in expected_field_defense.items():
+            value = _number(
+                defense,
+                buff_type,
+                document,
+                f"field_defense_buffs.defense.{buff_type}",
+            )
+            if abs(float(value) - expected) > 1e-9:
+                raise ConfigError(
+                    f"{document.path}: {buff_type} Defense Buff 必须为 "
+                    f"{int(expected * 100)}%"
+                )
+            self._field_defense_by_type[buff_type] = float(value)
+
+        field_zones = _mapping(field_defense, "zones", document)
+        if set(field_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `field_defense_buffs.zones` 必须包含 red、blue"
+            )
+        self._field_zone_ids: dict[str, dict[str, str]] = {}
+        all_field_zone_ids: set[str] = set()
+        for side in ("red", "blue"):
+            side_zones = _mapping(field_zones, side, document)
+            if set(side_zones) != {"central", "trapezoid"}:
+                raise ConfigError(
+                    f"{document.path}: field Defense {side} zones "
+                    "必须只包含 central、trapezoid"
+                )
+            parsed_zones = {
+                kind: _string(
+                    side_zones,
+                    kind,
+                    document,
+                    f"field_defense_buffs.zones.{side}.{kind}",
+                )
+                for kind in ("central", "trapezoid")
+            }
+            if any(zone_id in all_field_zone_ids for zone_id in parsed_zones.values()):
+                raise ConfigError(
+                    f"{document.path}: field Defense Buff zone id 不得重复"
+                )
+            all_field_zone_ids.update(parsed_zones.values())
+            self._field_zone_ids[side] = parsed_zones
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1442,6 +1526,15 @@ class RMUC2026RegionalRules:
         self._supply_buff_zone_by_team: dict[str, Zone] = {}
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
+        self._field_buff_elapsed = 0.0
+        self._field_base_zone_by_team: dict[str, Zone] = {}
+        self._field_outpost_zone_by_team: dict[str, Zone] = {}
+        self._field_trapezoid_zone_by_team: dict[str, Zone] = {}
+        self._field_central_zones: tuple[Zone, ...] = ()
+        self._central_defense_state_by_zone: dict[
+            str, _CentralDefenseBuffState
+        ] = {}
+        self._field_occupy_remaining: dict[tuple[str, str], float] = {}
 
     @property
     def time_limit(self) -> float:
@@ -1506,10 +1599,10 @@ class RMUC2026RegionalRules:
             robot_statuses=tuple(
                 (
                     robot.id,
-                    f"DEF {int(self._team_states[robot.team].tech_core_defense * 100)}%",
+                    f"DEF {int(self._effective_defense(robot) * 100)}%",
                 )
                 for robot in sorted(self._robots_by_id.values(), key=lambda item: item.id)
-                if self._team_states[robot.team].tech_core_defense > 0
+                if self._effective_defense(robot) > 0
             ),
             attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
             coins=tuple(
@@ -2146,7 +2239,7 @@ class RMUC2026RegionalRules:
         if state is None:
             return amount
 
-        defense = state.tech_core_defense
+        defense = self._effective_defense(target)
         resolved = int(math.floor(amount * (1.0 - defense) + 0.5))
         resolved = max(0, resolved)
 
@@ -2161,6 +2254,143 @@ class RMUC2026RegionalRules:
             resolved -= absorbed
 
         return resolved
+
+    def _effective_defense(self, target: DamageableTarget) -> float:
+        state = self._team_states.get(target.team)
+        if state is None:
+            return 0.0
+        if not isinstance(target, Robot):
+            return state.tech_core_defense
+        return max(
+            state.tech_core_defense,
+            self._current_field_defense(target),
+        )
+
+    def _current_field_defense(self, robot: Robot) -> float:
+        if not robot.alive:
+            return 0.0
+
+        best = 0.0
+        own_base = self._field_base_zone_by_team.get(robot.team)
+        if (
+            own_base is not None
+            and self._field_occupy_remaining.get((robot.id, own_base.id), 0.0) > 0
+        ):
+            best = max(best, self._field_defense_by_type["base"])
+
+        own_trapezoid = self._field_trapezoid_zone_by_team.get(robot.team)
+        if (
+            own_trapezoid is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_trapezoid.id), 0.0
+            ) > 0
+        ):
+            best = max(best, self._field_defense_by_type["trapezoid"])
+
+        for zone in self._field_central_zones:
+            point_state = self._central_defense_state_by_zone[zone.id]
+            if (
+                point_state.owner_team_id == robot.team
+                and self._field_occupy_remaining.get((robot.id, zone.id), 0.0) > 0
+            ):
+                best = max(best, self._field_defense_by_type["central"])
+
+        for point_team, zone in self._field_outpost_zone_by_team.items():
+            if (
+                self._field_occupy_remaining.get((robot.id, zone.id), 0.0) > 0
+                and self._outpost_buff_eligible(robot, point_team)
+            ):
+                best = max(best, self._field_defense_by_type["outpost"])
+
+        return best
+
+    def _outpost_buff_eligible(self, robot: Robot, point_team: str) -> bool:
+        own_outpost = self._outpost_by_team.get(robot.team)
+        point_outpost = self._outpost_by_team.get(point_team)
+        if own_outpost is None or point_outpost is None or not own_outpost.alive:
+            return False
+        if point_team == robot.team:
+            return True
+        return (
+            self._field_buff_elapsed < 300.0
+            and not point_outpost.alive
+        )
+
+    def _advance_field_defense_occupancy(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        self._field_buff_elapsed = match.elapsed_time
+
+        for zone in self._field_central_zones:
+            point_state = self._central_defense_state_by_zone[zone.id]
+            physical_teams = {
+                robot.team
+                for robot in self._robots_by_id.values()
+                if robot.alive
+                and robot.type in {"hero", "infantry", "sentry"}
+                and zone.contains(robot.position)
+            }
+
+            if point_state.owner_team_id is not None:
+                if point_state.owner_team_id in physical_teams:
+                    point_state.release_remaining = self._field_occupy_release_delay
+                else:
+                    point_state.release_remaining = max(
+                        0.0,
+                        point_state.release_remaining - dt,
+                    )
+                    if point_state.release_remaining <= 1e-9:
+                        point_state.owner_team_id = None
+                        point_state.release_remaining = 0.0
+
+            if point_state.owner_team_id is None and len(physical_teams) == 1:
+                point_state.owner_team_id = next(iter(physical_teams))
+                point_state.release_remaining = self._field_occupy_release_delay
+
+        for robot in self._robots_by_id.values():
+            if not robot.alive:
+                for key in [
+                    key
+                    for key in self._field_occupy_remaining
+                    if key[0] == robot.id
+                ]:
+                    self._field_occupy_remaining[key] = 0.0
+                continue
+
+            candidate_zones: list[tuple[Zone, bool]] = []
+            own_base = self._field_base_zone_by_team[robot.team]
+            own_trapezoid = self._field_trapezoid_zone_by_team[robot.team]
+            candidate_zones.extend(((own_base, True), (own_trapezoid, True)))
+            candidate_zones.extend(
+                (
+                    zone,
+                    robot.type in {"hero", "infantry", "sentry"},
+                )
+                for zone in self._field_central_zones
+            )
+            candidate_zones.extend(
+                (
+                    zone,
+                    self._outpost_buff_eligible(robot, point_team),
+                )
+                for point_team, zone in self._field_outpost_zone_by_team.items()
+            )
+
+            for zone, eligible in candidate_zones:
+                key = (robot.id, zone.id)
+                if eligible and zone.contains(robot.position):
+                    self._field_occupy_remaining[key] = (
+                        self._field_occupy_release_delay
+                    )
+                elif not eligible:
+                    self._field_occupy_remaining[key] = 0.0
+                else:
+                    self._field_occupy_remaining[key] = max(
+                        0.0,
+                        self._field_occupy_remaining.get(key, 0.0) - dt,
+                    )
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Settle synthetic RMUC chassis power at 10 Hz before movement."""
@@ -2227,7 +2457,8 @@ class RMUC2026RegionalRules:
             )
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
-        """Cool RMUC shooting Heat at 10 Hz before this frame commits shots."""
+        """Refresh field Defense occupancy, then cool Shooting Heat at 10 Hz."""
+        self._advance_field_defense_occupancy(match, max(0.0, dt))
         if dt <= 0:
             return
 
@@ -2401,6 +2632,11 @@ class RMUC2026RegionalRules:
                 for side_zones in self._projectile_zone_ids.values()
                 for zone_id in side_zones.values()
             }
+            | {
+                zone_id
+                for side_zones in self._field_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
         )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
@@ -2437,6 +2673,34 @@ class RMUC2026RegionalRules:
             ]
             for side in ("red", "blue")
         }
+        self._field_base_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["base"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_outpost_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["outpost"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_trapezoid_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._field_zone_ids[side]["trapezoid"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_central_zones = tuple(
+            zones_by_id[self._field_zone_ids[side]["central"]]
+            for side in ("red", "blue")
+        )
+        self._central_defense_state_by_zone = {
+            zone.id: _CentralDefenseBuffState()
+            for zone in self._field_central_zones
+        }
+        self._field_occupy_remaining = {}
+        self._field_buff_elapsed = match.elapsed_time
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
