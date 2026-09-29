@@ -1966,6 +1966,13 @@ class RMUC2026RegionalRules:
                     self._projectile_allowance_by_robot.items()
                 )
             ),
+            robot_projectile_reserves=tuple(
+                (robot_id, state.reserved)
+                for robot_id, state in sorted(
+                    self._fortress_reserved_by_robot.items()
+                )
+                if state.initialized
+            ),
             robot_shooting_heat=tuple(
                 (
                     robot_id,
@@ -3370,6 +3377,13 @@ class RMUC2026RegionalRules:
             team_id: _FortressBuffState()
             for team_id in team_by_side.values()
         }
+        self._fortress_reserved_by_robot = {
+            robot.id: _FortressReservedProjectileState()
+            for robot in match.robots
+            if robot.type in self._fortress_eligible_types
+            and self._projectile_by_type.get(robot.type)
+            == self._fortress_reserve_projectile
+        }
 
         self._terrain_zones_by_side_and_type = {
             side: {
@@ -3420,6 +3434,7 @@ class RMUC2026RegionalRules:
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._sync_initialized_fortress_reserves()
         self._advance_projectile_allowance(match, dt)
         self._advance_tech_core_attempts(match, dt)
         self._advance_d4(match, dt)
