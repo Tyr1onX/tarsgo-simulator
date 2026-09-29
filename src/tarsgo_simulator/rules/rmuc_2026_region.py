@@ -2321,7 +2321,10 @@ class RMUC2026RegionalRules:
         match: "Match",
         dt: float,
     ) -> None:
-        self._field_buff_elapsed = match.elapsed_time
+        self._field_buff_elapsed = min(
+            match.elapsed_time + dt,
+            self._time_limit,
+        )
 
         for zone in self._field_central_zones:
             point_state = self._central_defense_state_by_zone[zone.id]
