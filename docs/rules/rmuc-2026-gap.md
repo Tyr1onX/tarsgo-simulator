@@ -136,6 +136,18 @@ Regional V1.4.0 manual.
 - Rules Lab reserve provisioning state prevents leave/re-entry refill farming,
   expands only by increased N capacity, and clamps when N decreases;
 - reserve persists off-point and through death but resets between matches;
+- enemy Fortress occupation for Infantry/Sentry after 180 s once the target
+  Outpost has ever been destroyed;
+- independent per-robot opponent-Fortress Occupy timers with 2 s Occupy release
+  and 3 s paused retention after Occupy expiry or death;
+- V1.4.0 opponent-Fortress 100% Vulnerability through max-based
+  `_effective_vulnerability()`;
+- damage resolution now uses `1 - Defense + Vulnerability` with existing
+  half-up rounding;
+- single-robot 20 s opponent-Fortress trigger reuses
+  `base_armor_deployed`;
+- Base armor deployment disables all Fortress Vulnerability without mutating
+  HP, max HP, Virtual Shield, or Outpost-driven Base invincibility;
 - 2800 × 1500 synthetic Rules Lab world using the existing Viewport.
 
 ## Intentionally not implemented
@@ -153,9 +165,8 @@ Regional V1.4.0 manual.
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
 - remaining Field Buff system beyond static Defense, Terrain Crossing, and the
-  implemented own Fortress Defense/Cooling/reserved allowance: enemy Fortress
-  occupation, Resupply healing/respawn, Assembly
-  invincibility, Attack Buff, Vulnerability, and other field effects;
+  implemented Fortress own/enemy rule-level effects: Resupply healing/respawn,
+  Assembly invincibility, Attack Buff, Radar Vulnerability, and other field effects;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
@@ -181,7 +192,7 @@ Regional V1.4.0 manual.
 - Outpost rotation physics;
 - Sentry automatic/semi-automatic mode differences, autonomous purchase policy,
   posture, or other special commands;
-- armor deployment geometry or hitbox changes.
+- Base armor deployment geometry or hitbox changes.
 
 ### Unknown-source Experience
 
@@ -240,8 +251,8 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include deferred enemy-Fortress/Vulnerability/Base-armor
-effects, Resupply/Assembly, Energy Mechanism, Attack/Vulnerability modifiers, remote
+both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
+geometry, Resupply/Assembly, Energy Mechanism, Attack modifiers, remote
 healing/instant respawn, and Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
