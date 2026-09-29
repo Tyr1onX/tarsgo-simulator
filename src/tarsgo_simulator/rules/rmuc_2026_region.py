@@ -172,6 +172,38 @@ class _CentralDefenseBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass(frozen=True)
+class _TerrainCrossingRule:
+    sequence_window: float
+    defense: float
+    defense_duration: float
+    reacquire_cooldown: float = 0.0
+    cooling_multiplier: float = 1.0
+    cooling_duration: float = 0.0
+
+
+@dataclass
+class _TerrainSequenceState:
+    terrain_type: str | None = None
+    expected_zone_ids: tuple[str, ...] = ()
+    next_index: int = 0
+    expires_at: float = 0.0
+
+
+@dataclass
+class _TerrainCrossingState:
+    standard_defense: float = 0.0
+    standard_defense_remaining: float = 0.0
+    tunnel_defense_remaining: float = 0.0
+    tunnel_cooling_remaining: float = 0.0
+    road_reacquire_remaining: float = 0.0
+    sequence: _TerrainSequenceState = field(
+        default_factory=_TerrainSequenceState
+    )
+    first_acquired_types: set[str] = field(default_factory=set)
+    occupied_rfid_zone_ids: set[str] = field(default_factory=set)
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 Regional Rules Lab with progression, economy, Heat, and chassis power."""
 
@@ -1495,6 +1527,155 @@ class RMUC2026RegionalRules:
             all_field_zone_ids.update(parsed_zones.values())
             self._field_zone_ids[side] = parsed_zones
 
+        terrain_crossing = _mapping(document.data, "terrain_crossing", document)
+        if set(terrain_crossing) != {
+            "first_experience",
+            "launch_ramp",
+            "elevated_ground",
+            "road",
+            "tunnel",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `terrain_crossing` 字段不完整或包含未知字段"
+            )
+        first_experience = _positive_integer(
+            terrain_crossing,
+            "first_experience",
+            document,
+            "terrain_crossing.first_experience",
+        )
+        if first_experience != 300:
+            raise ConfigError(
+                f"{document.path}: Terrain Crossing 首次 Experience 必须为 300"
+            )
+        self._terrain_first_experience = float(first_experience)
+
+        expected_terrain_rules = {
+            "launch_ramp": {
+                "keys": {"sequence_window", "defense", "defense_duration"},
+                "sequence_window": 10.0,
+                "defense": 0.25,
+                "defense_duration": 30.0,
+            },
+            "elevated_ground": {
+                "keys": {"sequence_window", "defense", "defense_duration"},
+                "sequence_window": 5.0,
+                "defense": 0.25,
+                "defense_duration": 30.0,
+            },
+            "road": {
+                "keys": {
+                    "sequence_window",
+                    "defense",
+                    "defense_duration",
+                    "reacquire_cooldown",
+                },
+                "sequence_window": 3.0,
+                "defense": 0.25,
+                "defense_duration": 5.0,
+                "reacquire_cooldown": 15.0,
+            },
+            "tunnel": {
+                "keys": {
+                    "sequence_window",
+                    "defense",
+                    "defense_duration",
+                    "cooling_multiplier",
+                    "cooling_duration",
+                },
+                "sequence_window": 3.0,
+                "defense": 0.50,
+                "defense_duration": 10.0,
+                "cooling_multiplier": 2.0,
+                "cooling_duration": 120.0,
+            },
+        }
+        self._terrain_rules: dict[str, _TerrainCrossingRule] = {}
+        for terrain_type, expected in expected_terrain_rules.items():
+            item = _mapping(terrain_crossing, terrain_type, document)
+            if set(item) != expected["keys"]:
+                raise ConfigError(
+                    f"{document.path}: `terrain_crossing.{terrain_type}` "
+                    "字段不完整或包含未知字段"
+                )
+            parsed = {
+                key: float(
+                    _number(
+                        item,
+                        key,
+                        document,
+                        f"terrain_crossing.{terrain_type}.{key}",
+                    )
+                )
+                for key in expected["keys"]
+            }
+            for key, expected_value in expected.items():
+                if key == "keys":
+                    continue
+                if abs(parsed[key] - expected_value) > 1e-9:
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.{terrain_type}.{key} "
+                        "与 RMUC 2026 Regional V1.4.0 不匹配"
+                    )
+            self._terrain_rules[terrain_type] = _TerrainCrossingRule(
+                sequence_window=parsed["sequence_window"],
+                defense=parsed["defense"],
+                defense_duration=parsed["defense_duration"],
+                reacquire_cooldown=parsed.get("reacquire_cooldown", 0.0),
+                cooling_multiplier=parsed.get("cooling_multiplier", 1.0),
+                cooling_duration=parsed.get("cooling_duration", 0.0),
+            )
+
+        terrain_zones = _mapping(terrain_crossing, "zones", document)
+        if set(terrain_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `terrain_crossing.zones` 必须包含 red、blue"
+            )
+        self._terrain_zone_ids: dict[
+            str, dict[str, tuple[str, ...]]
+        ] = {}
+        all_terrain_zone_ids: set[str] = set()
+        expected_lengths = {
+            "road": 2,
+            "elevated_ground": 2,
+            "launch_ramp": 2,
+            "tunnel": 3,
+        }
+        for side in ("red", "blue"):
+            side_zones = _mapping(terrain_zones, side, document)
+            if set(side_zones) != set(expected_lengths):
+                raise ConfigError(
+                    f"{document.path}: terrain_crossing.zones.{side} "
+                    "必须包含 road、elevated_ground、launch_ramp、tunnel"
+                )
+            parsed_side: dict[str, tuple[str, ...]] = {}
+            for terrain_type, expected_length in expected_lengths.items():
+                raw_zone_ids = side_zones.get(terrain_type)
+                if (
+                    not isinstance(raw_zone_ids, list)
+                    or len(raw_zone_ids) != expected_length
+                    or not all(
+                        isinstance(zone_id, str) and zone_id
+                        for zone_id in raw_zone_ids
+                    )
+                ):
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.zones.{side}."
+                        f"{terrain_type} 必须是 {expected_length} 个非空 zone id"
+                    )
+                zone_ids = tuple(raw_zone_ids)
+                if (
+                    len(set(zone_ids)) != len(zone_ids)
+                    or any(zone_id in all_terrain_zone_ids for zone_id in zone_ids)
+                ):
+                    raise ConfigError(
+                        f"{document.path}: Terrain Crossing RFID zone id 不得重复"
+                    )
+                all_terrain_zone_ids.update(zone_ids)
+                parsed_side[terrain_type] = zone_ids
+            self._terrain_zone_ids[side] = parsed_side
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1535,6 +1716,14 @@ class RMUC2026RegionalRules:
             str, _CentralDefenseBuffState
         ] = {}
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
+        self._terrain_crossing_by_robot: dict[
+            str, _TerrainCrossingState
+        ] = {}
+        self._terrain_zones_by_side_and_type: dict[
+            str, dict[str, tuple[Zone, ...]]
+        ] = {}
+        self._terrain_zone_lookup: dict[str, tuple[str, str, int]] = {}
+        self._terrain_interrupt_zones_by_id: dict[str, Zone] = {}
 
     @property
     def time_limit(self) -> float:
