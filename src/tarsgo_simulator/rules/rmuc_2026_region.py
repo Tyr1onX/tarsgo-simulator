@@ -2453,6 +2453,7 @@ class RMUC2026RegionalRules:
         return max(
             state.tech_core_defense,
             self._current_field_defense(target),
+            self._current_terrain_defense(target),
         )
 
     def _current_field_defense(self, robot: Robot) -> float:
@@ -2652,39 +2653,43 @@ class RMUC2026RegionalRules:
             )
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
-        """Refresh field Defense occupancy, then cool Shooting Heat at 10 Hz."""
-        self._advance_field_defense_occupancy(match, max(0.0, dt))
-        if dt <= 0:
-            return
+        """Refresh field/terrain rules around the existing 10 Hz Heat loop."""
+        frame_dt = max(0.0, dt)
+        self._advance_field_defense_occupancy(match, frame_dt)
+        self._advance_terrain_crossing_timers(frame_dt)
 
-        self._heat_cooling_accumulator += dt
-        ticks = math.floor(
-            self._heat_cooling_accumulator * self._shooting_heat_detection_hz
-            + 1e-9
-        )
-        if ticks <= 0:
-            return
-
-        tick_duration = 1.0 / self._shooting_heat_detection_hz
-        self._heat_cooling_accumulator = max(
-            0.0,
-            self._heat_cooling_accumulator - ticks * tick_duration,
-        )
-        for _ in range(ticks):
-            for robot_id, state in self._shooting_heat_by_robot.items():
-                robot = self._robots_by_id[robot_id]
-                if not robot.alive or state.heat <= 0:
-                    continue
-                parameters = self._effective_heat_parameters(robot_id)
-                state.heat = max(
+        if dt > 0:
+            self._heat_cooling_accumulator += dt
+            ticks = math.floor(
+                self._heat_cooling_accumulator * self._shooting_heat_detection_hz
+                + 1e-9
+            )
+            if ticks > 0:
+                tick_duration = 1.0 / self._shooting_heat_detection_hz
+                self._heat_cooling_accumulator = max(
                     0.0,
-                    state.heat
-                    - parameters.cooling_per_second
-                    / self._shooting_heat_detection_hz,
+                    self._heat_cooling_accumulator - ticks * tick_duration,
                 )
-                if state.heat <= 1e-9:
-                    state.heat = 0.0
-                    state.temporarily_locked = False
+                for _ in range(ticks):
+                    for robot_id, state in self._shooting_heat_by_robot.items():
+                        robot = self._robots_by_id[robot_id]
+                        if not robot.alive or state.heat <= 0:
+                            continue
+                        parameters = self._effective_heat_parameters(robot_id)
+                        state.heat = max(
+                            0.0,
+                            state.heat
+                            - parameters.cooling_per_second
+                            / self._shooting_heat_detection_hz,
+                        )
+                        if state.heat <= 1e-9:
+                            state.heat = 0.0
+                            state.temporarily_locked = False
+
+        self._process_terrain_crossing_rfid(
+            match,
+            min(match.elapsed_time + frame_dt, self._time_limit),
+        )
 
     def reset(self, match: "Match") -> None:
         expected_roster = {
@@ -2832,6 +2837,12 @@ class RMUC2026RegionalRules:
                 for side_zones in self._field_zone_ids.values()
                 for zone_id in side_zones.values()
             }
+            | {
+                zone_id
+                for side_zones in self._terrain_zone_ids.values()
+                for zone_ids in side_zones.values()
+                for zone_id in zone_ids
+            }
         )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
@@ -2896,6 +2907,51 @@ class RMUC2026RegionalRules:
         }
         self._field_occupy_remaining = {}
         self._field_buff_elapsed = match.elapsed_time
+
+        self._terrain_zones_by_side_and_type = {
+            side: {
+                terrain_type: tuple(
+                    zones_by_id[zone_id]
+                    for zone_id in self._terrain_zone_ids[side][terrain_type]
+                )
+                for terrain_type in (
+                    "road",
+                    "elevated_ground",
+                    "launch_ramp",
+                    "tunnel",
+                )
+            }
+            for side in ("red", "blue")
+        }
+        self._terrain_zone_lookup = {
+            zone.id: (side, terrain_type, index)
+            for side, terrain_by_type in self._terrain_zones_by_side_and_type.items()
+            for terrain_type, zones in terrain_by_type.items()
+            for index, zone in enumerate(zones)
+        }
+        interrupt_zones = {
+            zone.id: zone
+            for terrain_by_type in self._terrain_zones_by_side_and_type.values()
+            for zones in terrain_by_type.values()
+            for zone in zones
+        }
+        for zone in self._field_base_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_outpost_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_trapezoid_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_central_zones:
+            interrupt_zones[zone.id] = zone
+        for zone in self._supply_buff_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._assembly_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        self._terrain_interrupt_zones_by_id = interrupt_zones
+        self._terrain_crossing_by_robot = {
+            robot.id: _TerrainCrossingState()
+            for robot in match.robots
+        }
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
@@ -3102,6 +3158,13 @@ class RMUC2026RegionalRules:
             cooling_per_second = self._sentry_cooling_per_second
         else:
             raise KeyError(robot_id)
+
+        terrain_state = self._terrain_crossing_by_robot.get(robot_id)
+        if (
+            terrain_state is not None
+            and terrain_state.tunnel_cooling_remaining > 0
+        ):
+            cooling_per_second *= self._terrain_rules["tunnel"].cooling_multiplier
 
         return _EffectiveHeatParameters(
             projectile_type=projectile_type,
