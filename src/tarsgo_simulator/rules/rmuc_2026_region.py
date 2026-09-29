@@ -2667,7 +2667,7 @@ class RMUC2026RegionalRules:
         amount: int,
         source_team_id: str | None,
     ) -> int:
-        """Apply Tech Core Defense, then consume Base Virtual Shield."""
+        """Apply max Defense/Vulnerability buffs, then Base Virtual Shield."""
         if (
             amount <= 0
             or source_team_id not in self.attack_damage_by_team
@@ -2680,7 +2680,9 @@ class RMUC2026RegionalRules:
             return amount
 
         defense = self._effective_defense(target)
-        resolved = int(math.floor(amount * (1.0 - defense) + 0.5))
+        vulnerability = self._effective_vulnerability(target)
+        multiplier = max(0.0, 1.0 - defense + vulnerability)
+        resolved = int(math.floor(amount * multiplier + 0.5))
         resolved = max(0, resolved)
 
         if (
@@ -2694,6 +2696,23 @@ class RMUC2026RegionalRules:
             resolved -= absorbed
 
         return resolved
+
+    def _effective_vulnerability(
+        self,
+        target: DamageableTarget,
+    ) -> float:
+        if not isinstance(target, Robot) or not target.alive:
+            return 0.0
+
+        vulnerabilities = [
+            self._enemy_fortress_vulnerability
+            for (robot_id, fortress_team_id), occupation
+            in self._enemy_fortress_occupation.items()
+            if robot_id == target.id
+            and occupation.occupy_remaining > 0
+            and not self._team_states[fortress_team_id].base_armor_deployed
+        ]
+        return max(vulnerabilities, default=0.0)
 
     def _effective_defense(self, target: DamageableTarget) -> float:
         state = self._team_states.get(target.team)
