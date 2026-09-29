@@ -468,3 +468,30 @@ def test_reset_clears_tech_core_state_energy_unit_and_restores_cap_five() -> Non
         assert not resource_state.energy_unit_credits
     progression = match.ruleset._progression_by_robot["tarsgo-hero"]
     assert (progression.level, progression.experience) == (1, 0.0)
+
+
+def test_weakened_engineer_cannot_use_assembly_and_counts_as_outside() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[engineer.id]
+    resource = match.ruleset._engineer_resources_by_id[engineer.id]
+    team_state = match.ruleset._tech_core_by_team[engineer.team]
+
+    _pickup(match, engineer)
+    _place_in_assembly(match, engineer)
+    lifecycle.weak = True
+
+    assert not match.ruleset.start_tech_core_assembly(match, engineer, 1)
+    assert resource.energy_unit_credits == 1
+
+    lifecycle.weak = False
+    assert match.ruleset.start_tech_core_assembly(match, engineer, 1)
+    lifecycle.weak = True
+
+    assert not match.ruleset.confirm_tech_core_assembly(match, engineer)
+    match.update(14.9)
+    assert team_state.active_attempt is not None
+    assert team_state.active_attempt.outside_zone_elapsed == pytest.approx(14.9)
+
+    match.update(0.1)
+    assert team_state.active_attempt is None
