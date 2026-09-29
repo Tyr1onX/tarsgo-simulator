@@ -4074,7 +4074,17 @@ class RMUC2026RegionalRules:
                     continue
 
                 robot.alive = True
-                robot.hp = max(1, int(robot.max_hp * self._respawn_hp_fraction))
+                robot.hp = min(
+                    robot.max_hp,
+                    max(
+                        1,
+                        int(
+                            math.floor(
+                                robot.max_hp * self._respawn_hp_fraction + 0.5
+                            )
+                        ),
+                    ),
+                )
                 robot.path.clear()
                 state.respawn_progress = 0.0
                 state.respawn_required = None
