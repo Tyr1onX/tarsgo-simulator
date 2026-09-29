@@ -2906,6 +2906,172 @@ class RMUC2026RegionalRules:
                     allow_initialize=True,
                 )
 
+    def _enemy_fortress_eligible(
+        self,
+        robot: Robot,
+        fortress_team_id: str,
+        at_time: float,
+    ) -> bool:
+        return (
+            robot.alive
+            and robot.team != fortress_team_id
+            and robot.type in self._enemy_fortress_eligible_types
+            and at_time + 1e-9 >= self._enemy_fortress_available_after
+            and self._team_states[
+                fortress_team_id
+            ].outpost_ever_destroyed
+        )
+
+    def _refresh_enemy_fortress_occupancy(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        frame_end = min(
+            match.elapsed_time + max(0.0, dt),
+            self._time_limit,
+        )
+        for (robot_id, fortress_team_id), state in (
+            self._enemy_fortress_occupation.items()
+        ):
+            robot = self._robots_by_id[robot_id]
+            zone = self._fortress_zone_by_team[fortress_team_id]
+            if (
+                self._enemy_fortress_eligible(
+                    robot,
+                    fortress_team_id,
+                    frame_end,
+                )
+                and zone.contains(robot.position)
+            ):
+                state.occupy_remaining = self._field_occupy_release_delay
+                state.retention_remaining = 0.0
+
+    def _advance_enemy_fortress_occupation(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        frame_dt = max(0.0, dt)
+        frame_end = min(match.elapsed_time, self._time_limit)
+        frame_start = max(0.0, frame_end - frame_dt)
+        armor_at_frame_start = {
+            team_id: state.base_armor_deployed
+            for team_id, state in self._team_states.items()
+        }
+        teams_to_deploy: set[str] = set()
+
+        for key, state in self._enemy_fortress_occupation.items():
+            robot_id, fortress_team_id = key
+            robot = self._robots_by_id[robot_id]
+            zone = self._fortress_zone_by_team[fortress_team_id]
+
+            if key in self._enemy_fortress_death_retention_started:
+                continue
+
+            physically_occupying = (
+                self._enemy_fortress_eligible(
+                    robot,
+                    fortress_team_id,
+                    frame_end,
+                )
+                and zone.contains(robot.position)
+            )
+            armor_already_deployed = armor_at_frame_start[
+                fortress_team_id
+            ]
+
+            if physically_occupying:
+                state.occupy_remaining = self._field_occupy_release_delay
+                state.retention_remaining = 0.0
+
+                active_dt = frame_dt
+                if frame_start < self._enemy_fortress_available_after:
+                    active_dt = max(
+                        0.0,
+                        frame_end - self._enemy_fortress_available_after,
+                    )
+                if fortress_team_id in self._outposts_destroyed_this_frame:
+                    active_dt = 0.0
+
+                if not armor_already_deployed and active_dt > 0:
+                    state.occupation_elapsed += active_dt
+                    if (
+                        state.occupation_elapsed + 1e-9
+                        >= self._enemy_fortress_armor_after
+                    ):
+                        teams_to_deploy.add(fortress_team_id)
+                continue
+
+            if state.occupy_remaining > 0:
+                active_dt = min(frame_dt, state.occupy_remaining)
+                if not armor_already_deployed and active_dt > 0:
+                    state.occupation_elapsed += active_dt
+                    if (
+                        state.occupation_elapsed + 1e-9
+                        >= self._enemy_fortress_armor_after
+                    ):
+                        teams_to_deploy.add(fortress_team_id)
+
+                old_occupy = state.occupy_remaining
+                state.occupy_remaining = max(
+                    0.0,
+                    old_occupy - frame_dt,
+                )
+                if state.occupy_remaining <= 1e-9:
+                    state.occupy_remaining = 0.0
+                    overflow = max(0.0, frame_dt - old_occupy)
+                    state.retention_remaining = max(
+                        0.0,
+                        self._enemy_fortress_retention - overflow,
+                    )
+                    if state.retention_remaining <= 1e-9:
+                        state.retention_remaining = 0.0
+                        state.occupation_elapsed = 0.0
+                continue
+
+            if state.retention_remaining > 0:
+                state.retention_remaining = max(
+                    0.0,
+                    state.retention_remaining - frame_dt,
+                )
+                if state.retention_remaining <= 1e-9:
+                    state.retention_remaining = 0.0
+                    state.occupation_elapsed = 0.0
+
+        for team_id in teams_to_deploy:
+            self._team_states[team_id].base_armor_deployed = True
+
+        self._enemy_fortress_death_retention_started.clear()
+        self._outposts_destroyed_this_frame.clear()
+
+    def _enemy_fortress_status_label(self, robot: Robot) -> str:
+        labels: list[str] = []
+        for (robot_id, fortress_team_id), state in (
+            self._enemy_fortress_occupation.items()
+        ):
+            if robot_id != robot.id:
+                continue
+            armor_deployed = self._team_states[
+                fortress_team_id
+            ].base_armor_deployed
+            if state.occupy_remaining > 0:
+                if armor_deployed:
+                    labels.append(
+                        f"EFORT T:{state.occupation_elapsed:.1f}/"
+                        f"{self._enemy_fortress_armor_after:g}"
+                    )
+                else:
+                    labels.append(
+                        f"EFORT VULN100 T:{state.occupation_elapsed:.1f}/"
+                        f"{self._enemy_fortress_armor_after:g}"
+                    )
+            elif state.retention_remaining > 0:
+                labels.append(
+                    f"EFORT HOLD {state.retention_remaining:.1f}s"
+                )
+        return " ".join(labels)
+
     def _current_terrain_defense(self, robot: Robot) -> float:
         if not robot.alive:
             return 0.0
@@ -2975,6 +3141,10 @@ class RMUC2026RegionalRules:
             parts.append(
                 f"FORT DEF50 FC:+{self._fortress_cooling_bonus(robot)}"
             )
+
+        enemy_fortress_status = self._enemy_fortress_status_label(robot)
+        if enemy_fortress_status:
+            parts.append(enemy_fortress_status)
         return " ".join(parts)
 
     def _advance_terrain_crossing_timers(self, dt: float) -> None:
@@ -3300,6 +3470,7 @@ class RMUC2026RegionalRules:
         frame_dt = max(0.0, dt)
         self._advance_field_defense_occupancy(match, frame_dt)
         self._advance_fortress_occupancy(frame_dt)
+        self._refresh_enemy_fortress_occupancy(match, frame_dt)
         self._advance_terrain_crossing_timers(frame_dt)
 
         if dt > 0:
@@ -3617,6 +3788,7 @@ class RMUC2026RegionalRules:
 
     def update(self, match: "Match", dt: float) -> None:
         self._consume_events(match)
+        self._advance_enemy_fortress_occupation(match, dt)
         self._sync_initialized_fortress_reserves()
         self._advance_projectile_allowance(match, dt)
         self._advance_tech_core_attempts(match, dt)
