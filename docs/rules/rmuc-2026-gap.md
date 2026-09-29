@@ -91,7 +91,11 @@ Regional V1.4.0 manual.
 - committed-shot allowance deduction and allowance-zero attack gate;
 - team-wide purchased allowance caps: 17mm=1000, 42mm=100;
 - non-remote 17mm / 42mm Gold-Coin exchange at synthetic own supply/base/outpost buff zones;
-- out-of-combat six-second RMUC-private state used for remote exchange eligibility;
+- out-of-combat six-second RMUC-private lifecycle state shared by projectile exchange and Resupply healing;
+- own Resupply healing at 10% max HP/s, rising to 25% max HP/s after elapsed 240 s while out of combat;
+- automatic respawn progress using death-time elapsed, future immediate-respawn count, 1/s normal progress, and 4/s acceleration in own Resupply or below 2000 Base HP;
+- automatic respawn at 10% max HP with 30 s Invincibility and Weakened state;
+- Weakened launcher lock, Buff Point / Outpost-rebuild exclusion, and Base/Outpost/Resupply release with the official 10 s minimum post-respawn Invincibility;
 - remote 17mm / 42mm exchange with immediate wallet/cap reservation and six-second delivery;
 - multiple pending remote deliveries with large-dt end-of-frame settlement;
 - Sentry 100-round minute supply accrual at 60..360 s, accumulation, and whole-pending claim;
@@ -164,11 +168,10 @@ Regional V1.4.0 manual.
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
-- remaining Field Buff system beyond static Defense, Terrain Crossing, and the
-  implemented Fortress own/enemy rule-level effects: Resupply healing/respawn,
-  Assembly invincibility, Attack Buff, Radar Vulnerability, and other field effects;
-- remote healing, immediate respawn, and Drone air-support spending;
-- complete RMUC respawn;
+- remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply,
+  and the implemented Fortress own/enemy rule-level effects: Assembly invincibility,
+  Attack Buff, Radar Vulnerability, and other field effects;
+- remote healing, paid immediate respawn, and Drone air-support spending;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
@@ -252,8 +255,8 @@ The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
-geometry, Resupply/Assembly, Energy Mechanism, Attack modifiers, remote
-healing/instant respawn, and Drone/Radar systems. Tech Core Defense, Base
+geometry, Assembly, Energy Mechanism, Attack modifiers, remote
+healing/paid immediate respawn, and Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.
