@@ -3223,6 +3223,7 @@ class RMUC2026RegionalRules:
                 for zone_ids in side_zones.values()
                 for zone_id in zone_ids
             }
+            | set(self._fortress_zone_ids.values())
         )
         missing_zones = sorted(required_zone_ids - set(zones_by_id))
         if missing_zones:
@@ -3287,6 +3288,14 @@ class RMUC2026RegionalRules:
         }
         self._field_occupy_remaining = {}
         self._field_buff_elapsed = match.elapsed_time
+        self._fortress_zone_by_team = {
+            team_by_side[side]: zones_by_id[self._fortress_zone_ids[side]]
+            for side in ("red", "blue")
+        }
+        self._fortress_state_by_team = {
+            team_id: _FortressBuffState()
+            for team_id in team_by_side.values()
+        }
 
         self._terrain_zones_by_side_and_type = {
             side: {
@@ -3326,6 +3335,8 @@ class RMUC2026RegionalRules:
         for zone in self._supply_buff_zone_by_team.values():
             interrupt_zones[zone.id] = zone
         for zone in self._assembly_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._fortress_zone_by_team.values():
             interrupt_zones[zone.id] = zone
         self._terrain_interrupt_zones_by_id = interrupt_zones
         self._terrain_crossing_by_robot = {
@@ -3690,6 +3701,13 @@ class RMUC2026RegionalRules:
 
             if event.type == MatchEventType.ROBOT_DESTROYED:
                 self._grant_kill_experience(event)
+                fortress_state = self._fortress_state_by_team.get(event.team_id)
+                if (
+                    fortress_state is not None
+                    and fortress_state.owner_robot_id == event.robot_id
+                ):
+                    fortress_state.owner_robot_id = None
+                    fortress_state.release_remaining = 0.0
                 terrain = self._terrain_crossing_by_robot.get(event.robot_id)
                 if terrain is not None:
                     terrain.standard_defense = 0.0
