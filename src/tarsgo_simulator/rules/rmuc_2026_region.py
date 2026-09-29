@@ -1,4 +1,4 @@
-"""Partial RMUC 2026 Regional V1.4.0 rules including progression, economy, and Heat."""
+"""Partial RMUC 2026 Regional V1.4.0 rules including progression, economy, Heat, and chassis power."""
 
 from dataclasses import dataclass, field
 import math
@@ -165,7 +165,7 @@ class _ChassisPowerState:
 
 
 class RMUC2026RegionalRules:
-    """V1.4.0 Regional Rules Lab with progression, economy, allowance, and Heat."""
+    """V1.4.0 Regional Rules Lab with progression, economy, Heat, and chassis power."""
 
     def __init__(self, document: RuleDocument) -> None:
         metadata = document.metadata
@@ -1515,6 +1515,19 @@ class RMUC2026RegionalRules:
                     self._shooting_heat_by_robot.items()
                 )
             ),
+            robot_chassis_power=tuple(
+                (
+                    robot_id,
+                    state.buffer_energy,
+                    self._effective_buffer_energy_max(robot_id),
+                    self._current_synthetic_power_by_robot.get(robot_id, 0.0),
+                    self._effective_chassis_power_limit(robot_id),
+                    state.power_off_remaining,
+                )
+                for robot_id, state in sorted(
+                    self._chassis_power_by_robot.items()
+                )
+            ),
             structure_statuses=tuple(structure_statuses),
             rebuild_opportunities=tuple(
                 (team_id, state.outpost_rebuild_opportunities)
@@ -1630,7 +1643,13 @@ class RMUC2026RegionalRules:
             ) from exc
 
     def can_move(self, robot: Robot) -> bool:
-        return robot.alive
+        state = self._chassis_power_by_robot.get(robot.id)
+        return (
+            robot.alive
+            and state is not None
+            and not state.blocked_this_frame
+            and state.power_off_remaining <= 0
+        )
 
     def can_attack(self, robot: Robot) -> bool:
         allowance = self._projectile_allowance_by_robot.get(robot.id)
@@ -2056,7 +2075,68 @@ class RMUC2026RegionalRules:
         return True
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
-        """No RMUC chassis performance simulation in this slice."""
+        """Settle synthetic RMUC chassis power at 10 Hz before movement."""
+        for robot_id, state in self._chassis_power_by_robot.items():
+            state.blocked_this_frame = state.power_off_remaining > 0
+            robot = self._robots_by_id[robot_id]
+            self._current_synthetic_power_by_robot[robot_id] = (
+                self._synthetic_chassis_power(robot, state)
+            )
+
+        if dt <= 0:
+            return
+
+        self._chassis_power_accumulator += dt
+        ticks = math.floor(
+            self._chassis_power_accumulator * self._chassis_power_detection_hz
+            + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        tick_duration = 1.0 / self._chassis_power_detection_hz
+        self._chassis_power_accumulator = max(
+            0.0,
+            self._chassis_power_accumulator - ticks * tick_duration,
+        )
+
+        for _ in range(ticks):
+            for robot_id, state in self._chassis_power_by_robot.items():
+                robot = self._robots_by_id[robot_id]
+                power_limit = self._effective_chassis_power_limit(robot_id)
+                was_powered_off = state.power_off_remaining > 0
+
+                if was_powered_off:
+                    state.blocked_this_frame = True
+                    power = self._chassis_stationary_power_demand
+                else:
+                    power = self._synthetic_chassis_power(robot, state)
+
+                state.buffer_energy -= (power - power_limit) * tick_duration
+                state.buffer_energy = min(
+                    self._effective_buffer_energy_max(robot_id),
+                    state.buffer_energy,
+                )
+
+                if state.buffer_energy <= 0:
+                    state.buffer_energy = 0.0
+                    if not was_powered_off and power > power_limit:
+                        state.power_off_remaining = self._chassis_power_off_duration
+                        state.blocked_this_frame = True
+
+                if was_powered_off:
+                    state.power_off_remaining = max(
+                        0.0,
+                        state.power_off_remaining - tick_duration,
+                    )
+                    if state.power_off_remaining <= 1e-9:
+                        state.power_off_remaining = 0.0
+
+        for robot_id, state in self._chassis_power_by_robot.items():
+            robot = self._robots_by_id[robot_id]
+            self._current_synthetic_power_by_robot[robot_id] = (
+                self._synthetic_chassis_power(robot, state)
+            )
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
         """Cool RMUC shooting Heat at 10 Hz before this frame commits shots."""
@@ -2180,6 +2260,17 @@ class RMUC2026RegionalRules:
             for robot_id in self._projectile_allowance_by_robot
         }
         self._heat_cooling_accumulator = 0.0
+        self._chassis_power_by_robot = {
+            robot.id: _ChassisPowerState(
+                buffer_energy=self._effective_buffer_energy_max(robot.id)
+            )
+            for robot in match.robots
+        }
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot = {
+            robot.id: self._chassis_stationary_power_demand
+            for robot in match.robots
+        }
         self._next_sentry_supply_grant = self._sentry_supply_interval
         self._progression_by_robot = {
             robot.id: _RobotProgressionState()
@@ -2419,6 +2510,33 @@ class RMUC2026RegionalRules:
                 )
             self._next_periodic_gold_tick += self._economy_periodic_interval
 
+    def _effective_buffer_energy_max(self, robot_id: str) -> float:
+        if robot_id not in self._robots_by_id:
+            raise KeyError(robot_id)
+        return self._chassis_buffer_energy_max
+
+    def _effective_chassis_power_limit(self, robot_id: str) -> float:
+        robot_type = self._robot_types_by_id[robot_id]
+        if robot_type in _EXPERIENCE_ROBOT_TYPES:
+            return float(
+                self._effective_performance(robot_id).chassis_power_limit
+            )
+        return float(self._chassis_power_limit_by_type[robot_type])
+
+    def _synthetic_chassis_power(
+        self,
+        robot: Robot,
+        state: _ChassisPowerState,
+    ) -> float:
+        if not robot.alive or state.power_off_remaining > 0:
+            return self._chassis_stationary_power_demand
+        if robot.path:
+            return (
+                self._effective_chassis_power_limit(robot.id)
+                + self._chassis_moving_over_limit
+            )
+        return self._chassis_stationary_power_demand
+
     def _effective_heat_parameters(
         self,
         robot_id: str,
@@ -2576,6 +2694,16 @@ class RMUC2026RegionalRules:
                 if shooting_heat is not None:
                     shooting_heat.heat = 0.0
                     shooting_heat.temporarily_locked = False
+                chassis = self._chassis_power_by_robot.get(event.robot_id)
+                if chassis is not None:
+                    chassis.buffer_energy = self._effective_buffer_energy_max(
+                        event.robot_id
+                    )
+                    chassis.power_off_remaining = 0.0
+                    chassis.blocked_this_frame = False
+                    self._current_synthetic_power_by_robot[event.robot_id] = (
+                        self._chassis_stationary_power_demand
+                    )
                 resource_state = self._engineer_resources_by_id.get(event.robot_id)
                 if resource_state is not None:
                     resource_state.energy_unit_credits = 0
