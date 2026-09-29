@@ -2124,11 +2124,12 @@ class RMUC2026RegionalRules:
     def can_attack(self, robot: Robot) -> bool:
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = self._usable_fortress_reserved(robot)
         return (
             robot.alive
             and robot.damage > 0
             and allowance is not None
-            and allowance.allowed > 0
+            and (allowance.allowed > 0 or usable_fortress_reserved > 0)
             and shooting_heat is not None
             and not shooting_heat.temporarily_locked
             and not shooting_heat.permanently_locked
@@ -2142,19 +2143,28 @@ class RMUC2026RegionalRules:
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
-        """Commit one legal shot using pre-shot effective Heat parameters."""
+        """Commit one legal shot using Fortress reserve first when available."""
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = self._usable_fortress_reserved(robot)
         if (
             allowance is None
-            or allowance.allowed <= 0
+            or (
+                allowance.allowed <= 0
+                and usable_fortress_reserved <= 0
+            )
             or shooting_heat is None
             or shooting_heat.temporarily_locked
             or shooting_heat.permanently_locked
         ):
             return
 
-        allowance.allowed -= 1
+        if usable_fortress_reserved > 0:
+            reserve_state = self._fortress_reserved_by_robot[robot.id]
+            reserve_state.reserved -= 1
+        else:
+            allowance.allowed -= 1
+
         allowance.disengaged_elapsed = 0.0
         allowance.combat_activity_this_frame = True
 
@@ -2515,6 +2525,7 @@ class RMUC2026RegionalRules:
             hp_gain = min(bonus, missing_hp)
             base.hp += hp_gain
             structure_state.base_virtual_shield += bonus - hp_gain
+            self._sync_initialized_fortress_reserves(team_id)
 
     def _complete_d4_attempt(self, team_id: str) -> None:
         team_state = self._tech_core_by_team[team_id]
