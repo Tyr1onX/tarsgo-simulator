@@ -193,7 +193,6 @@ def test_normal_respawn_starts_next_frame_and_preserves_progression_ammo_and_per
     match = _match()
     hero = _robot(match, "tarsgo-hero")
     hero.position = _outside_own_supply(match, hero)
-    match.ruleset._grant_experience(hero.id, 550)
     progression = match.ruleset._progression_by_robot[hero.id]
     allowance = match.ruleset._projectile_allowance_by_robot[hero.id]
     heat = match.ruleset._shooting_heat_by_robot[hero.id]
@@ -203,6 +202,13 @@ def test_normal_respawn_starts_next_frame_and_preserves_progression_ammo_and_per
 
     _kill_and_register(match, hero)
     assert lifecycle.respawn_required == 10
+
+    # Progression changes while dead must update the max HP used at respawn.
+    match.ruleset._grant_experience(hero.id, 550)
+    assert progression.level == 2
+    assert hero.max_hp == 165
+    assert hero.hp == 0
+
     match.update(9.999)
     assert not hero.alive
     assert lifecycle.respawn_progress == pytest.approx(9.999)
@@ -213,7 +219,7 @@ def test_normal_respawn_starts_next_frame_and_preserves_progression_ammo_and_per
     assert progression.level == 2
     assert progression.experience == 550
     assert hero.max_hp == 165
-    assert hero.hp == 16
+    assert hero.hp == 17
     assert allowance.allowed == 7
     assert heat.permanently_locked
     assert heat.heat == 0
@@ -221,6 +227,42 @@ def test_normal_respawn_starts_next_frame_and_preserves_progression_ammo_and_per
     assert lifecycle.invincible_remaining == pytest.approx(30.0)
     assert lifecycle.minimum_invincible_remaining == pytest.approx(10.0)
     assert lifecycle.disengaged_elapsed == 0
+
+
+def test_automatic_respawn_rounding_keeps_exact_integer_result() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+    engineer.position = _outside_own_supply(match, engineer)
+
+    _kill_and_register(match, engineer)
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[engineer.id]
+    required = lifecycle.respawn_required
+    assert required is not None
+
+    match.update(float(required))
+
+    assert engineer.alive
+    assert engineer.max_hp == 250
+    assert engineer.hp == 25
+
+
+def test_automatic_respawn_rounding_never_creates_zero_hp_alive_robot() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+    engineer.position = _outside_own_supply(match, engineer)
+    engineer.max_hp = 1
+    engineer.hp = 1
+
+    _kill_and_register(match, engineer)
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[engineer.id]
+    required = lifecycle.respawn_required
+    assert required is not None
+
+    match.update(float(required))
+
+    assert engineer.alive
+    assert engineer.max_hp == 1
+    assert engineer.hp == 1
 
 
 def test_respawn_progress_accelerates_in_supply_or_when_base_is_below_2000_hp() -> None:
