@@ -519,7 +519,7 @@ def test_active_d4_outside_timer_resets_when_engineer_returns() -> None:
     assert match.ruleset._tech_core_by_team[RED].d4_attempt is not None
 
 
-def test_d4_success_applies_only_periodic_gold_reward_gameplay() -> None:
+def test_d4_success_consumes_periodic_gold_defense_and_base_rewards() -> None:
     match = _match()
     engineer = _robot(match, "tarsgo-engineer")
     target = _robot(match, "tarsgo-infantry-1")
@@ -534,11 +534,13 @@ def test_d4_success_applies_only_periodic_gold_reward_gameplay() -> None:
     )
     assert (red_base.hp, red_base.max_hp) == (5000, 5000)
     assert not hasattr(red_base, "shield")
+    assert match.ruleset._team_states[RED].base_virtual_shield == 2000
+    assert match.ruleset._team_states[RED].tech_core_defense == pytest.approx(0.50)
     assert match.ruleset._periodic_gold_rate(RED) == (50, 0, 50)
 
     before = target.hp
-    assert match.apply_damage(target, 20, source_team_id=BLUE) == 20
-    assert target.hp == before - 20
+    assert match.apply_damage(target, 20, source_team_id=BLUE) == 10
+    assert target.hp == before - 10
 
 
 def test_d4_display_state_exposes_pending_active_lock_and_penalty_fields() -> None:

@@ -453,6 +453,16 @@ class RMUL2026Rules:
             lifecycle is None or lifecycle.invincible_remaining <= 0
         )
 
+    def resolve_damage(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+    ) -> int:
+        """RMUL keeps its existing damage semantics unchanged."""
+        del target, source_team_id
+        return amount
+
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Advance quantized chassis buffer state before movement."""
         for robot in match.robots:

@@ -68,6 +68,16 @@ class TrainingV0Rules:
     def can_receive_damage(self, target: DamageableTarget) -> bool:
         return target.alive
 
+    def resolve_damage(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+    ) -> int:
+        """Training V0 applies damage without Defense or Shield modifiers."""
+        del target, source_team_id
+        return amount
+
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Training V0 has no chassis buffer state to advance."""
 

@@ -57,6 +57,15 @@ Regional V1.4.0 manual.
 - Tech Core D1-D4 first/repeat periodic-gold income accumulation;
 - global 10 s Rules Lab periodic settlement convention with large-dt catch-up;
 - D4 priority-failure -25/10s periodic penalty consumer with wallet floor at 0;
+- D3 first-completion 25% team Defense consumer for all current ground robots,
+  Outpost, and Base;
+- D4 first-completion Defense upgrade to 50% using non-stacking max semantics;
+- explicit half-up Defense damage settlement on known enemy attack damage;
+- narrow RuleSet damage-resolution hook before the Core HP mutation path;
+- D4 Base +2000 current-HP reward with overflow-to-private Virtual Shield;
+- Base damage order: invincibility -> Defense -> Virtual Shield -> HP;
+- Shield-only hits intentionally produce no HP-loss event / damage XP / attack
+  score / Base-damage rebuild progress in the current Rules Lab;
 - Hero / Infantry / Sentry RuleSet-private projectile allowance state;
 - Hero / Infantry / Sentry RuleSet-private Shooting Heat state;
 - 17mm +10 / 42mm +100 per committed shot;
@@ -99,8 +108,6 @@ Regional V1.4.0 manual.
 - Tech Core physical movement / collision / obstruction sensing;
 - overload alarms and blocked-Core auto-award behavior;
 - temporary reactivation of a dead Engineer during opposing D4 takeover;
-- Difficulty 3 defense-buff gameplay;
-- Difficulty 4 Base +2000 / virtual-shield / defense rewards;
 - Energy Mechanism and its Experience sources;
 - Hero deployment-mode Experience;
 - terrain-traversal Experience;
@@ -190,4 +197,5 @@ Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → s
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include external Field/Energy/
 terrain/Sentry modifiers, remote healing/instant respawn, Drone air support,
-and the still-stored D3/D4 Defense / Base HP / virtual-shield rewards.
+while Tech Core D3/D4 Defense and the D4 Base HP / Virtual Shield reward are
+now active consumers.

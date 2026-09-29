@@ -137,6 +137,10 @@ class Match:
 
         if source_robot is not None:
             source_team_id = source_robot.team
+        amount = self.ruleset.resolve_damage(target, amount, source_team_id)
+        if amount <= 0:
+            return 0
+
         was_alive = target.alive
         previous_hp = max(0, target.hp)
         target.hp = max(0, previous_hp - amount)
