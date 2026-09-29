@@ -26,8 +26,24 @@ economy:
     - {elapsed: 300, coins: 50}
     - {elapsed: 360, coins: 150}
 
-projectile_allowance:
+robot_lifecycle:
   disengaged_after: 6
+  resupply:
+    heal_fraction_per_second: 0.10
+    enhanced_after: 240
+    enhanced_heal_fraction_per_second: 0.25
+  respawn:
+    base_progress_required: 10
+    elapsed_seconds_per_progress: 10
+    immediate_respawn_progress_penalty: 20
+    progress_per_second: 1
+    accelerated_progress_per_second: 4
+    accelerated_base_hp_below: 2000
+    hp_fraction: 0.10
+    invincibility_duration: 30
+    weak_release_min_invincibility: 10
+
+projectile_allowance:
   remote_effective_delay: 6
   zones:
     red:

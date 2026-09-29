@@ -403,6 +403,7 @@ def test_reserved_shot_still_settles_heat_xp_and_disengage_once() -> None:
     _destroy_outpost(match)
     _occupy(match, infantry)
     allowance = match.ruleset._projectile_allowance_by_robot[infantry.id]
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[infantry.id]
     heat = match.ruleset._shooting_heat_by_robot[infantry.id]
     progression = match.ruleset._progression_by_robot[infantry.id]
     allowance.allowed = 5
@@ -412,8 +413,8 @@ def test_reserved_shot_still_settles_heat_xp_and_disengage_once() -> None:
 
     assert _reserve_state(match, infantry).reserved == reserve_before - 1
     assert allowance.allowed == 5
-    assert allowance.disengaged_elapsed == 0
-    assert allowance.combat_activity_this_frame
+    assert lifecycle.disengaged_elapsed == 0
+    assert lifecycle.combat_activity_this_frame
     assert heat.heat == 10
     assert progression.experience == 1
 
