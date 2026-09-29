@@ -3532,19 +3532,29 @@ class RMUC2026RegionalRules:
         if robot_type in _EXPERIENCE_ROBOT_TYPES:
             performance = self._effective_performance(robot_id)
             heat_limit = float(performance.heat_limit)
-            cooling_per_second = float(performance.cooling_per_second)
+            base_cooling_per_second = float(performance.cooling_per_second)
         elif robot_type == "sentry":
             heat_limit = self._sentry_heat_limit
-            cooling_per_second = self._sentry_cooling_per_second
+            base_cooling_per_second = self._sentry_cooling_per_second
         else:
             raise KeyError(robot_id)
+
+        cooling_candidates = [base_cooling_per_second]
+        robot = self._robots_by_id[robot_id]
+        fortress_bonus = self._fortress_cooling_bonus(robot)
+        if fortress_bonus > 0:
+            cooling_candidates.append(base_cooling_per_second + fortress_bonus)
 
         terrain_state = self._terrain_crossing_by_robot.get(robot_id)
         if (
             terrain_state is not None
             and terrain_state.tunnel_cooling_remaining > 0
         ):
-            cooling_per_second *= self._terrain_rules["tunnel"].cooling_multiplier
+            cooling_candidates.append(
+                base_cooling_per_second
+                * self._terrain_rules["tunnel"].cooling_multiplier
+            )
+        cooling_per_second = max(cooling_candidates)
 
         return _EffectiveHeatParameters(
             projectile_type=projectile_type,
