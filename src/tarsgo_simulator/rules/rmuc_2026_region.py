@@ -185,6 +185,13 @@ class _FortressReservedProjectileState:
     initialized: bool = False
 
 
+@dataclass
+class _EnemyFortressOccupationState:
+    occupy_remaining: float = 0.0
+    occupation_elapsed: float = 0.0
+    retention_remaining: float = 0.0
+
+
 @dataclass(frozen=True)
 class _TerrainCrossingRule:
     sequence_window: float
@@ -1689,6 +1696,75 @@ class RMUC2026RegionalRules:
                 parsed_side[terrain_type] = zone_ids
             self._terrain_zone_ids[side] = parsed_side
 
+        enemy_fortress = _mapping(
+            document.data,
+            "fortress_enemy_occupation",
+            document,
+        )
+        if set(enemy_fortress) != {
+            "available_after",
+            "vulnerability",
+            "armor_after",
+            "retention",
+            "eligible_types",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_enemy_occupation` "
+                "字段不完整或包含未知字段"
+            )
+        enemy_available_after = float(
+            _number(
+                enemy_fortress,
+                "available_after",
+                document,
+                "fortress_enemy_occupation.available_after",
+            )
+        )
+        enemy_vulnerability = float(
+            _number(
+                enemy_fortress,
+                "vulnerability",
+                document,
+                "fortress_enemy_occupation.vulnerability",
+            )
+        )
+        enemy_armor_after = float(
+            _number(
+                enemy_fortress,
+                "armor_after",
+                document,
+                "fortress_enemy_occupation.armor_after",
+            )
+        )
+        enemy_retention = float(
+            _number(
+                enemy_fortress,
+                "retention",
+                document,
+                "fortress_enemy_occupation.retention",
+            )
+        )
+        enemy_eligible_types = enemy_fortress.get("eligible_types")
+        if (
+            abs(enemy_available_after - 180.0) > 1e-9
+            or abs(enemy_vulnerability - 1.0) > 1e-9
+            or abs(enemy_armor_after - 20.0) > 1e-9
+            or abs(enemy_retention - 3.0) > 1e-9
+            or enemy_eligible_types != ["infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: enemy Fortress 必须为 "
+                "180s 开放、100% Vulnerability、20s Armor、3s retention、"
+                "Infantry/Sentry"
+            )
+        self._enemy_fortress_available_after = enemy_available_after
+        self._enemy_fortress_vulnerability = enemy_vulnerability
+        self._enemy_fortress_armor_after = enemy_armor_after
+        self._enemy_fortress_retention = enemy_retention
+        self._enemy_fortress_eligible_types = frozenset(
+            enemy_eligible_types
+        )
+
         fortress = _mapping(document.data, "fortress_own_buff", document)
         if set(fortress) != {
             "defense",
@@ -1866,6 +1942,13 @@ class RMUC2026RegionalRules:
         self._fortress_reserved_by_robot: dict[
             str, _FortressReservedProjectileState
         ] = {}
+        self._enemy_fortress_occupation: dict[
+            tuple[str, str], _EnemyFortressOccupationState
+        ] = {}
+        self._enemy_fortress_death_retention_started: set[
+            tuple[str, str]
+        ] = set()
+        self._outposts_destroyed_this_frame: set[str] = set()
         self._terrain_crossing_by_robot: dict[
             str, _TerrainCrossingState
         ] = {}
