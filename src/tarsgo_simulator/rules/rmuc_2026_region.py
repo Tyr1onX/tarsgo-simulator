@@ -136,7 +136,7 @@ class _RobotLifecycleState:
     weak: bool = False
     invincible_remaining: float = 0.0
     minimum_invincible_remaining: float = 0.0
-    healing_hp_fraction: float = 0.0
+    healing_rounding_residual: float = 0.0
 
 
 @dataclass
@@ -2525,6 +2525,7 @@ class RMUC2026RegionalRules:
             match.finished
             or engineer.type != "engineer"
             or not engineer.alive
+            or self._is_weak(engineer)
             or self._robots_by_id.get(engineer.id) is not engineer
             or difficulty not in {1, 2, 3}
             or self._d4_coordinator.active_team_id is not None
@@ -2571,6 +2572,7 @@ class RMUC2026RegionalRules:
             match.finished
             or engineer.type != "engineer"
             or not engineer.alive
+            or self._is_weak(engineer)
             or self._robots_by_id.get(engineer.id) is not engineer
         ):
             return False
@@ -2613,6 +2615,7 @@ class RMUC2026RegionalRules:
             or core_slot not in {"own", "opponent"}
             or engineer.type != "engineer"
             or not engineer.alive
+            or self._is_weak(engineer)
             or self._robots_by_id.get(engineer.id) is not engineer
             or self._d4_coordinator.active_team_id != engineer.team
         ):
@@ -2668,6 +2671,7 @@ class RMUC2026RegionalRules:
             match.finished
             or engineer.type != "engineer"
             or not engineer.alive
+            or self._is_weak(engineer)
             or self._robots_by_id.get(engineer.id) is not engineer
             or self._d4_coordinator.active_team_id is not None
             or self._d4_coordinator.pending_team_id is not None
@@ -4026,6 +4030,19 @@ class RMUC2026RegionalRules:
             for point_team, zone in self._field_outpost_zone_by_team.items()
         )
 
+    def _release_weak_if_detected(
+        self,
+        robot: Robot,
+        state: _RobotLifecycleState,
+    ) -> None:
+        if not state.weak or not self._weak_release_zone_detected(robot):
+            return
+        state.weak = False
+        state.invincible_remaining = min(
+            state.invincible_remaining,
+            state.minimum_invincible_remaining,
+        )
+
     def _advance_robot_lifecycles(
         self,
         match: "Match",
@@ -4037,7 +4054,7 @@ class RMUC2026RegionalRules:
             state = self._robot_lifecycle_by_robot[robot.id]
             if not robot.alive:
                 state.disengaged_elapsed = 0.0
-                state.healing_hp_fraction = 0.0
+                state.healing_rounding_residual = 0.0
                 if robot.id in newly_destroyed or state.respawn_required is None:
                     continue
 
@@ -4068,7 +4085,8 @@ class RMUC2026RegionalRules:
                 )
                 state.disengaged_elapsed = 0.0
                 state.combat_activity_this_frame = False
-                state.healing_hp_fraction = 0.0
+                state.healing_rounding_residual = 0.0
+                self._release_weak_if_detected(robot, state)
                 newly_respawned.add(robot.id)
                 continue
 
@@ -4078,12 +4096,7 @@ class RMUC2026RegionalRules:
             state.minimum_invincible_remaining = max(
                 0.0, state.minimum_invincible_remaining - dt
             )
-            if state.weak and self._weak_release_zone_detected(robot):
-                state.weak = False
-                state.invincible_remaining = min(
-                    state.invincible_remaining,
-                    state.minimum_invincible_remaining,
-                )
+            self._release_weak_if_detected(robot, state)
 
         return newly_respawned
 
@@ -4107,7 +4120,7 @@ class RMUC2026RegionalRules:
                 or not supply_zone.contains(robot.position)
                 or robot.hp >= robot.max_hp
             ):
-                state.healing_hp_fraction = 0.0
+                state.healing_rounding_residual = 0.0
                 continue
 
             enhanced_dt = 0.0
@@ -4130,18 +4143,19 @@ class RMUC2026RegionalRules:
                     - self._resupply_heal_fraction_per_second
                 )
             )
-            state.healing_hp_fraction += robot.max_hp * healing_fraction
-            healing_points = math.floor(state.healing_hp_fraction + 1e-9)
+            state.healing_rounding_residual += robot.max_hp * healing_fraction
+            healing_points = max(
+                0,
+                math.floor(state.healing_rounding_residual + 0.5 + 1e-9),
+            )
             if healing_points <= 0:
                 continue
 
             robot.hp = min(robot.max_hp, robot.hp + healing_points)
             if robot.hp >= robot.max_hp:
-                state.healing_hp_fraction = 0.0
+                state.healing_rounding_residual = 0.0
             else:
-                state.healing_hp_fraction = max(
-                    0.0, state.healing_hp_fraction - healing_points
-                )
+                state.healing_rounding_residual -= healing_points
 
     def _advance_out_of_combat(
         self,
@@ -4503,7 +4517,7 @@ class RMUC2026RegionalRules:
                     lifecycle.weak = False
                     lifecycle.invincible_remaining = 0.0
                     lifecycle.minimum_invincible_remaining = 0.0
-                    lifecycle.healing_hp_fraction = 0.0
+                    lifecycle.healing_rounding_residual = 0.0
                     newly_destroyed.add(event.robot_id)
                 for key, occupation in self._enemy_fortress_occupation.items():
                     if key[0] != event.robot_id:
@@ -4626,7 +4640,10 @@ class RMUC2026RegionalRules:
                 self._fail_tech_core_attempt(team_id)
                 continue
             assembly_zone = self._assembly_zone_by_team[team_id]
-            if assembly_zone.contains(engineer.position):
+            if (
+                not self._is_weak(engineer)
+                and assembly_zone.contains(engineer.position)
+            ):
                 attempt.outside_zone_elapsed = 0.0
                 continue
             attempt.outside_zone_elapsed += dt
@@ -4702,7 +4719,10 @@ class RMUC2026RegionalRules:
         failure_candidates: list[tuple[float, str]] = []
 
         assembly_zone = self._assembly_zone_by_team[team_id]
-        if assembly_zone.contains(engineer.position):
+        if (
+            not self._is_weak(engineer)
+            and assembly_zone.contains(engineer.position)
+        ):
             attempt.outside_zone_elapsed = 0.0
         else:
             outside_before = attempt.outside_zone_elapsed
