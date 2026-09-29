@@ -142,6 +142,21 @@ class _TeamProjectilePurchaseState:
     pending_sentry_supply: int = 0
 
 
+@dataclass
+class _ShootingHeatState:
+    heat: float = 0.0
+    temporarily_locked: bool = False
+    permanently_locked: bool = False
+
+
+@dataclass(frozen=True)
+class _EffectiveHeatParameters:
+    projectile_type: str
+    heat_limit: float
+    cooling_per_second: float
+    permanent_threshold: float
+
+
 class RMUC2026RegionalRules:
     """V1.4.0 Regional Rules Lab with progression, Tech Core, and economy."""
 
@@ -1211,6 +1226,107 @@ class RMUC2026RegionalRules:
                 f"{document.path}: Sentry supply 必须为每 60 秒 100 发"
             )
 
+        shooting_heat = _mapping(document.data, "shooting_heat", document)
+        if set(shooting_heat) != {
+            "detection_hz",
+            "per_shot",
+            "permanent_margin",
+            "sentry",
+        }:
+            raise ConfigError(
+                f"{document.path}: `shooting_heat` 字段不完整或包含未知字段"
+            )
+        detection_hz = _positive_integer(
+            shooting_heat,
+            "detection_hz",
+            document,
+            "shooting_heat.detection_hz",
+        )
+        if detection_hz != 10:
+            raise ConfigError(
+                f"{document.path}: RMUC shooting heat detection_hz 必须为 10"
+            )
+        self._shooting_heat_detection_hz = float(detection_hz)
+
+        per_shot = _mapping(shooting_heat, "per_shot", document)
+        permanent_margin = _mapping(
+            shooting_heat, "permanent_margin", document
+        )
+        if set(per_shot) != {"17mm", "42mm"}:
+            raise ConfigError(
+                f"{document.path}: `shooting_heat.per_shot` 必须包含 17mm、42mm"
+            )
+        if set(permanent_margin) != {"17mm", "42mm"}:
+            raise ConfigError(
+                f"{document.path}: `shooting_heat.permanent_margin` "
+                "必须包含 17mm、42mm"
+            )
+        self._shooting_heat_per_shot = {
+            projectile: _positive_integer(
+                per_shot,
+                projectile,
+                document,
+                f"shooting_heat.per_shot.{projectile}",
+            )
+            for projectile in ("17mm", "42mm")
+        }
+        self._shooting_heat_permanent_margin = {
+            projectile: _positive_integer(
+                permanent_margin,
+                projectile,
+                document,
+                f"shooting_heat.permanent_margin.{projectile}",
+            )
+            for projectile in ("17mm", "42mm")
+        }
+        if self._shooting_heat_per_shot != {"17mm": 10, "42mm": 100}:
+            raise ConfigError(
+                f"{document.path}: RMUC 每发热量必须为 17mm=10、42mm=100"
+            )
+        if self._shooting_heat_permanent_margin != {
+            "17mm": 100,
+            "42mm": 200,
+        }:
+            raise ConfigError(
+                f"{document.path}: RMUC Q2 margin 必须为 17mm=100、42mm=200"
+            )
+
+        sentry_heat = _mapping(shooting_heat, "sentry", document)
+        if set(sentry_heat) != {"mode", "heat_limit", "cooling_per_second"}:
+            raise ConfigError(
+                f"{document.path}: `shooting_heat.sentry` "
+                "必须只包含 mode、heat_limit、cooling_per_second"
+            )
+        sentry_mode = _string(
+            sentry_heat,
+            "mode",
+            document,
+            "shooting_heat.sentry.mode",
+        )
+        sentry_heat_limit = _positive_integer(
+            sentry_heat,
+            "heat_limit",
+            document,
+            "shooting_heat.sentry.heat_limit",
+        )
+        sentry_cooling = _positive_integer(
+            sentry_heat,
+            "cooling_per_second",
+            document,
+            "shooting_heat.sentry.cooling_per_second",
+        )
+        if (
+            sentry_mode != "automatic"
+            or sentry_heat_limit != 260
+            or sentry_cooling != 30
+        ):
+            raise ConfigError(
+                f"{document.path}: 当前 Rules Lab Sentry Heat 必须为 "
+                "automatic / limit 260 / cooling 30"
+            )
+        self._sentry_heat_limit = float(sentry_heat_limit)
+        self._sentry_cooling_per_second = float(sentry_cooling)
+
         self.attack_damage_by_team: dict[str, int] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
@@ -1232,6 +1348,8 @@ class RMUC2026RegionalRules:
         self._projectile_purchase_by_team: dict[
             str, _TeamProjectilePurchaseState
         ] = {}
+        self._shooting_heat_by_robot: dict[str, _ShootingHeatState] = {}
+        self._heat_cooling_accumulator = 0.0
         self._next_sentry_supply_grant = self._sentry_supply_interval
         self._projectile_exchange_zones_by_team: dict[str, tuple[Zone, ...]] = {}
         self._supply_buff_zone_by_team: dict[str, Zone] = {}
