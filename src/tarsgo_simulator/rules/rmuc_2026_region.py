@@ -3976,7 +3976,7 @@ class RMUC2026RegionalRules:
         self._advance_supply_healing(
             match, active_dt, frame_start, newly_respawned
         )
-        self._advance_out_of_combat(active_dt)
+        self._advance_out_of_combat(active_dt, newly_respawned)
 
         self._advance_enemy_fortress_occupation(match, dt)
         self._sync_initialized_fortress_reserves()
@@ -4143,10 +4143,14 @@ class RMUC2026RegionalRules:
                     0.0, state.healing_hp_fraction - healing_points
                 )
 
-    def _advance_out_of_combat(self, dt: float) -> None:
+    def _advance_out_of_combat(
+        self,
+        dt: float,
+        newly_respawned: set[str],
+    ) -> None:
         for robot_id, state in self._robot_lifecycle_by_robot.items():
             robot = self._robots_by_id[robot_id]
-            if state.combat_activity_this_frame:
+            if robot_id in newly_respawned or state.combat_activity_this_frame:
                 state.disengaged_elapsed = 0.0
             elif robot.alive:
                 state.disengaged_elapsed += max(0.0, dt)
