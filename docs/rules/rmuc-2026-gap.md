@@ -58,6 +58,15 @@ Regional V1.4.0 manual.
 - global 10 s Rules Lab periodic settlement convention with large-dt catch-up;
 - D4 priority-failure -25/10s periodic penalty consumer with wallet floor at 0;
 - Hero / Infantry / Sentry RuleSet-private projectile allowance state;
+- Hero / Infantry / Sentry RuleSet-private Shooting Heat state;
+- 17mm +10 / 42mm +100 per committed shot;
+- 10 Hz Heat cooling with fractional-tick accumulator;
+- dynamic Hero / Infantry Heat Limit and Cooling from current Performance;
+- fixed full-automatic Sentry Heat Limit 260 / Cooling 30;
+- Q2 derived dynamically from current Q0 (+100 for 17mm, +200 for 42mm);
+- temporary Heat lock with zero-only unlock;
+- permanent Heat lock using the documented Rules Lab Q1 >= Q2 convention;
+- death Heat reset while preserving permanent lock;
 - initial Hero 42mm=0, Infantry 17mm=0, Sentry 17mm=300 allowance;
 - Drone 17mm=750 initial allowance recorded as metadata only;
 - committed-shot allowance deduction and allowance-zero attack gate;
@@ -90,7 +99,11 @@ Regional V1.4.0 manual.
 - complete Field Buff system;
 - remote healing, immediate respawn, and Drone air-support spending;
 - complete RMUC respawn;
-- RMUC shooting-heat gameplay using dynamic Performance stats;
+- Drone shooting-heat gameplay and Drone Heat/Performance progression;
+- semi-automatic Sentry Heat profile and special mode switching;
+- Sentry posture-dependent cooling modifiers;
+- Energy Mechanism / Fortress / Field Buff cooling modifiers;
+- muzzle-velocity limit and speed-based launcher locks;
 - RMUC chassis-buffer / power-off gameplay using dynamic Performance stats;
 - entity projectile physics;
 - actual preload / magazine inventory and physical projectile stock;
@@ -136,10 +149,11 @@ insertion/translation/rotation, and sensor validation remain deferred.
 
 ### Dynamic Power / Heat gameplay
 
-Performance now provides effective chassis power limit, heat limit, and cooling
-rate at the current level, but this round deliberately does not port RMUL's heat
-or chassis-buffer simulation into RMUC. The rule data is ready for a later
-consumer without coupling progression to those gameplay systems.
+Performance now directly drives RMUC Hero/Infantry Heat Limit and Cooling.
+Shooting Heat itself is implemented, including 10 Hz cooling and temporary /
+permanent launcher locks. Chassis-buffer / power-off gameplay is still deferred,
+as are external cooling modifiers from Field Buff, Energy Mechanism, Fortress,
+and Sentry posture systems.
 
 ### Direct-damage boundary
 
@@ -155,8 +169,8 @@ synthetic approximations rather than official full-field coordinates.
 ## Next candidate
 
 The RMUC resource-to-combat path now reaches Gold Coins → 17/42 mm allowance →
-committed synthetic shots → damage / Experience. The remaining spending actions
-(remote healing, instant respawn, Drone air support) and the still-stored
-D3/D4 Defense / Base HP / virtual-shield rewards remain separate later slices.
-RMUC shooting heat and 42 mm shielding/overfire also remain intentionally
-deferred.
+committed synthetic shots → Shooting Heat / launcher locks → damage / Experience
+→ level-driven new Heat Limit/Cooling. Remaining candidates include chassis
+Buffer/power-off, external cooling modifiers, remote healing/instant respawn,
+Drone air support, and the still-stored D3/D4 Defense / Base HP / virtual-shield
+rewards. Allowance overfire and 42 mm shielding remain intentionally deferred.

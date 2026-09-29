@@ -6,7 +6,7 @@ stage: regional
 status: official-partial
 official_version: "1.4.0"
 source_url: https://bbs.robomaster.com/wiki/20204847/809871?source=7
-last_verified: "2026-09-28"
+last_verified: "2026-09-29"
 match_duration: 420
 
 economy:
@@ -55,6 +55,19 @@ projectile_allowance:
   sentry_supply:
     interval: 60
     allowance: 100
+
+shooting_heat:
+  detection_hz: 10
+  per_shot:
+    17mm: 10
+    42mm: 100
+  permanent_margin:
+    17mm: 100
+    42mm: 200
+  sentry:
+    mode: automatic
+    heat_limit: 260
+    cooling_per_second: 30
 
 structures:
   base:
