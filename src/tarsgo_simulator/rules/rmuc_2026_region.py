@@ -178,6 +178,13 @@ class _FortressBuffState:
     release_remaining: float = 0.0
 
 
+@dataclass
+class _FortressReservedProjectileState:
+    reserved: int = 0
+    last_limit: int = 0
+    initialized: bool = False
+
+
 @dataclass(frozen=True)
 class _TerrainCrossingRule:
     sequence_window: float
@@ -1688,6 +1695,7 @@ class RMUC2026RegionalRules:
             "cooling_hp_step",
             "cooling_cap",
             "eligible_types",
+            "reserved_projectiles",
             "zones",
         }:
             raise ConfigError(
@@ -1729,6 +1737,69 @@ class RMUC2026RegionalRules:
         self._fortress_cooling_hp_step = fortress_cooling_hp_step
         self._fortress_cooling_cap = fortress_cooling_cap
         self._fortress_eligible_types = frozenset(eligible_types)
+
+        reserved_projectiles = _mapping(
+            fortress,
+            "reserved_projectiles",
+            document,
+        )
+        if set(reserved_projectiles) != {
+            "projectile",
+            "base",
+            "hp_step",
+            "per_step",
+            "cap",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.reserved_projectiles` "
+                "字段不完整或包含未知字段"
+            )
+        reserve_projectile = _string(
+            reserved_projectiles,
+            "projectile",
+            document,
+            "fortress_own_buff.reserved_projectiles.projectile",
+        )
+        reserve_base = _positive_integer(
+            reserved_projectiles,
+            "base",
+            document,
+            "fortress_own_buff.reserved_projectiles.base",
+        )
+        reserve_hp_step = _positive_integer(
+            reserved_projectiles,
+            "hp_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.hp_step",
+        )
+        reserve_per_step = _positive_integer(
+            reserved_projectiles,
+            "per_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.per_step",
+        )
+        reserve_cap = _positive_integer(
+            reserved_projectiles,
+            "cap",
+            document,
+            "fortress_own_buff.reserved_projectiles.cap",
+        )
+        if (
+            reserve_projectile != "17mm"
+            or reserve_base != 100
+            or reserve_hp_step != 15
+            or reserve_per_step != 2
+            or reserve_cap != 500
+        ):
+            raise ConfigError(
+                f"{document.path}: Fortress reserve 必须为 "
+                "17mm、100+2*floor(Δ/15)、cap 500"
+            )
+        self._fortress_reserve_projectile = reserve_projectile
+        self._fortress_reserve_base = reserve_base
+        self._fortress_reserve_hp_step = reserve_hp_step
+        self._fortress_reserve_per_step = reserve_per_step
+        self._fortress_reserve_cap = reserve_cap
 
         fortress_zones = _mapping(fortress, "zones", document)
         if set(fortress_zones) != {"red", "blue"}:
@@ -1792,6 +1863,9 @@ class RMUC2026RegionalRules:
         self._field_occupy_remaining: dict[tuple[str, str], float] = {}
         self._fortress_zone_by_team: dict[str, Zone] = {}
         self._fortress_state_by_team: dict[str, _FortressBuffState] = {}
+        self._fortress_reserved_by_robot: dict[
+            str, _FortressReservedProjectileState
+        ] = {}
         self._terrain_crossing_by_robot: dict[
             str, _TerrainCrossingState
         ] = {}
