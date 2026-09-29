@@ -57,6 +57,10 @@ ZONE_STYLE = {
     "blue-base-buff": (BLUE_SUPPLY_COLOR, "BASE BUFF"),
     "red-outpost-buff": (RED_SUPPLY_COLOR, "OUTPOST BUFF"),
     "blue-outpost-buff": (BLUE_SUPPLY_COLOR, "OUTPOST BUFF"),
+    "red-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL DEF"),
+    "blue-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL DEF"),
+    "red-trapezoid-buff": (RED_SUPPLY_COLOR, "TRAPEZOID DEF"),
+    "blue-trapezoid-buff": (BLUE_SUPPLY_COLOR, "TRAPEZOID DEF"),
 }
 
 
