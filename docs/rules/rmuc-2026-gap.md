@@ -203,6 +203,10 @@ Regional V1.4.0 manual.
 - Energy Mechanism activation/scoring and its Attack/Defense/Cooling reward
   acquisition remain unimplemented; PR #37 only consumes an already-resolved
   team Attack Buff fact;
+- V1.4.0 says all living robots receive Energy Mechanism buffs during the
+  active window but does not separately define the death/respawn-mid-window
+  edge; the Rules Lab keeps the team Attack Buff window alive through robot
+  death and lets a respawned robot see it while time remains;
 - Base/Outpost 10 mm × 10 mm armor-center 150% Attack Buff is audited but not
   wired because armor hit detection/projectile geometry is intentionally
   unimplemented;
