@@ -188,6 +188,10 @@ def test_damaging_projectile_delays_impact_feedback_until_visual_arrival() -> No
     assert visuals.impacts == []
 
     visuals.begin_frame(match)
+    attacker.attack_cooldown = max(
+        0.0,
+        attacker.attack_cooldown - projectile_visual_profile("42mm").lifetime,
+    )
     visuals.after_match_update(
         match,
         projectile_visual_profile("42mm").lifetime,
