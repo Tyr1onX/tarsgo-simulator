@@ -180,6 +180,10 @@ Regional V1.4.0 manual.
   healing/Engineer Invincibility, Assembly Engineer Invincibility, and the
   implemented Fortress own/enemy rule-level effects: Attack Buff, Radar
   Vulnerability, and other field effects;
+- V1.4.0 does not explicitly state whether Engineer death resets the already
+  consumed portion of the Assembly 180-second Invincibility budget; the current
+  Rules Lab preserves consumed time because the manual only says death makes the
+  active Buff expire and gives no budget-reset rule;
 - remote healing, paid immediate respawn, and Drone air-support spending;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
