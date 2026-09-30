@@ -172,13 +172,13 @@ def test_remote_healing_delivers_once_after_six_seconds_using_current_max_hp() -
 def test_remote_healing_one_shot_rounding_uses_half_up_hp_settlement() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
-    hero.max_hp = 3
+    hero.max_hp = 8
     hero.hp = 1
 
     assert match.ruleset.purchase_remote_healing(match, hero)
     match.update(6.0)
 
-    assert hero.hp == 3
+    assert hero.hp == 6
 
 
 def test_full_hp_robot_may_purchase_but_delivery_stays_capped_at_max_hp() -> None:
