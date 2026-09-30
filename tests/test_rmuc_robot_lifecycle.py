@@ -86,6 +86,7 @@ def test_lifecycle_state_is_private_per_ground_robot_and_starts_disengaged() -> 
         assert not state.weak
         assert state.invincible_remaining == 0
         assert state.minimum_invincible_remaining == 0
+        assert state.immediate_power_boost_remaining == 0
         assert state.healing_rounding_residual == 0
 
 
@@ -416,3 +417,236 @@ def test_reset_clears_rmuc_lifecycle_state() -> None:
     assert reset.invincible_remaining == 0
     assert reset.minimum_invincible_remaining == 0
     assert reset.healing_rounding_residual == 0
+
+
+def test_paid_immediate_respawn_deducts_price_and_restores_full_current_max_hp() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    economy = match.ruleset._economy_by_team[hero.team]
+
+    match.ruleset._grant_experience(hero.id, 550)
+    assert hero.max_hp == 165
+    match.elapsed_time = 61.0
+    _kill_and_register(match, hero)
+
+    assert match.ruleset.immediate_respawn_cost(match, hero) == 180
+    coins_before = economy.coins
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+
+    assert economy.coins == coins_before - 180
+    assert hero.alive
+    assert hero.hp == hero.max_hp == 165
+    assert lifecycle.respawn_progress == 0
+    assert lifecycle.respawn_required is None
+    assert lifecycle.immediate_respawn_count == 1
+    assert not lifecycle.weak
+    assert lifecycle.invincible_remaining == pytest.approx(3.0)
+    assert lifecycle.minimum_invincible_remaining == 0
+    assert lifecycle.immediate_power_boost_remaining == pytest.approx(4.0)
+
+
+def test_paid_immediate_respawn_price_uses_roundup_elapsed_minute_and_current_level() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+
+    match.ruleset._grant_experience(hero.id, 1100)
+    assert match.ruleset._robot_level(hero.id) == 3
+
+    match.elapsed_time = 60.0
+    assert match.ruleset.immediate_respawn_cost(match, hero) == 140
+
+    match.elapsed_time = 60.001
+    assert match.ruleset.immediate_respawn_cost(match, hero) == 220
+
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    lifecycle.immediate_respawn_count = 7
+    assert match.ruleset.immediate_respawn_cost(match, hero) == 220
+
+
+@pytest.mark.parametrize(
+    "robot_id",
+    ["tarsgo-hero", "tarsgo-engineer", "tarsgo-infantry-1", "tarsgo-sentry"],
+)
+def test_all_instantiated_ground_robot_types_can_buy_immediate_respawn(
+    robot_id: str,
+) -> None:
+    match = _match()
+    robot = _robot(match, robot_id)
+    economy = match.ruleset._economy_by_team[robot.team]
+    economy.coins = 1000
+    _kill_and_register(match, robot)
+
+    assert match.ruleset.purchase_immediate_respawn(match, robot)
+    assert robot.alive
+    assert robot.hp == robot.max_hp
+
+
+def test_paid_immediate_respawn_insufficient_coins_is_atomic() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    economy = match.ruleset._economy_by_team[hero.team]
+
+    match.elapsed_time = 61.0
+    _kill_and_register(match, hero)
+    lifecycle.respawn_progress = 7.0
+    required_before = lifecycle.respawn_required
+    economy.coins = 179
+
+    assert not match.ruleset.purchase_immediate_respawn(match, hero)
+
+    assert economy.coins == 179
+    assert not hero.alive
+    assert hero.hp == 0
+    assert lifecycle.respawn_progress == pytest.approx(7.0)
+    assert lifecycle.respawn_required == required_before
+    assert lifecycle.immediate_respawn_count == 0
+    assert lifecycle.invincible_remaining == 0
+    assert not lifecycle.weak
+
+
+def test_paid_immediate_respawn_rejects_living_robot_without_charge() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    economy = match.ruleset._economy_by_team[hero.team]
+    coins_before = economy.coins
+
+    assert not match.ruleset.purchase_immediate_respawn(match, hero)
+
+    assert economy.coins == coins_before
+    assert hero.alive
+
+
+def test_paid_immediate_respawn_repeated_request_cannot_double_charge() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    economy = match.ruleset._economy_by_team[hero.team]
+    _kill_and_register(match, hero)
+
+    cost = match.ruleset.immediate_respawn_cost(match, hero)
+    coins_before = economy.coins
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+    assert not match.ruleset.purchase_immediate_respawn(match, hero)
+
+    assert economy.coins == coins_before - cost
+    assert match.ruleset._robot_lifecycle_by_robot[hero.id].immediate_respawn_count == 1
+
+
+def test_paid_immediate_respawn_requires_registered_death_progress() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    economy = match.ruleset._economy_by_team[hero.team]
+
+    hp = hero.hp
+    assert match.apply_damage(hero, hp, bypass_invincibility=True) == hp
+    assert not hero.alive
+    coins_before = economy.coins
+
+    assert not match.ruleset.purchase_immediate_respawn(match, hero)
+    assert economy.coins == coins_before
+
+    match.update(0)
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+
+
+def test_paid_immediate_respawn_uses_three_second_invincibility_without_weakened() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    _kill_and_register(match, hero)
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+
+    hp_before = hero.hp
+    assert match.apply_damage(hero, 20, source_team_id=BLUE) == 0
+
+    match.update(2.9)
+    assert lifecycle.invincible_remaining == pytest.approx(0.1)
+    assert not lifecycle.weak
+    assert match.apply_damage(hero, 20, source_team_id=BLUE) == 0
+
+    match.update(0.1)
+    assert lifecycle.invincible_remaining == 0
+    assert match.apply_damage(hero, 20, source_team_id=BLUE) == 20
+    assert hero.hp == hp_before - 20
+
+
+def test_paid_immediate_respawn_power_boost_is_two_times_capped_at_200_for_four_seconds() -> None:
+    match = _match()
+    engineer = _robot(match, "tarsgo-engineer")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[engineer.id]
+    _kill_and_register(match, engineer)
+
+    assert match.ruleset.purchase_immediate_respawn(match, engineer)
+    assert match.ruleset._effective_chassis_power_limit(engineer.id) == 200
+
+    match.update(3.9)
+    assert lifecycle.immediate_power_boost_remaining == pytest.approx(0.1)
+    assert match.ruleset._effective_chassis_power_limit(engineer.id) == 200
+
+    match.update(0.1)
+    assert lifecycle.immediate_power_boost_remaining == 0
+    assert match.ruleset._effective_chassis_power_limit(engineer.id) == 120
+
+
+def test_successful_immediate_respawn_count_increases_next_automatic_requirement() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    economy = match.ruleset._economy_by_team[hero.team]
+    economy.coins = 1000
+
+    match.elapsed_time = 50.0
+    _kill_and_register(match, hero)
+    first_required = lifecycle.respawn_required
+    assert first_required == 15
+
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+    assert lifecycle.immediate_respawn_count == 1
+
+    assert match.apply_damage(
+        hero,
+        hero.hp,
+        bypass_invincibility=True,
+    ) == hero.hp
+    match.update(0)
+
+    assert lifecycle.respawn_required == 35
+    assert lifecycle.respawn_progress == 0
+
+
+def test_automatic_respawn_still_uses_existing_weak_and_thirty_second_semantics_after_paid_path() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+
+    _complete_normal_respawn(match, hero)
+
+    assert hero.alive
+    assert lifecycle.weak
+    assert lifecycle.invincible_remaining == pytest.approx(30.0)
+    assert lifecycle.minimum_invincible_remaining == pytest.approx(10.0)
+    assert lifecycle.immediate_power_boost_remaining == 0
+
+
+def test_match_reset_clears_paid_immediate_respawn_round_state() -> None:
+    match = _match()
+    hero = _robot(match, "tarsgo-hero")
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    economy = match.ruleset._economy_by_team[hero.team]
+    _kill_and_register(match, hero)
+    assert match.ruleset.purchase_immediate_respawn(match, hero)
+
+    assert lifecycle.immediate_respawn_count == 1
+    assert lifecycle.immediate_power_boost_remaining == pytest.approx(4.0)
+    assert economy.coins < 400
+
+    match.reset()
+
+    lifecycle = match.ruleset._robot_lifecycle_by_robot[hero.id]
+    economy = match.ruleset._economy_by_team[hero.team]
+    assert lifecycle.immediate_respawn_count == 0
+    assert lifecycle.immediate_power_boost_remaining == 0
+    assert lifecycle.respawn_progress == 0
+    assert lifecycle.respawn_required is None
+    assert economy.coins == 400
