@@ -52,6 +52,14 @@ robot_lifecycle:
     immediate_power_cap: 200
     immediate_power_duration: 4
 
+remote_healing:
+  eligible_types: [hero, infantry, sentry]
+  effective_delay: 6
+  hp_fraction: 0.60
+  base_coins: 50
+  elapsed_seconds: 60
+  elapsed_coins_multiplier: 20
+
 projectile_allowance:
   remote_effective_delay: 6
   zones:

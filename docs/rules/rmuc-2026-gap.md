@@ -93,6 +93,13 @@ Regional V1.4.0 manual.
 - non-remote 17mm / 42mm Gold-Coin exchange at synthetic own supply/base/outpost buff zones;
 - out-of-combat six-second RMUC-private lifecycle state shared by projectile exchange and Resupply healing;
 - own Resupply healing at 10% max HP/s, rising to 25% max HP/s after elapsed 240 s while out of combat, with half-up cumulative integer settlement;
+- Hero/Infantry/Sentry remote healing while out of combat with immediate atomic
+  Gold-Coin reservation, Table 5-8
+  `50 + ROUNDUP((elapsed/60)*20)` pricing, six-second delayed one-shot
+  delivery, 60% current-max-HP half-up settlement, and max-HP clamp;
+- death-before-delivery cancellation without refund, large-dt one-shot
+  settlement, reset cleanup, and independent coexistence with local Resupply
+  healing;
 - automatic respawn progress using death-time elapsed, future immediate-respawn count, 1/s normal progress, and 4/s acceleration in own Resupply or below 2000 Base HP;
 - automatic respawn at 10% current max HP with half-up integer settlement, 30 s Invincibility, and Weakened state;
 - paid immediate respawn for the instantiated ground robots with atomic Gold-Coin
@@ -190,15 +197,28 @@ Regional V1.4.0 manual.
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
   active Buff expire and gives no budget-reset rule;
-- remote healing and Drone air-support spending;
+- Drone air-support spending;
+- V1.4.0 says remote-healing exchanges are unlimited but does not explicitly
+  define whether one robot may hold multiple simultaneous six-second pending
+  remote-healing transactions; the current Rules Lab permits one pending request
+  per robot and allows another after settlement;
+- V1.4.0 does not explicitly discuss Weakened with remote healing; the current
+  Rules Lab does not add a Weakened prohibition beyond the explicit
+  living/eligible-type/out-of-combat requirements;
+- V1.4.0 does not explicitly forbid buying remote healing at full HP; the current
+  Rules Lab accepts it and lets the delayed heal clamp to max HP;
+- same-frame death-versus-six-second-delivery ordering is not specified by the
+  manual; the Rules Lab consumes destruction first, so death cancels the pending
+  heal in that discrete frame;
 - Table 5-8 does not explicitly state how its "robot level" price term applies
   to Engineer/Sentry, which are outside the Experience System; the current
   Rules Lab uses its existing level-1 convention for those non-progression
   robots, matching the only explicit Engineer/Sentry level convention elsewhere
   in V1.4.0 but retaining this as an audit edge;
-- automatic-Sentry gimbal-operator immediate-respawn intervention surcharge
-  (+50 coins) and semi-automatic-Sentry free operator-action distinction from
-  §5.6.4 remain deferred because action origin/control mode is not modeled;
+- automatic-Sentry gimbal-operator intervention surcharge (+50 coins), including
+  remote-healing and immediate-respawn actions, plus the semi-automatic-Sentry
+  free operator-action distinction from §5.6.4 remain deferred because action
+  origin/control mode is not modeled;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
@@ -282,8 +302,8 @@ The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
-geometry, physical Assembly/Energy Mechanism work, Attack modifiers, remote
-healing, and Drone/Radar systems. Tech Core Defense, Base
+geometry, physical Assembly/Energy Mechanism work, Attack modifiers, and
+Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.

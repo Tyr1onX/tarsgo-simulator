@@ -87,6 +87,7 @@ def test_lifecycle_state_is_private_per_ground_robot_and_starts_disengaged() -> 
         assert state.invincible_remaining == 0
         assert state.minimum_invincible_remaining == 0
         assert state.immediate_power_boost_remaining == 0
+        assert state.pending_remote_healing_effective_at is None
         assert state.healing_rounding_residual == 0
 
 
@@ -416,6 +417,7 @@ def test_reset_clears_rmuc_lifecycle_state() -> None:
     assert not reset.weak
     assert reset.invincible_remaining == 0
     assert reset.minimum_invincible_remaining == 0
+    assert reset.pending_remote_healing_effective_at is None
     assert reset.healing_rounding_residual == 0
 
 
