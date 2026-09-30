@@ -1629,6 +1629,7 @@ class RMUC2026RegionalRules:
                 f"{document.path}: Buff Point Occupy 失效延迟必须为 2 秒"
             )
         self._field_occupy_release_delay = float(occupy_release_delay)
+        self._assembly_invincibility_limit = 180.0
 
         defense = _mapping(field_defense, "defense", document)
         if set(defense) != {"base", "central", "trapezoid", "outpost"}:
@@ -2069,6 +2070,7 @@ class RMUC2026RegionalRules:
         self._supply_buff_zone_by_team: dict[str, Zone] = {}
         self._resource_zone_by_team: dict[str, Zone] = {}
         self._assembly_zone_by_team: dict[str, Zone] = {}
+        self._assembly_invincibility_elapsed_by_engineer: dict[str, float] = {}
         self._field_buff_elapsed = 0.0
         self._field_base_zone_by_team: dict[str, Zone] = {}
         self._field_outpost_zone_by_team: dict[str, Zone] = {}
@@ -2812,12 +2814,45 @@ class RMUC2026RegionalRules:
                 failure_time + self._d4_retry_lockout,
             )
 
+    def _engineer_field_invincible(self, robot: Robot) -> bool:
+        if (
+            robot.type != "engineer"
+            or not robot.alive
+            or self._is_weak(robot)
+        ):
+            return False
+
+        own_supply = self._supply_buff_zone_by_team.get(robot.team)
+        if (
+            own_supply is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_supply.id), 0.0
+            )
+            > 0
+        ):
+            return True
+
+        own_assembly = self._assembly_zone_by_team.get(robot.team)
+        return (
+            own_assembly is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_assembly.id), 0.0
+            )
+            > 0
+            and self._assembly_invincibility_elapsed_by_engineer.get(
+                robot.id, 0.0
+            )
+            < self._assembly_invincibility_limit - 1e-9
+        )
+
     def can_receive_damage(self, target: DamageableTarget) -> bool:
         if not target.alive:
             return False
         if isinstance(target, Robot):
             lifecycle = self._robot_lifecycle_by_robot.get(target.id)
-            return lifecycle is None or lifecycle.invincible_remaining <= 0
+            if lifecycle is not None and lifecycle.invincible_remaining > 0:
+                return False
+            return not self._engineer_field_invincible(target)
         if isinstance(target, Structure) and target.type == "base":
             outpost = self._outpost_by_team.get(target.team)
             return outpost is None or not outpost.alive
@@ -3485,6 +3520,29 @@ class RMUC2026RegionalRules:
             and not point_outpost.alive
         )
 
+    def _advance_field_occupy_remaining(
+        self,
+        robot: Robot,
+        zone: Zone,
+        eligible: bool,
+        dt: float,
+    ) -> float:
+        key = (robot.id, zone.id)
+        if eligible and zone.contains(robot.position):
+            self._field_occupy_remaining[key] = self._field_occupy_release_delay
+            return max(0.0, dt)
+        if not eligible:
+            self._field_occupy_remaining[key] = 0.0
+            return 0.0
+
+        previous_remaining = self._field_occupy_remaining.get(key, 0.0)
+        active_dt = min(max(0.0, dt), previous_remaining)
+        remaining = max(0.0, previous_remaining - max(0.0, dt))
+        self._field_occupy_remaining[key] = (
+            0.0 if remaining <= 1e-9 else remaining
+        )
+        return active_dt
+
     def _advance_field_defense_occupancy(
         self,
         match: "Match",
@@ -3535,7 +3593,16 @@ class RMUC2026RegionalRules:
             candidate_zones: list[tuple[Zone, bool]] = []
             own_base = self._field_base_zone_by_team[robot.team]
             own_trapezoid = self._field_trapezoid_zone_by_team[robot.team]
-            candidate_zones.extend(((own_base, True), (own_trapezoid, True)))
+            own_supply = self._supply_buff_zone_by_team[robot.team]
+            own_assembly = self._assembly_zone_by_team[robot.team]
+            candidate_zones.extend(
+                (
+                    (own_base, True),
+                    (own_trapezoid, True),
+                    (own_supply, True),
+                    (own_assembly, robot.type == "engineer"),
+                )
+            )
             candidate_zones.extend(
                 (
                     zone,
@@ -3551,22 +3618,25 @@ class RMUC2026RegionalRules:
                 for point_team, zone in self._field_outpost_zone_by_team.items()
             )
 
+            assembly_active_dt = 0.0
             for zone, eligible in candidate_zones:
-                key = (robot.id, zone.id)
-                if eligible and zone.contains(robot.position):
-                    self._field_occupy_remaining[key] = (
-                        self._field_occupy_release_delay
-                    )
-                elif not eligible:
-                    self._field_occupy_remaining[key] = 0.0
-                else:
-                    remaining = max(
-                        0.0,
-                        self._field_occupy_remaining.get(key, 0.0) - dt,
-                    )
-                    self._field_occupy_remaining[key] = (
-                        0.0 if remaining <= 1e-9 else remaining
-                    )
+                active_dt = self._advance_field_occupy_remaining(
+                    robot,
+                    zone,
+                    eligible,
+                    dt,
+                )
+                if zone is own_assembly:
+                    assembly_active_dt = active_dt
+
+            if robot.type == "engineer" and assembly_active_dt > 0:
+                elapsed = self._assembly_invincibility_elapsed_by_engineer[
+                    robot.id
+                ]
+                self._assembly_invincibility_elapsed_by_engineer[robot.id] = min(
+                    self._assembly_invincibility_limit,
+                    elapsed + assembly_active_dt,
+                )
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Settle synthetic RMUC chassis power at 10 Hz before movement."""
@@ -3724,6 +3794,9 @@ class RMUC2026RegionalRules:
             robot.id: _EngineerResourceState()
             for robot in match.robots
             if robot.type == "engineer"
+        }
+        self._assembly_invincibility_elapsed_by_engineer = {
+            robot_id: 0.0 for robot_id in self._engineer_resources_by_id
         }
         self._tech_core_by_team = {
             team_id: _TechCoreTeamState() for team_id in team_by_side.values()
