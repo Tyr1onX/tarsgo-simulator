@@ -173,6 +173,18 @@ Regional V1.4.0 manual.
   and 3 s paused retention after Occupy expiry or death;
 - V1.4.0 opponent-Fortress 100% Vulnerability through max-based
   `_effective_vulnerability()`;
+- target-specific Radar Vulnerability effect for current ground robots, with
+  official P-derived 15% / 20% values represented through a narrow
+  `set_radar_vulnerability()` rule boundary;
+- Radar base Vulnerability has no invented duration: repeated official-state
+  updates replace/clear the target's current P-derived effect;
+- Radar P-derived effect proxy persists through robot death/respawn and clears
+  on match reset, matching V1.4.0's retained-P / reset-x rule;
+- Radar double-Vulnerability effect doubles only Radar-origin values for 30 s,
+  caps effect starts at two per match, and leaves opportunity accumulation /
+  command transport outside the Rules Lab;
+- Radar and opponent-Fortress Vulnerability share existing same-class max
+  semantics rather than summing;
 - damage resolution now uses
   `Attack * (1 - Defense + Vulnerability)` with existing final half-up
   rounding before Base Virtual Shield;
@@ -185,7 +197,8 @@ Regional V1.4.0 manual.
 ## Intentionally not implemented
 
 - Drone entity and Drone Experience progression;
-- Radar;
+- Radar entity, coordinate detection, vision, marking accuracy, x/P progression,
+  missing-data decay, map marking, and interference-wave gameplay;
 - Dart System and Dart Experience;
 - physical Energy Unit entities, world placement, stock, and pickup depletion;
 - Tech Core real pose / insertion / translation / rotation / sensor validation;
@@ -198,8 +211,7 @@ Regional V1.4.0 manual.
 - projectile / non-projectile source redistribution;
 - remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply
   healing/Engineer Invincibility, Assembly Engineer Invincibility, and the
-  implemented Fortress own/enemy rule-level effects: Radar Vulnerability and
-  other field effects;
+  implemented Fortress own/enemy rule-level effects;
 - Energy Mechanism activation/scoring and its Attack/Defense/Cooling reward
   acquisition remain unimplemented; PR #37 only consumes an already-resolved
   team Attack Buff fact;
@@ -216,6 +228,18 @@ Regional V1.4.0 manual.
   kind; this is sufficient for the current direct-projectile Rules Lab combat,
   but future collision/penalty/source-specific damage must not inherit Attack
   Buff without adding narrow source context;
+- Radar's one-minute Vulnerability-opportunity accumulator is not modeled;
+  simultaneous-target non-additive timing remains deferred with the rest of
+  Radar marking gameplay;
+- Radar double-Vulnerability command transport/queueing is not modeled;
+  `start_radar_double_vulnerability_effect()` means an official effect start
+  has already been authorized;
+- interference-wave difficulty gating is not modeled; the Radar Vulnerability
+  setter may only be used after that official condition has already been
+  resolved externally;
+- aerial targets may carry Radar marking P but Table 5-22 limits Vulnerability
+  to ground robots; Drone remains uninstantiated and receives no modeled Radar
+  Vulnerability effect;
 - V1.4.0 does not explicitly state whether Engineer death resets the already
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
@@ -324,9 +348,8 @@ synthetic approximations rather than official full-field coordinates.
 The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
-both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
-geometry, physical Assembly/Energy Mechanism work, Attack modifiers, and
-Drone/Radar systems. Tech Core Defense, Base
+both active consumers. Remaining candidates include physical Base-armor geometry,
+physical Assembly/Energy Mechanism work, and full Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.
