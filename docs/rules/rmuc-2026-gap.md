@@ -60,7 +60,13 @@ Regional V1.4.0 manual.
 - D3 first-completion 25% team Defense consumer for all current ground robots,
   Outpost, and Base;
 - D4 first-completion Defense upgrade to 50% using non-stacking max semantics;
-- explicit half-up Defense damage settlement on known enemy attack damage;
+- explicit V1.4.0 projectile-damage settlement
+  `original * Attack * (1 - Defense + Vulnerability)` with one final half-up
+  integer rounding step;
+- RMUC-private timed team Attack Buff facts with independent durations and
+  same-class max semantics;
+- Attack Buff resolution for current direct-projectile Robot/Base/Outpost
+  damage without changing the Core HP-loss path;
 - narrow RuleSet damage-resolution hook before the Core HP mutation path;
 - D4 Base +2000 current-HP reward with overflow-to-private Virtual Shield;
 - Base damage order: invincibility -> Defense -> Virtual Shield -> HP;
@@ -167,8 +173,9 @@ Regional V1.4.0 manual.
   and 3 s paused retention after Occupy expiry or death;
 - V1.4.0 opponent-Fortress 100% Vulnerability through max-based
   `_effective_vulnerability()`;
-- damage resolution now uses `1 - Defense + Vulnerability` with existing
-  half-up rounding;
+- damage resolution now uses
+  `Attack * (1 - Defense + Vulnerability)` with existing final half-up
+  rounding before Base Virtual Shield;
 - single-robot 20 s opponent-Fortress trigger reuses
   `base_armor_deployed`;
 - Base armor deployment disables all Fortress Vulnerability without mutating
@@ -191,8 +198,20 @@ Regional V1.4.0 manual.
 - projectile / non-projectile source redistribution;
 - remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply
   healing/Engineer Invincibility, Assembly Engineer Invincibility, and the
-  implemented Fortress own/enemy rule-level effects: Attack Buff, Radar
-  Vulnerability, and other field effects;
+  implemented Fortress own/enemy rule-level effects: Radar Vulnerability and
+  other field effects;
+- Energy Mechanism activation/scoring and its Attack/Defense/Cooling reward
+  acquisition remain unimplemented; PR #37 only consumes an already-resolved
+  team Attack Buff fact;
+- Base/Outpost 10 mm × 10 mm armor-center 150% Attack Buff is audited but not
+  wired because armor hit detection/projectile geometry is intentionally
+  unimplemented;
+- long-range Hero Deployment Mode 42 mm-vs-Base 150% Attack Buff is audited but
+  not wired because Deployment Mode is outside this Sprint;
+- the current Core damage hook carries source team but not projectile/source
+  kind; this is sufficient for the current direct-projectile Rules Lab combat,
+  but future collision/penalty/source-specific damage must not inherit Attack
+  Buff without adding narrow source context;
 - V1.4.0 does not explicitly state whether Engineer death resets the already
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
