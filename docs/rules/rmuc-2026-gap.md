@@ -107,8 +107,15 @@ Regional V1.4.0 manual.
 - static own Trapezoid Elevated Ground 50% robot Defense;
 - Outpost Buff Point 25% Defense with own-Outpost-alive and pre-300-second enemy
   occupancy eligibility;
-- official two-second Occupy-status expiration delay for the implemented static
-  Defense Buff Points;
+- official two-second Occupy-status expiration delay for implemented field Buff
+  Points, including Engineer Assembly / own-Resupply Invincibility;
+- own Assembly Buff Point Engineer-only Invincibility with a cumulative
+  180-second round budget, leave/re-enter persistence, immediate death expiry,
+  Weakened exclusion, and reset-only budget reset;
+- own Resupply Engineer Invincibility with no cumulative cap or out-of-combat
+  prerequisite, kept independent from Resupply healing;
+- independent automatic-respawn / Assembly / Resupply Invincibility sources
+  combined only at the existing `can_receive_damage()` gate;
 - Robot effective Defense resolved as max(Tech Core Defense, static field Defense,
   Terrain Crossing Defense);
 - synthetic ordered Terrain Crossing RFID sequences for Road, Elevated Ground,
@@ -169,9 +176,10 @@ Regional V1.4.0 manual.
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
-- remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply,
-  and the implemented Fortress own/enemy rule-level effects: Assembly invincibility,
-  Attack Buff, Radar Vulnerability, and other field effects;
+- remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply
+  healing/Engineer Invincibility, Assembly Engineer Invincibility, and the
+  implemented Fortress own/enemy rule-level effects: Attack Buff, Radar
+  Vulnerability, and other field effects;
 - remote healing, paid immediate respawn, and Drone air-support spending;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
@@ -256,7 +264,7 @@ The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
-geometry, Assembly, Energy Mechanism, Attack modifiers, remote
+geometry, physical Assembly/Energy Mechanism work, Attack modifiers, remote
 healing/paid immediate respawn, and Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
