@@ -9,6 +9,11 @@ import pygame
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.desktop.viewport import Viewport
+from tarsgo_simulator.desktop.visuals import (
+    CombatVisualState,
+    projectile_visual_profile,
+    robot_visual_profile,
+)
 
 
 BACKGROUND = (18, 24, 32)
@@ -27,6 +32,10 @@ OPPONENT_COLOR = (225, 105, 92)
 SELECTION_COLOR = (255, 225, 126)
 HP_COLOR = (105, 214, 133)
 HP_BACKGROUND = (65, 72, 78)
+DAMAGE_GHOST_COLOR = (224, 176, 92)
+TRACER_COLOR = (245, 239, 197)
+IMPACT_COLOR = (255, 218, 132)
+ROBOT_OUTLINE = (27, 35, 42)
 HUD_HEIGHT = 68
 WINDOW_MARGIN = 32
 WINDOW_SIZE = (1100, 780)
@@ -138,6 +147,8 @@ def main(scenario_path: str | Path | None = None) -> None:
         selection_current: tuple[int, int] | None = None
         selection_shift = False
         debug_geometry = False
+        visual_state = CombatVisualState()
+        visual_state.reset(match)
         running = True
 
         while running:
@@ -152,6 +163,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                         debug_geometry = not debug_geometry
                     elif event.key == pygame.K_r:
                         match.reset()
+                        visual_state.reset(match)
                         selected_robot_ids.clear()
                         selection_start = None
                         selection_current = None
@@ -265,10 +277,19 @@ def main(scenario_path: str | Path | None = None) -> None:
                         world = _screen_to_world(event.pos, viewport)
                         if world is None:
                             continue
+                        moved = False
                         if len(selected_robot_ids) == 1:
-                            match.order_move(next(iter(selected_robot_ids)), world)
+                            moved = match.order_move(
+                                next(iter(selected_robot_ids)),
+                                world,
+                            )
                         elif len(selected_robot_ids) > 1:
-                            match.order_group_move(sorted(selected_robot_ids), world)
+                            moved = match.order_group_move(
+                                sorted(selected_robot_ids),
+                                world,
+                            )
+                        if moved and _is_rmuc_rules_lab(match):
+                            visual_state.add_move_marker(world)
                 elif event.type == pygame.MOUSEMOTION and selection_start is not None:
                     selection_current = event.pos
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -292,7 +313,9 @@ def main(scenario_path: str | Path | None = None) -> None:
                     selection_current = None
                     selection_shift = False
 
+            visual_state.begin_frame(match)
             match.update(dt)
+            visual_state.after_match_update(match, dt)
             live_player_ids = {
                 robot.id
                 for robot in match.robots
@@ -315,6 +338,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                 selection_rect,
                 viewport,
                 debug_geometry=debug_geometry,
+                visual_state=visual_state,
             )
             pygame.display.flip()
     finally:
@@ -900,6 +924,303 @@ def _draw_rmuc_hud(
     )
 
 
+def _rotate_point(
+    center: tuple[int, int],
+    local: tuple[float, float],
+    angle: float,
+) -> tuple[int, int]:
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    return (
+        round(center[0] + local[0] * cosine - local[1] * sine),
+        round(center[1] + local[0] * sine + local[1] * cosine),
+    )
+
+
+def _draw_selection_feedback(
+    screen: pygame.Surface,
+    center: tuple[int, int],
+    radius: int,
+    animation_time: float,
+) -> None:
+    pulse = round(2.0 * math.sin(animation_time * 6.0))
+    ring_radius = radius + 8 + pulse
+    pygame.draw.circle(screen, SELECTION_COLOR, center, ring_radius, width=2)
+    bracket = 7
+    offset = ring_radius + 3
+    for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        corner = (center[0] + sx * offset, center[1] + sy * offset)
+        pygame.draw.line(
+            screen,
+            SELECTION_COLOR,
+            corner,
+            (corner[0] - sx * bracket, corner[1]),
+            width=2,
+        )
+        pygame.draw.line(
+            screen,
+            SELECTION_COLOR,
+            corner,
+            (corner[0], corner[1] - sy * bracket),
+            width=2,
+        )
+
+
+def _draw_rmuc_robot_shape(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    robot_type: str,
+    color: tuple[int, int, int],
+    body_angle: float,
+    turret_angle: float,
+    alive: bool,
+    selected: bool,
+    animation_time: float,
+    muzzle_remaining: float,
+    muzzle_caliber: str,
+    impact_remaining: float,
+) -> int:
+    profile = robot_visual_profile(robot_type)
+    draw_color = color if alive else MUTED_COLOR
+    half_w = profile.body_width / 2
+    half_h = profile.body_height / 2
+    body_points = [
+        _rotate_point(center, (-half_w, -half_h), body_angle),
+        _rotate_point(center, (half_w, -half_h), body_angle),
+        _rotate_point(center, (half_w, half_h), body_angle),
+        _rotate_point(center, (-half_w, half_h), body_angle),
+    ]
+    pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
+    inner_points = [
+        _rotate_point(center, (-half_w + 2, -half_h + 2), body_angle),
+        _rotate_point(center, (half_w - 2, -half_h + 2), body_angle),
+        _rotate_point(center, (half_w - 2, half_h - 2), body_angle),
+        _rotate_point(center, (-half_w + 2, half_h - 2), body_angle),
+    ]
+    pygame.draw.polygon(screen, draw_color, inner_points)
+
+    if robot_type == "sentry":
+        for side in (-1, 1):
+            pod = _rotate_point(
+                center,
+                (0, side * (half_h + 3)),
+                body_angle,
+            )
+            pygame.draw.rect(
+                screen,
+                ROBOT_OUTLINE,
+                pygame.Rect(pod[0] - 7, pod[1] - 3, 14, 6),
+                border_radius=2,
+            )
+    elif robot_type == "engineer":
+        shoulder = _rotate_point(center, (3, 0), body_angle)
+        elbow = _rotate_point(
+            center,
+            (profile.tool_arm_length * 0.55, -8),
+            body_angle,
+        )
+        tool = _rotate_point(
+            center,
+            (profile.tool_arm_length, -2),
+            body_angle,
+        )
+        pygame.draw.line(screen, TEXT_COLOR, shoulder, elbow, width=3)
+        pygame.draw.line(screen, TEXT_COLOR, elbow, tool, width=3)
+        pygame.draw.circle(screen, draw_color, tool, 4, width=2)
+
+    muzzle_point = center
+    if profile.turret_radius > 0:
+        pygame.draw.circle(
+            screen,
+            ROBOT_OUTLINE,
+            center,
+            profile.turret_radius + 2,
+        )
+        pygame.draw.circle(
+            screen,
+            draw_color,
+            center,
+            profile.turret_radius,
+        )
+        muzzle_point = _rotate_point(
+            center,
+            (profile.barrel_length, 0),
+            turret_angle,
+        )
+        barrel_start = _rotate_point(
+            center,
+            (profile.turret_radius - 1, 0),
+            turret_angle,
+        )
+        pygame.draw.line(
+            screen,
+            ROBOT_OUTLINE,
+            barrel_start,
+            muzzle_point,
+            width=profile.barrel_width + 2,
+        )
+        pygame.draw.line(
+            screen,
+            TEXT_COLOR if alive else MUTED_COLOR,
+            barrel_start,
+            muzzle_point,
+            width=profile.barrel_width,
+        )
+
+    if muzzle_remaining > 0 and profile.turret_radius > 0:
+        projectile = projectile_visual_profile(muzzle_caliber)
+        flash_radius = (
+            8 if projectile.caliber == "42mm" else 5
+        )
+        pygame.draw.circle(
+            screen,
+            IMPACT_COLOR,
+            muzzle_point,
+            flash_radius,
+        )
+        flash_tip = _rotate_point(
+            muzzle_point,
+            (flash_radius + 5, 0),
+            turret_angle,
+        )
+        pygame.draw.line(
+            screen,
+            IMPACT_COLOR,
+            muzzle_point,
+            flash_tip,
+            width=max(2, projectile.tracer_width),
+        )
+
+    radius = max(profile.body_width, profile.body_height) // 2
+    if impact_remaining > 0:
+        pygame.draw.circle(
+            screen,
+            IMPACT_COLOR,
+            center,
+            radius + 4,
+            width=2,
+        )
+    if selected:
+        _draw_selection_feedback(
+            screen,
+            center,
+            radius,
+            animation_time,
+        )
+    return radius
+
+
+def _draw_visual_projectiles(
+    screen: pygame.Surface,
+    viewport: Viewport,
+    visual_state: CombatVisualState,
+) -> None:
+    for projectile in visual_state.projectiles:
+        profile = projectile.profile
+        progress = projectile.progress
+        head = viewport.world_to_screen(projectile.position)
+        tail_progress = max(0.0, progress - (0.20 if profile.caliber == "17mm" else 0.14))
+        tail_world = (
+            projectile.start[0]
+            + (projectile.end[0] - projectile.start[0]) * tail_progress,
+            projectile.start[1]
+            + (projectile.end[1] - projectile.start[1]) * tail_progress,
+        )
+        tail = viewport.world_to_screen(tail_world)
+        start = (round(tail[0]), round(tail[1]))
+        end = (round(head[0]), round(head[1]))
+        pygame.draw.line(
+            screen,
+            TRACER_COLOR,
+            start,
+            end,
+            width=profile.tracer_width,
+        )
+        pygame.draw.circle(
+            screen,
+            IMPACT_COLOR,
+            end,
+            profile.head_radius,
+        )
+
+    for impact in visual_state.impacts:
+        point = viewport.world_to_screen(impact.position)
+        profile = projectile_visual_profile(impact.caliber)
+        radius = round(
+            (5 if profile.caliber == "17mm" else 9)
+            + impact.progress * (7 if profile.caliber == "17mm" else 13)
+        )
+        pygame.draw.circle(
+            screen,
+            IMPACT_COLOR,
+            (round(point[0]), round(point[1])),
+            radius,
+            width=2 if profile.caliber == "17mm" else 3,
+        )
+
+
+def _draw_move_markers(
+    screen: pygame.Surface,
+    viewport: Viewport,
+    visual_state: CombatVisualState,
+) -> None:
+    for marker in visual_state.move_markers:
+        point = viewport.world_to_screen(marker.position)
+        center = (round(point[0]), round(point[1]))
+        radius = round(8 + marker.progress * 12)
+        pygame.draw.circle(
+            screen,
+            SELECTION_COLOR,
+            center,
+            radius,
+            width=2,
+        )
+        arm = 8
+        pygame.draw.line(
+            screen,
+            SELECTION_COLOR,
+            (center[0] - arm, center[1]),
+            (center[0] + arm, center[1]),
+            width=1,
+        )
+        pygame.draw.line(
+            screen,
+            SELECTION_COLOR,
+            (center[0], center[1] - arm),
+            (center[0], center[1] + arm),
+            width=1,
+        )
+
+
+def _draw_selected_paths(
+    screen: pygame.Surface,
+    match: Match,
+    viewport: Viewport,
+    selected_robot_ids: set[str],
+) -> None:
+    for robot in match.robots:
+        if (
+            robot.id not in selected_robot_ids
+            or not match.is_player_controlled(robot.id)
+            or not robot.path
+        ):
+            continue
+        world_points = [robot.position, *robot.path]
+        screen_points = [
+            tuple(round(value) for value in viewport.world_to_screen(point))
+            for point in world_points
+        ]
+        if len(screen_points) >= 2:
+            pygame.draw.lines(
+                screen,
+                MUTED_COLOR,
+                False,
+                screen_points,
+                width=1,
+            )
+
+
 def _draw(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -912,6 +1233,7 @@ def _draw(
     viewport: Viewport,
     *,
     debug_geometry: bool = False,
+    visual_state: CombatVisualState | None = None,
 ) -> None:
     screen.fill(BACKGROUND)
     display_state = match.ruleset.display_state
@@ -1107,30 +1429,61 @@ def _draw(
         if is_rmuc
         else _default_robot_labels(match, player_team, opponent_team)
     )
+    if is_rmuc and visual_state is not None:
+        _draw_selected_paths(
+            screen,
+            match,
+            viewport,
+            selected_robot_ids,
+        )
+        _draw_move_markers(screen, viewport, visual_state)
+
+    animation_time = pygame.time.get_ticks() / 1000.0
     for robot in match.robots:
         center = tuple(
             round(value)
             for value in viewport.world_to_screen(robot.position)
         )
-        radius = max(
-            9,
-            round(viewport.world_length_to_screen(match.map.collision_radius)),
-        )
         color = PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
-        if robot.id in selected_robot_ids:
+        visual_robot = (
+            visual_state.robots.get(robot.id)
+            if is_rmuc and visual_state is not None
+            else None
+        )
+        if visual_robot is not None:
+            radius = _draw_rmuc_robot_shape(
+                screen,
+                center=center,
+                robot_type=robot.type,
+                color=color,
+                body_angle=visual_robot.body_angle,
+                turret_angle=visual_robot.turret_angle,
+                alive=robot.alive,
+                selected=robot.id in selected_robot_ids,
+                animation_time=animation_time,
+                muzzle_remaining=visual_robot.muzzle_remaining,
+                muzzle_caliber=visual_robot.muzzle_caliber,
+                impact_remaining=visual_robot.impact_remaining,
+            )
+        else:
+            radius = max(
+                9,
+                round(viewport.world_length_to_screen(match.map.collision_radius)),
+            )
+            if robot.id in selected_robot_ids:
+                pygame.draw.circle(
+                    screen,
+                    SELECTION_COLOR,
+                    center,
+                    radius + 6,
+                    width=2,
+                )
             pygame.draw.circle(
                 screen,
-                SELECTION_COLOR,
+                color if robot.alive else MUTED_COLOR,
                 center,
-                radius + 6,
-                width=2,
+                radius,
             )
-        pygame.draw.circle(
-            screen,
-            color if robot.alive else MUTED_COLOR,
-            center,
-            radius,
-        )
 
         bar_width, bar_height = 44 if is_rmuc else 48, 6
         bar_x = center[0] - bar_width // 2
@@ -1140,6 +1493,18 @@ def _draw(
             HP_BACKGROUND,
             (bar_x, bar_y, bar_width, bar_height),
         )
+        if visual_robot is not None:
+            ghost_hp = min(
+                float(robot.max_hp),
+                visual_robot.ghost_hp(robot.hp),
+            )
+            ghost_width = round(bar_width * ghost_hp / robot.max_hp)
+            if ghost_width:
+                pygame.draw.rect(
+                    screen,
+                    DAMAGE_GHOST_COLOR,
+                    (bar_x, bar_y, ghost_width, bar_height),
+                )
         hp_width = round(bar_width * robot.hp / robot.max_hp)
         if hp_width:
             pygame.draw.rect(
@@ -1174,6 +1539,9 @@ def _draw(
                         center=(center[0], center[1] + radius + 27)
                     ),
                 )
+
+    if is_rmuc and visual_state is not None:
+        _draw_visual_projectiles(screen, viewport, visual_state)
 
     if selection_rect is not None:
         pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)
