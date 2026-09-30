@@ -127,6 +127,12 @@ class _PendingProjectileDelivery:
 
 
 @dataclass
+class _TimedAttackBuff:
+    multiplier: float
+    remaining: float
+
+
+@dataclass
 class _RobotLifecycleState:
     disengaged_elapsed: float
     combat_activity_this_frame: bool = False
@@ -2184,6 +2190,7 @@ class RMUC2026RegionalRules:
             )
 
         self.attack_damage_by_team: dict[str, int] = {}
+        self._attack_buffs_by_team: dict[str, list[_TimedAttackBuff]] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
         self._outpost_by_team: dict[str, Structure] = {}
@@ -3037,13 +3044,52 @@ class RMUC2026RegionalRules:
             return outpost is None or not outpost.alive
         return True
 
+    def grant_attack_buff(
+        self,
+        team_id: str,
+        multiplier: float,
+        duration: float,
+    ) -> bool:
+        """Apply an already-resolved team Attack Buff fact.
+
+        Source acquisition (for example Energy Mechanism activation) remains
+        outside this rule-level consumer.
+        """
+        if (
+            team_id not in self._attack_buffs_by_team
+            or not math.isfinite(multiplier)
+            or multiplier <= 1.0
+            or not math.isfinite(duration)
+            or duration <= 0
+        ):
+            return False
+        self._attack_buffs_by_team[team_id].append(
+            _TimedAttackBuff(
+                multiplier=float(multiplier),
+                remaining=float(duration),
+            )
+        )
+        return True
+
+    def _effective_attack_multiplier(self, source_team_id: str | None) -> float:
+        if source_team_id is None:
+            return 1.0
+        return max(
+            (
+                buff.multiplier
+                for buff in self._attack_buffs_by_team.get(source_team_id, ())
+                if buff.remaining > 0
+            ),
+            default=1.0,
+        )
+
     def resolve_damage(
         self,
         target: DamageableTarget,
         amount: int,
         source_team_id: str | None,
     ) -> int:
-        """Apply max Defense/Vulnerability buffs, then Base Virtual Shield."""
+        """Apply Attack, max Defense/Vulnerability, then Base Virtual Shield."""
         if (
             amount <= 0
             or source_team_id not in self.attack_damage_by_team
@@ -3055,9 +3101,10 @@ class RMUC2026RegionalRules:
         if state is None:
             return amount
 
+        attack = self._effective_attack_multiplier(source_team_id)
         defense = self._effective_defense(target)
         vulnerability = self._effective_vulnerability(target)
-        multiplier = max(0.0, 1.0 - defense + vulnerability)
+        multiplier = max(0.0, attack * (1.0 - defense + vulnerability))
         resolved = int(math.floor(amount * multiplier + 0.5))
         resolved = max(0, resolved)
 
@@ -3882,8 +3929,9 @@ class RMUC2026RegionalRules:
             )
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
-        """Refresh field/terrain rules around the existing 10 Hz Heat loop."""
+        """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
+        self._advance_attack_buffs(frame_dt)
         self._advance_field_defense_occupancy(match, frame_dt)
         self._advance_fortress_occupancy(frame_dt)
         self._refresh_enemy_fortress_occupancy(match, frame_dt)
@@ -3921,6 +3969,17 @@ class RMUC2026RegionalRules:
             match,
             min(match.elapsed_time + frame_dt, self._time_limit),
         )
+
+    def _advance_attack_buffs(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, buffs in self._attack_buffs_by_team.items():
+            active: list[_TimedAttackBuff] = []
+            for buff in buffs:
+                buff.remaining = max(0.0, buff.remaining - dt)
+                if buff.remaining > 1e-9:
+                    active.append(buff)
+            self._attack_buffs_by_team[team_id] = active
 
     def reset(self, match: "Match") -> None:
         expected_roster = {
@@ -3960,6 +4019,9 @@ class RMUC2026RegionalRules:
         }
         self.attack_damage_by_team = {
             team_id: 0 for team_id in team_by_side.values()
+        }
+        self._attack_buffs_by_team = {
+            team_id: [] for team_id in team_by_side.values()
         }
         self._team_states = {
             team_id: _TeamStructureState() for team_id in team_by_side.values()
