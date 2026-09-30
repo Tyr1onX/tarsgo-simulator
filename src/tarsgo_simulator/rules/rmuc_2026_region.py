@@ -2642,9 +2642,8 @@ class RMUC2026RegionalRules:
         elapsed = min(self._time_limit, max(0.0, match.elapsed_time))
         elapsed_component = math.ceil(
             elapsed
-            / self._remote_healing_elapsed_seconds
             * self._remote_healing_elapsed_coins_multiplier
-            - 1e-9
+            / self._remote_healing_elapsed_seconds
         )
         return self._remote_healing_base_coins + elapsed_component
 
