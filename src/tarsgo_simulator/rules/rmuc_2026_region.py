@@ -137,6 +137,7 @@ class _RobotLifecycleState:
     invincible_remaining: float = 0.0
     minimum_invincible_remaining: float = 0.0
     immediate_power_boost_remaining: float = 0.0
+    pending_remote_healing_effective_at: float | None = None
     healing_rounding_residual: float = 0.0
 
 
@@ -1297,6 +1298,68 @@ class RMUC2026RegionalRules:
         ):
             raise ConfigError(
                 f"{document.path}: RMUC 自动复活参数与 Regional V1.4.0 不匹配"
+            )
+
+        remote_healing = _mapping(document.data, "remote_healing", document)
+        if set(remote_healing) != {
+            "eligible_types",
+            "effective_delay",
+            "hp_fraction",
+            "base_coins",
+            "elapsed_seconds",
+            "elapsed_coins_multiplier",
+        }:
+            raise ConfigError(
+                f"{document.path}: `remote_healing` 字段不完整或包含未知字段"
+            )
+        eligible_types = remote_healing.get("eligible_types")
+        if (
+            not isinstance(eligible_types, list)
+            or eligible_types != ["hero", "infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: 远程回血仅适用于 hero、infantry、sentry"
+            )
+        self._remote_healing_eligible_types = frozenset(eligible_types)
+        self._remote_healing_effective_delay = _number(
+            remote_healing,
+            "effective_delay",
+            document,
+            "remote_healing.effective_delay",
+        )
+        self._remote_healing_hp_fraction = _fraction(
+            remote_healing,
+            "hp_fraction",
+            document,
+            "remote_healing.hp_fraction",
+        )
+        self._remote_healing_base_coins = _positive_integer(
+            remote_healing,
+            "base_coins",
+            document,
+            "remote_healing.base_coins",
+        )
+        self._remote_healing_elapsed_seconds = _positive_integer(
+            remote_healing,
+            "elapsed_seconds",
+            document,
+            "remote_healing.elapsed_seconds",
+        )
+        self._remote_healing_elapsed_coins_multiplier = _positive_integer(
+            remote_healing,
+            "elapsed_coins_multiplier",
+            document,
+            "remote_healing.elapsed_coins_multiplier",
+        )
+        if (
+            self._remote_healing_effective_delay != 6
+            or self._remote_healing_hp_fraction != 0.60
+            or self._remote_healing_base_coins != 50
+            or self._remote_healing_elapsed_seconds != 60
+            or self._remote_healing_elapsed_coins_multiplier != 20
+        ):
+            raise ConfigError(
+                f"{document.path}: RMUC 远程回血参数与 Regional V1.4.0 不匹配"
             )
 
         projectile_allowance = _mapping(
@@ -2573,6 +2636,41 @@ class RMUC2026RegionalRules:
             )
         else:
             allowance_state.allowed += amount
+        return True
+
+    def remote_healing_cost(self, match: "Match") -> int:
+        elapsed = min(self._time_limit, max(0.0, match.elapsed_time))
+        elapsed_component = math.ceil(
+            elapsed
+            / self._remote_healing_elapsed_seconds
+            * self._remote_healing_elapsed_coins_multiplier
+            - 1e-9
+        )
+        return self._remote_healing_base_coins + elapsed_component
+
+    def purchase_remote_healing(self, match: "Match", robot: Robot) -> bool:
+        lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
+        economy = self._economy_by_team.get(robot.team)
+        if (
+            match.finished
+            or not robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or robot.type not in self._remote_healing_eligible_types
+            or lifecycle is None
+            or economy is None
+            or lifecycle.disengaged_elapsed + 1e-9 < self._disengaged_after
+            or lifecycle.pending_remote_healing_effective_at is not None
+        ):
+            return False
+
+        cost = self.remote_healing_cost(match)
+        if economy.coins < cost:
+            return False
+
+        economy.coins -= cost
+        lifecycle.pending_remote_healing_effective_at = (
+            match.elapsed_time + self._remote_healing_effective_delay
+        )
         return True
 
     def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
@@ -4135,6 +4233,7 @@ class RMUC2026RegionalRules:
         self._advance_supply_healing(
             match, active_dt, frame_start, newly_respawned
         )
+        self._advance_remote_healing(match)
         self._advance_out_of_combat(active_dt, newly_respawned)
 
         self._advance_enemy_fortress_occupation(match, dt)
@@ -4387,6 +4486,24 @@ class RMUC2026RegionalRules:
                 state.healing_rounding_residual = 0.0
             else:
                 state.healing_rounding_residual -= healing_points
+
+    def _advance_remote_healing(self, match: "Match") -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+        for robot_id, state in self._robot_lifecycle_by_robot.items():
+            effective_at = state.pending_remote_healing_effective_at
+            if effective_at is None or effective_at > settlement_end + 1e-9:
+                continue
+
+            robot = self._robots_by_id[robot_id]
+            if robot.alive and effective_at < self._time_limit - 1e-9:
+                healing_points = int(
+                    math.floor(
+                        robot.max_hp * self._remote_healing_hp_fraction
+                        + 0.5
+                    )
+                )
+                robot.hp = min(robot.max_hp, robot.hp + healing_points)
+            state.pending_remote_healing_effective_at = None
 
     def _advance_out_of_combat(
         self,
@@ -4761,6 +4878,7 @@ class RMUC2026RegionalRules:
                     lifecycle.invincible_remaining = 0.0
                     lifecycle.minimum_invincible_remaining = 0.0
                     lifecycle.immediate_power_boost_remaining = 0.0
+                    lifecycle.pending_remote_healing_effective_at = None
                     lifecycle.healing_rounding_residual = 0.0
                     newly_destroyed.add(event.robot_id)
                 for key, occupation in self._enemy_fortress_occupation.items():
