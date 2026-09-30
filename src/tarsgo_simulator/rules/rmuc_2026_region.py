@@ -132,6 +132,18 @@ class _TimedAttackBuff:
     remaining: float
 
 
+@dataclass(frozen=True)
+class _RadarVulnerabilityState:
+    source_team_id: str
+    base_vulnerability: float
+
+
+@dataclass
+class _RadarDoubleVulnerabilityState:
+    remaining: float = 0.0
+    activations: int = 0
+
+
 @dataclass
 class _RobotLifecycleState:
     disengaged_elapsed: float
@@ -2191,6 +2203,10 @@ class RMUC2026RegionalRules:
 
         self.attack_damage_by_team: dict[str, int] = {}
         self._attack_buffs_by_team: dict[str, list[_TimedAttackBuff]] = {}
+        self._radar_vulnerability_by_robot: dict[str, _RadarVulnerabilityState] = {}
+        self._radar_double_vulnerability_by_team: dict[
+            str, _RadarDoubleVulnerabilityState
+        ] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
         self._outpost_by_team: dict[str, Structure] = {}
@@ -3083,6 +3099,70 @@ class RMUC2026RegionalRules:
             default=1.0,
         )
 
+    def set_radar_vulnerability(
+        self,
+        source_team_id: str,
+        target: Robot,
+        vulnerability: float,
+    ) -> bool:
+        """Set the official P-derived Radar Vulnerability effect for one target.
+
+        Radar detection, marking progress P, interference-wave gating, and
+        target acquisition are intentionally outside this rule-level consumer.
+        """
+        if (
+            self._robots_by_id.get(target.id) is not target
+            or target.type not in _RMUC_ROBOT_TYPES
+            or source_team_id not in self.attack_damage_by_team
+            or source_team_id == target.team
+            or vulnerability not in {0.0, 0.15, 0.20}
+        ):
+            return False
+
+        if vulnerability == 0.0:
+            self._radar_vulnerability_by_robot.pop(target.id, None)
+            return True
+
+        self._radar_vulnerability_by_robot[target.id] = _RadarVulnerabilityState(
+            source_team_id=source_team_id,
+            base_vulnerability=vulnerability,
+        )
+        return True
+
+    def start_radar_double_vulnerability_effect(
+        self,
+        source_team_id: str,
+    ) -> bool:
+        """Start an already-authorized 30 s Radar double-vulnerability effect.
+
+        Opportunity accumulation and referee-command queueing remain outside
+        this effect-only API.
+        """
+        state = self._radar_double_vulnerability_by_team.get(source_team_id)
+        if (
+            state is None
+            or state.remaining > 0
+            or state.activations >= 2
+        ):
+            return False
+        state.remaining = 30.0
+        state.activations += 1
+        return True
+
+    def _current_radar_vulnerability(self, target: Robot) -> float:
+        state = self._radar_vulnerability_by_robot.get(target.id)
+        if state is None:
+            return 0.0
+        double_state = self._radar_double_vulnerability_by_team.get(
+            state.source_team_id
+        )
+        multiplier = (
+            2.0
+            if double_state is not None and double_state.remaining > 0
+            else 1.0
+        )
+        return state.base_vulnerability * multiplier
+
     def resolve_damage(
         self,
         target: DamageableTarget,
@@ -3135,6 +3215,9 @@ class RMUC2026RegionalRules:
             and occupation.occupy_remaining > 0
             and not self._team_states[fortress_team_id].base_armor_deployed
         ]
+        radar = self._current_radar_vulnerability(target)
+        if radar > 0:
+            vulnerabilities.append(radar)
         return max(vulnerabilities, default=0.0)
 
     def _effective_defense(self, target: DamageableTarget) -> float:
@@ -3932,6 +4015,7 @@ class RMUC2026RegionalRules:
         """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
         self._advance_attack_buffs(frame_dt)
+        self._advance_radar_double_vulnerability(frame_dt)
         self._advance_field_defense_occupancy(match, frame_dt)
         self._advance_fortress_occupancy(frame_dt)
         self._refresh_enemy_fortress_occupancy(match, frame_dt)
@@ -3981,6 +4065,16 @@ class RMUC2026RegionalRules:
                     active.append(buff)
             self._attack_buffs_by_team[team_id] = active
 
+    def _advance_radar_double_vulnerability(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for state in self._radar_double_vulnerability_by_team.values():
+            if state.remaining <= 0:
+                continue
+            state.remaining = max(0.0, state.remaining - dt)
+            if state.remaining <= 1e-9:
+                state.remaining = 0.0
+
     def reset(self, match: "Match") -> None:
         expected_roster = {
             "hero": 1,
@@ -4022,6 +4116,11 @@ class RMUC2026RegionalRules:
         }
         self._attack_buffs_by_team = {
             team_id: [] for team_id in team_by_side.values()
+        }
+        self._radar_vulnerability_by_robot = {}
+        self._radar_double_vulnerability_by_team = {
+            team_id: _RadarDoubleVulnerabilityState()
+            for team_id in team_by_side.values()
         }
         self._team_states = {
             team_id: _TeamStructureState() for team_id in team_by_side.values()
