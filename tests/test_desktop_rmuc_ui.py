@@ -1,18 +1,10 @@
+import importlib
 from pathlib import Path
+import sys
 
-import pygame
+import pytest
 
 from tarsgo_simulator.core.match import Match
-from tarsgo_simulator.desktop.app import (
-    RMUC_PANEL_RECT,
-    WINDOW_SIZE,
-    _draw,
-    _is_rmuc_rules_lab,
-    _rmuc_robot_labels,
-    _rmuc_zone_style,
-    _selected_unit_lines,
-    _viewport_for_match,
-)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -24,32 +16,49 @@ RMUC_SCENARIO = (
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_desktop_imports():
+    yield
+    pygame = sys.modules.get("pygame")
+    if pygame is not None:
+        pygame.quit()
+    sys.modules.pop("tarsgo_simulator.desktop.app", None)
+    for module_name in list(sys.modules):
+        if module_name == "pygame" or module_name.startswith("pygame."):
+            sys.modules.pop(module_name, None)
+
+
+def _app():
+    return importlib.import_module("tarsgo_simulator.desktop.app")
+
+
 def _match() -> Match:
     return Match.from_scenario(RMUC_SCENARIO)
 
 
 def test_rmuc_default_zone_rendering_hides_internal_debug_geometry() -> None:
-    assert _rmuc_zone_style(
+    app = _app()
+    assert app._rmuc_zone_style(
         "red-terrain-road-lower",
         debug_geometry=False,
     ) is None
-    assert _rmuc_zone_style(
+    assert app._rmuc_zone_style(
         "blue-terrain-tunnel-middle",
         debug_geometry=False,
     ) is None
-    assert _rmuc_zone_style(
+    assert app._rmuc_zone_style(
         "red-start",
         debug_geometry=False,
     ) is None
 
-    color, label = _rmuc_zone_style(
+    color, label = app._rmuc_zone_style(
         "red-supply-buff",
         debug_geometry=False,
     )
     assert color is not None
     assert label == "SUPPLY"
 
-    _color, label = _rmuc_zone_style(
+    _color, label = app._rmuc_zone_style(
         "red-central-elevated-buff",
         debug_geometry=False,
     )
@@ -57,13 +66,14 @@ def test_rmuc_default_zone_rendering_hides_internal_debug_geometry() -> None:
 
 
 def test_rmuc_debug_zone_rendering_restores_original_zone_ids() -> None:
-    _color, label = _rmuc_zone_style(
+    app = _app()
+    _color, label = app._rmuc_zone_style(
         "red-terrain-elevated-lower",
         debug_geometry=True,
     )
     assert label == "RED-TERRAIN-ELEVATED-LOWER"
 
-    _color, label = _rmuc_zone_style(
+    _color, label = app._rmuc_zone_style(
         "red-base-buff",
         debug_geometry=True,
     )
@@ -71,18 +81,20 @@ def test_rmuc_debug_zone_rendering_restores_original_zone_ids() -> None:
 
 
 def test_rmuc_viewport_leaves_room_for_right_side_panel() -> None:
+    app = _app()
     match = _match()
-    assert _is_rmuc_rules_lab(match)
+    assert app._is_rmuc_rules_lab(match)
 
-    viewport = _viewport_for_match(match)
+    viewport = app._viewport_for_match(match)
     field_right = viewport.origin[0] + viewport.screen_size[0]
 
-    assert field_right < RMUC_PANEL_RECT[0]
+    assert field_right < app.RMUC_PANEL_RECT[0]
 
 
 def test_rmuc_map_labels_are_minimal_and_number_infantry() -> None:
+    app = _app()
     match = _match()
-    labels = _rmuc_robot_labels(match)
+    labels = app._rmuc_robot_labels(match)
 
     assert labels["tarsgo-hero"] == "H L1"
     assert labels["tarsgo-engineer"] == "E"
@@ -96,10 +108,11 @@ def test_rmuc_map_labels_are_minimal_and_number_infantry() -> None:
 
 
 def test_selected_unit_panel_moves_detailed_robot_state_off_map_label() -> None:
+    app = _app()
     match = _match()
-    labels = _rmuc_robot_labels(match)
+    labels = app._rmuc_robot_labels(match)
 
-    lines = _selected_unit_lines(
+    lines = app._selected_unit_lines(
         match,
         {"tarsgo-hero"},
         labels,
@@ -116,10 +129,11 @@ def test_selected_unit_panel_moves_detailed_robot_state_off_map_label() -> None:
 
 
 def test_selected_unit_panel_has_engineer_and_multi_select_views() -> None:
+    app = _app()
     match = _match()
-    labels = _rmuc_robot_labels(match)
+    labels = app._rmuc_robot_labels(match)
 
-    engineer_lines = _selected_unit_lines(
+    engineer_lines = app._selected_unit_lines(
         match,
         {"tarsgo-engineer"},
         labels,
@@ -127,7 +141,7 @@ def test_selected_unit_panel_has_engineer_and_multi_select_views() -> None:
     assert engineer_lines[0] == "ENGINEER"
     assert any(line.startswith("Energy Units ") for line in engineer_lines)
 
-    multi_lines = _selected_unit_lines(
+    multi_lines = app._selected_unit_lines(
         match,
         {"tarsgo-hero", "tarsgo-infantry-1", "tarsgo-infantry-2"},
         labels,
@@ -139,6 +153,8 @@ def test_selected_unit_panel_has_engineer_and_multi_select_views() -> None:
 
 
 def test_rmuc_renderer_smoke_default_and_debug_modes() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
     match = _match()
     player_team = match.config.scenario.player_team
     opponent_team = next(
@@ -146,37 +162,34 @@ def test_rmuc_renderer_smoke_default_and_debug_modes() -> None:
         for team in match.config.scenario.teams.values()
         if team.team_id != player_team
     )
-    viewport = _viewport_for_match(match)
+    viewport = app._viewport_for_match(match)
 
     pygame.font.init()
-    try:
-        screen = pygame.Surface(WINDOW_SIZE)
-        font = pygame.font.Font(None, 25)
-        small_font = pygame.font.Font(None, 18)
+    screen = pygame.Surface(app.WINDOW_SIZE)
+    font = pygame.font.Font(None, 25)
+    small_font = pygame.font.Font(None, 18)
 
-        _draw(
-            screen,
-            font,
-            small_font,
-            match,
-            player_team,
-            opponent_team,
-            {"tarsgo-hero"},
-            None,
-            viewport,
-            debug_geometry=False,
-        )
-        _draw(
-            screen,
-            font,
-            small_font,
-            match,
-            player_team,
-            opponent_team,
-            {"tarsgo-hero"},
-            None,
-            viewport,
-            debug_geometry=True,
-        )
-    finally:
-        pygame.font.quit()
+    app._draw(
+        screen,
+        font,
+        small_font,
+        match,
+        player_team,
+        opponent_team,
+        {"tarsgo-hero"},
+        None,
+        viewport,
+        debug_geometry=False,
+    )
+    app._draw(
+        screen,
+        font,
+        small_font,
+        match,
+        player_team,
+        opponent_team,
+        {"tarsgo-hero"},
+        None,
+        viewport,
+        debug_geometry=True,
+    )
