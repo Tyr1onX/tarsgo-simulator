@@ -18,6 +18,10 @@ economy:
   lab_pre_match_rating:
     project_document: B
     technical_solution: B
+  immediate_respawn:
+    elapsed_interval: 60
+    elapsed_step_coins: 80
+    level_coins: 20
   timed_grants:
     - {elapsed: 60, coins: 50}
     - {elapsed: 120, coins: 50}
@@ -42,6 +46,11 @@ robot_lifecycle:
     hp_fraction: 0.10
     invincibility_duration: 30
     weak_release_min_invincibility: 10
+    immediate_hp_fraction: 1.0
+    immediate_invincibility_duration: 3
+    immediate_power_multiplier: 2.0
+    immediate_power_cap: 200
+    immediate_power_duration: 4
 
 projectile_allowance:
   remote_effective_delay: 6

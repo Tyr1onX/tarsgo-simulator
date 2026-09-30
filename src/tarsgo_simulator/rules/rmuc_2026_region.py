@@ -136,6 +136,7 @@ class _RobotLifecycleState:
     weak: bool = False
     invincible_remaining: float = 0.0
     minimum_invincible_remaining: float = 0.0
+    immediate_power_boost_remaining: float = 0.0
     healing_rounding_residual: float = 0.0
 
 
@@ -267,6 +268,7 @@ class RMUC2026RegionalRules:
             "periodic_interval",
             "qualification_modifiers",
             "lab_pre_match_rating",
+            "immediate_respawn",
             "timed_grants",
         }:
             raise ConfigError(
@@ -364,6 +366,46 @@ class RMUC2026RegionalRules:
         }:
             raise ConfigError(
                 f"{document.path}: Rules Lab 默认完整形态考核评级必须显式为 B/B"
+            )
+
+        immediate_respawn_economy = _mapping(
+            economy, "immediate_respawn", document
+        )
+        if set(immediate_respawn_economy) != {
+            "elapsed_interval",
+            "elapsed_step_coins",
+            "level_coins",
+        }:
+            raise ConfigError(
+                f"{document.path}: `economy.immediate_respawn` "
+                "字段不完整或包含未知字段"
+            )
+        self._immediate_respawn_elapsed_interval = _positive_integer(
+            immediate_respawn_economy,
+            "elapsed_interval",
+            document,
+            "economy.immediate_respawn.elapsed_interval",
+        )
+        self._immediate_respawn_elapsed_step_coins = _positive_integer(
+            immediate_respawn_economy,
+            "elapsed_step_coins",
+            document,
+            "economy.immediate_respawn.elapsed_step_coins",
+        )
+        self._immediate_respawn_level_coins = _positive_integer(
+            immediate_respawn_economy,
+            "level_coins",
+            document,
+            "economy.immediate_respawn.level_coins",
+        )
+        if (
+            self._immediate_respawn_elapsed_interval != 60
+            or self._immediate_respawn_elapsed_step_coins != 80
+            or self._immediate_respawn_level_coins != 20
+        ):
+            raise ConfigError(
+                f"{document.path}: RMUC 立即复活价格必须为 "
+                "ceil(elapsed/60)*80 + level*20"
             )
 
         raw_timed_grants = economy.get("timed_grants")
@@ -1143,6 +1185,11 @@ class RMUC2026RegionalRules:
             "hp_fraction",
             "invincibility_duration",
             "weak_release_min_invincibility",
+            "immediate_hp_fraction",
+            "immediate_invincibility_duration",
+            "immediate_power_multiplier",
+            "immediate_power_cap",
+            "immediate_power_duration",
         }:
             raise ConfigError(
                 f"{document.path}: `robot_lifecycle.respawn` "
@@ -1202,6 +1249,36 @@ class RMUC2026RegionalRules:
             document,
             "robot_lifecycle.respawn.weak_release_min_invincibility",
         )
+        self._immediate_respawn_hp_fraction = _fraction(
+            respawn,
+            "immediate_hp_fraction",
+            document,
+            "robot_lifecycle.respawn.immediate_hp_fraction",
+        )
+        self._immediate_respawn_invincibility_duration = _number(
+            respawn,
+            "immediate_invincibility_duration",
+            document,
+            "robot_lifecycle.respawn.immediate_invincibility_duration",
+        )
+        self._immediate_respawn_power_multiplier = _number(
+            respawn,
+            "immediate_power_multiplier",
+            document,
+            "robot_lifecycle.respawn.immediate_power_multiplier",
+        )
+        self._immediate_respawn_power_cap = _positive_integer(
+            respawn,
+            "immediate_power_cap",
+            document,
+            "robot_lifecycle.respawn.immediate_power_cap",
+        )
+        self._immediate_respawn_power_duration = _number(
+            respawn,
+            "immediate_power_duration",
+            document,
+            "robot_lifecycle.respawn.immediate_power_duration",
+        )
         if (
             self._respawn_base_progress_required != 10
             or self._respawn_elapsed_seconds_per_progress != 10
@@ -1212,6 +1289,11 @@ class RMUC2026RegionalRules:
             or self._respawn_hp_fraction != 0.10
             or self._respawn_invincibility_duration != 30
             or self._weak_release_min_invincibility != 10
+            or self._immediate_respawn_hp_fraction != 1.0
+            or self._immediate_respawn_invincibility_duration != 3
+            or self._immediate_respawn_power_multiplier != 2.0
+            or self._immediate_respawn_power_cap != 200
+            or self._immediate_respawn_power_duration != 4
         ):
             raise ConfigError(
                 f"{document.path}: RMUC 自动复活参数与 Regional V1.4.0 不匹配"
@@ -4085,6 +4167,78 @@ class RMUC2026RegionalRules:
         )
         return int(math.floor(raw_required + 0.5))
 
+    def _settle_respawn(
+        self,
+        robot: Robot,
+        state: _RobotLifecycleState,
+        *,
+        hp_fraction: float,
+        invincibility_duration: float,
+        weak: bool,
+        minimum_invincibility: float,
+        immediate_power_boost_duration: float = 0.0,
+    ) -> None:
+        robot.alive = True
+        robot.hp = min(
+            robot.max_hp,
+            max(
+                1,
+                int(math.floor(robot.max_hp * hp_fraction + 0.5)),
+            ),
+        )
+        robot.path.clear()
+        state.respawn_progress = 0.0
+        state.respawn_required = None
+        state.weak = weak
+        state.invincible_remaining = invincibility_duration
+        state.minimum_invincible_remaining = minimum_invincibility
+        state.immediate_power_boost_remaining = immediate_power_boost_duration
+        state.disengaged_elapsed = 0.0
+        state.combat_activity_this_frame = False
+        state.healing_rounding_residual = 0.0
+
+    def immediate_respawn_cost(self, match: "Match", robot: Robot) -> int:
+        if self._robots_by_id.get(robot.id) is not robot:
+            raise KeyError(robot.id)
+        elapsed = min(self._time_limit, max(0.0, match.elapsed_time))
+        elapsed_steps = math.ceil(
+            elapsed / self._immediate_respawn_elapsed_interval
+        )
+        return (
+            elapsed_steps * self._immediate_respawn_elapsed_step_coins
+            + self._robot_level(robot.id) * self._immediate_respawn_level_coins
+        )
+
+    def purchase_immediate_respawn(self, match: "Match", robot: Robot) -> bool:
+        state = self._robot_lifecycle_by_robot.get(robot.id)
+        economy = self._economy_by_team.get(robot.team)
+        if (
+            match.finished
+            or robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or state is None
+            or economy is None
+            or state.respawn_required is None
+        ):
+            return False
+
+        cost = self.immediate_respawn_cost(match, robot)
+        if economy.coins < cost:
+            return False
+
+        economy.coins -= cost
+        state.immediate_respawn_count += 1
+        self._settle_respawn(
+            robot,
+            state,
+            hp_fraction=self._immediate_respawn_hp_fraction,
+            invincibility_duration=self._immediate_respawn_invincibility_duration,
+            weak=False,
+            minimum_invincibility=0.0,
+            immediate_power_boost_duration=self._immediate_respawn_power_duration,
+        )
+        return True
+
     def _weak_release_zone_detected(self, robot: Robot) -> bool:
         own_supply = self._supply_buff_zone_by_team.get(robot.team)
         own_base = self._field_base_zone_by_team.get(robot.team)
@@ -4146,29 +4300,14 @@ class RMUC2026RegionalRules:
                 if state.respawn_progress + 1e-9 < state.respawn_required:
                     continue
 
-                robot.alive = True
-                robot.hp = min(
-                    robot.max_hp,
-                    max(
-                        1,
-                        int(
-                            math.floor(
-                                robot.max_hp * self._respawn_hp_fraction + 0.5
-                            )
-                        ),
-                    ),
+                self._settle_respawn(
+                    robot,
+                    state,
+                    hp_fraction=self._respawn_hp_fraction,
+                    invincibility_duration=self._respawn_invincibility_duration,
+                    weak=True,
+                    minimum_invincibility=self._weak_release_min_invincibility,
                 )
-                robot.path.clear()
-                state.respawn_progress = 0.0
-                state.respawn_required = None
-                state.weak = True
-                state.invincible_remaining = self._respawn_invincibility_duration
-                state.minimum_invincible_remaining = (
-                    self._weak_release_min_invincibility
-                )
-                state.disengaged_elapsed = 0.0
-                state.combat_activity_this_frame = False
-                state.healing_rounding_residual = 0.0
                 self._release_weak_if_detected(robot, state)
                 newly_respawned.add(robot.id)
                 continue
@@ -4176,9 +4315,18 @@ class RMUC2026RegionalRules:
             state.invincible_remaining = max(
                 0.0, state.invincible_remaining - dt
             )
+            if state.invincible_remaining <= 1e-9:
+                state.invincible_remaining = 0.0
             state.minimum_invincible_remaining = max(
                 0.0, state.minimum_invincible_remaining - dt
             )
+            if state.minimum_invincible_remaining <= 1e-9:
+                state.minimum_invincible_remaining = 0.0
+            state.immediate_power_boost_remaining = max(
+                0.0, state.immediate_power_boost_remaining - dt
+            )
+            if state.immediate_power_boost_remaining <= 1e-9:
+                state.immediate_power_boost_remaining = 0.0
             self._release_weak_if_detected(robot, state)
 
         return newly_respawned
@@ -4397,10 +4545,22 @@ class RMUC2026RegionalRules:
     def _effective_chassis_power_limit(self, robot_id: str) -> float:
         robot_type = self._robot_types_by_id[robot_id]
         if robot_type in _EXPERIENCE_ROBOT_TYPES:
-            return float(
+            base_limit = float(
                 self._effective_performance(robot_id).chassis_power_limit
             )
-        return float(self._chassis_power_limit_by_type[robot_type])
+        else:
+            base_limit = float(self._chassis_power_limit_by_type[robot_type])
+
+        lifecycle = self._robot_lifecycle_by_robot.get(robot_id)
+        if (
+            lifecycle is not None
+            and lifecycle.immediate_power_boost_remaining > 0
+        ):
+            return min(
+                float(self._immediate_respawn_power_cap),
+                base_limit * self._immediate_respawn_power_multiplier,
+            )
+        return base_limit
 
     def _synthetic_chassis_power(
         self,
@@ -4600,6 +4760,7 @@ class RMUC2026RegionalRules:
                     lifecycle.weak = False
                     lifecycle.invincible_remaining = 0.0
                     lifecycle.minimum_invincible_remaining = 0.0
+                    lifecycle.immediate_power_boost_remaining = 0.0
                     lifecycle.healing_rounding_residual = 0.0
                     newly_destroyed.add(event.robot_id)
                 for key, occupation in self._enemy_fortress_occupation.items():

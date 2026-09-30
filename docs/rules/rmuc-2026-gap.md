@@ -95,6 +95,12 @@ Regional V1.4.0 manual.
 - own Resupply healing at 10% max HP/s, rising to 25% max HP/s after elapsed 240 s while out of combat, with half-up cumulative integer settlement;
 - automatic respawn progress using death-time elapsed, future immediate-respawn count, 1/s normal progress, and 4/s acceleration in own Resupply or below 2000 Base HP;
 - automatic respawn at 10% current max HP with half-up integer settlement, 30 s Invincibility, and Weakened state;
+- paid immediate respawn for the instantiated ground robots with atomic Gold-Coin
+  deduction, Table 5-8 elapsed/level pricing, 100% current max HP, 3 s
+  Invincibility, no Weakened state, immediate-respawn count increment, and
+  clearing of the active automatic-respawn bar/progress;
+- immediate-respawn 4 s chassis-power-limit ×2 effect capped at 200 W through
+  the existing effective chassis-power helper;
 - Weakened launcher lock, static/Terrain/Fortress/Assembly Buff Point and Outpost-rebuild exclusion, including Tech Core start/confirmation gates and continuous Assembly absence semantics;
 - same-lifecycle-settlement Weakened release when automatic respawn finishes inside a legal Base/Outpost/Resupply release point, with the official 10 s minimum post-respawn Invincibility;
 - remote 17mm / 42mm exchange with immediate wallet/cap reservation and six-second delivery;
@@ -184,7 +190,15 @@ Regional V1.4.0 manual.
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
   active Buff expire and gives no budget-reset rule;
-- remote healing, paid immediate respawn, and Drone air-support spending;
+- remote healing and Drone air-support spending;
+- Table 5-8 does not explicitly state how its "robot level" price term applies
+  to Engineer/Sentry, which are outside the Experience System; the current
+  Rules Lab uses its existing level-1 convention for those non-progression
+  robots, matching the only explicit Engineer/Sentry level convention elsewhere
+  in V1.4.0 but retaining this as an audit edge;
+- automatic-Sentry gimbal-operator immediate-respawn intervention surcharge
+  (+50 coins) and semi-automatic-Sentry free operator-action distinction from
+  §5.6.4 remain deferred because action origin/control mode is not modeled;
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
@@ -269,7 +283,7 @@ Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → s
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include Radar Vulnerability and physical Base-armor
 geometry, physical Assembly/Energy Mechanism work, Attack modifiers, remote
-healing/paid immediate respawn, and Drone/Radar systems. Tech Core Defense, Base
+healing, and Drone/Radar systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.
