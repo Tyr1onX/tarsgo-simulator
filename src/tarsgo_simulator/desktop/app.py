@@ -37,6 +37,20 @@ FIELD_VIEW_RECT = (
     WINDOW_SIZE[0] - WINDOW_MARGIN * 2,
     WINDOW_SIZE[1] - FIELD_TOP - WINDOW_MARGIN,
 )
+RMUC_PANEL_WIDTH = 250
+RMUC_PANEL_GAP = 14
+RMUC_FIELD_VIEW_RECT = (
+    20,
+    96,
+    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - RMUC_PANEL_GAP - 34,
+    WINDOW_SIZE[1] - 112,
+)
+RMUC_PANEL_RECT = (
+    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - 18,
+    92,
+    RMUC_PANEL_WIDTH,
+    WINDOW_SIZE[1] - 110,
+)
 ZONE_STYLE = {
     "red-supply": (RED_SUPPLY_COLOR, "RED SUPPLY"),
     "blue-supply": (BLUE_SUPPLY_COLOR, "BLUE SUPPLY"),
@@ -64,6 +78,43 @@ ZONE_STYLE = {
     "red-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
     "blue-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
 }
+RMUC_ZONE_STYLE = {
+    "red-resource": (RED_SUPPLY_COLOR, "RESOURCE"),
+    "blue-resource": (BLUE_SUPPLY_COLOR, "RESOURCE"),
+    "red-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
+    "blue-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
+    "red-outpost-rebuild": (RED_SUPPLY_COLOR, "REBUILD"),
+    "blue-outpost-rebuild": (BLUE_SUPPLY_COLOR, "REBUILD"),
+    "red-supply-buff": (RED_SUPPLY_COLOR, "SUPPLY"),
+    "blue-supply-buff": (BLUE_SUPPLY_COLOR, "SUPPLY"),
+    "red-base-buff": (RED_SUPPLY_COLOR, "BASE"),
+    "blue-base-buff": (BLUE_SUPPLY_COLOR, "BASE"),
+    "red-outpost-buff": (RED_SUPPLY_COLOR, "OUTPOST"),
+    "blue-outpost-buff": (BLUE_SUPPLY_COLOR, "OUTPOST"),
+    "red-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL"),
+    "blue-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL"),
+    "red-trapezoid-buff": (RED_SUPPLY_COLOR, "TRAPEZOID"),
+    "blue-trapezoid-buff": (BLUE_SUPPLY_COLOR, "TRAPEZOID"),
+    "red-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
+    "blue-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
+}
+RMUC_DEFAULT_ZONE_IDS = frozenset(RMUC_ZONE_STYLE)
+RMUC_DEBUG_ZONE_PREFIXES = ("red-terrain-", "blue-terrain-")
+CONTROLS = (
+    ("LMB", "Select"),
+    ("Shift/LMB", "Multi-select"),
+    ("Drag", "Box select"),
+    ("RMB", "Move"),
+    ("E", "Local ammo"),
+    ("F", "Remote ammo"),
+    ("G", "Energy Unit"),
+    ("1-4", "Tech Core"),
+    ("Enter", "Confirm"),
+    ("Q / W", "D4 Core"),
+    ("D", "Debug view"),
+    ("R", "Restart"),
+    ("Esc", "Quit"),
+)
 
 
 def main(scenario_path: str | Path | None = None) -> None:
@@ -86,6 +137,7 @@ def main(scenario_path: str | Path | None = None) -> None:
         selection_start: tuple[int, int] | None = None
         selection_current: tuple[int, int] | None = None
         selection_shift = False
+        debug_geometry = False
         running = True
 
         while running:
@@ -96,6 +148,8 @@ def main(scenario_path: str | Path | None = None) -> None:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_d:
+                        debug_geometry = not debug_geometry
                     elif event.key == pygame.K_r:
                         match.reset()
                         selected_robot_ids.clear()
@@ -260,6 +314,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                 selected_robot_ids,
                 selection_rect,
                 viewport,
+                debug_geometry=debug_geometry,
             )
             pygame.display.flip()
     finally:
@@ -286,10 +341,16 @@ def _window_caption(match: Match) -> str:
     return "TARS-Go Infantry Training"
 
 
+def _is_rmuc_rules_lab(match: Match) -> bool:
+    display_state = match.ruleset.display_state
+    return display_state is not None and bool(display_state.structure_statuses)
+
+
 def _viewport_for_match(match: Match) -> Viewport:
+    screen_rect = RMUC_FIELD_VIEW_RECT if _is_rmuc_rules_lab(match) else FIELD_VIEW_RECT
     return Viewport.fit(
         (match.map.width, match.map.height),
-        FIELD_VIEW_RECT,
+        screen_rect,
     )
 
 
@@ -386,6 +447,8 @@ def _draw(
     selected_robot_ids: set[str],
     selection_rect: pygame.Rect | None,
     viewport: Viewport,
+    *,
+    debug_geometry: bool = False,
 ) -> None:
     screen.fill(BACKGROUND)
     player_robots = [robot for robot in match.robots if robot.team == player_team]
