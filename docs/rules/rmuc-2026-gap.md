@@ -65,6 +65,16 @@ Regional V1.4.0 manual.
   integer rounding step;
 - RMUC-private timed team Attack Buff facts with independent durations and
   same-class max semantics;
+- Large Energy Mechanism result consumer with the official five average-ring
+  tiers and 5..10-arm duration table;
+- Large Energy Mechanism team Attack Buff routed through the existing timed
+  Attack consumer;
+- Large Energy Mechanism team Defense applied to living robots plus Base/Outpost
+  through the existing max-based effective Defense path;
+- Large Energy Mechanism Shooting-Heat Cooling ×1/×2/×3/×5 consumed as a
+  complete Cooling candidate alongside Tunnel and Fortress Cooling;
+- same-class Attack/Defense/Cooling max semantics and same-team no-reactivation
+  while the Large Energy Mechanism remains in its activated Buff window;
 - Attack Buff resolution for current direct-projectile Robot/Base/Outpost
   damage without changing the Core HP-loss path;
 - narrow RuleSet damage-resolution hook before the Core HP mutation path;
@@ -205,20 +215,23 @@ Regional V1.4.0 manual.
 - Tech Core physical movement / collision / obstruction sensing;
 - overload alarms and blocked-Core auto-award behavior;
 - temporary reactivation of a dead Engineer during opposing D4 takeover;
-- Energy Mechanism and its Experience sources;
+- physical Large Energy Mechanism gameplay: rotating entity, activation
+  opportunities, operator/Sentry trigger commands, random lit-module selection,
+  projectile-hit timing, armor/ring hit detection, and ring-score recognition;
+- Large Energy Mechanism 750-point Experience distribution, because the official
+  divisor includes all living Hero/Infantry/Drone robots and the current Rules
+  Lab has no Drone entity/alive state;
+- Small Energy Mechanism gameplay and its Defense/Experience effects;
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;
 - remaining Field Buff system beyond static Defense, Terrain Crossing, Resupply
   healing/Engineer Invincibility, Assembly Engineer Invincibility, and the
   implemented Fortress own/enemy rule-level effects;
-- Energy Mechanism activation/scoring and its Attack/Defense/Cooling reward
-  acquisition remain unimplemented; PR #37 only consumes an already-resolved
-  team Attack Buff fact;
-- V1.4.0 says all living robots receive Energy Mechanism buffs during the
+- V1.4.0 says all living robots receive Large Energy Mechanism Buffs during the
   active window but does not separately define the death/respawn-mid-window
-  edge; the Rules Lab keeps the team Attack Buff window alive through robot
-  death and lets a respawned robot see it while time remains;
+  transition; the Rules Lab keeps the team window alive through robot death and
+  lets a respawned robot see it while time remains;
 - Base/Outpost 10 mm × 10 mm armor-center 150% Attack Buff is audited but not
   wired because armor hit detection/projectile geometry is intentionally
   unimplemented;
@@ -269,7 +282,8 @@ Regional V1.4.0 manual.
 - Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
-- Energy Mechanism / non-Fortress / non-Tunnel Field Buff cooling modifiers;
+- remaining non-Fortress / non-Tunnel / non-Large-Energy-Mechanism Cooling
+  modifiers;
 - muzzle-velocity limit and speed-based launcher locks;
 - actual motor / wheel / electrical chassis-power physics and telemetry;
 - voltage/current and supercapacitor physics;
@@ -325,12 +339,14 @@ insertion/translation/rotation, and sensor validation remain deferred.
 
 Performance now directly drives both RMUC Hero/Infantry Heat Limit/Cooling and
 chassis power limit. Shooting Heat and the base 60 J chassis Buffer / 5-second
-movement power-off consumer are implemented independently. Tunnel Cooling ×2 and own Fortress dynamic Cooling are active external
-Heat-cooling consumers. Other Heat cooling modifiers and Buffer/power modifiers
-from Energy Mechanism, Resupply, Assembly, terrain-specific Buffer effects, or
-Sentry posture remain deferred. Static Base/Central/Trapezoid/Outpost Defense
-Buff Points, own Fortress Defense/Cooling, and rule-level Terrain Crossing are
-implemented separately from real terrain physics.
+movement power-off consumer are implemented independently. Tunnel Cooling ×2,
+own Fortress dynamic Cooling, and Large Energy Mechanism Cooling multipliers are
+active external Heat-cooling consumers using complete-result max semantics.
+Other Heat cooling modifiers and Buffer/power modifiers from Resupply, Assembly,
+terrain-specific Buffer effects, or Sentry posture remain deferred. Static
+Base/Central/Trapezoid/Outpost Defense Buff Points, own Fortress
+Defense/Cooling, Large Energy Mechanism rule-level Buffs, and rule-level Terrain
+Crossing are implemented separately from real terrain physics.
 
 ### Direct-damage boundary
 
@@ -349,7 +365,8 @@ The RMUC dynamic robot-resource path now reaches Experience → Level → HP /
 Heat Limit / Cooling / chassis power limit, while Gold Coins → allowance → shot
 → Heat and movement intent → synthetic Pr → Buffer → movement power-off are
 both active consumers. Remaining candidates include physical Base-armor geometry,
-physical Assembly/Energy Mechanism work, and full Drone/Radar systems. Tech Core Defense, Base
+physical Assembly/Energy-Mechanism activation work, and full Drone/Radar
+systems. Tech Core Defense, Base
 Virtual Shield, static Defense points, own Fortress Defense/Cooling, and
 rule-level Terrain Crossing are active consumers; real terrain physics remains
 deferred.
