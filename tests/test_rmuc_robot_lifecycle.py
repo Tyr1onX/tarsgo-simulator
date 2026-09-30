@@ -430,11 +430,11 @@ def test_paid_immediate_respawn_deducts_price_and_restores_full_current_max_hp()
     match.elapsed_time = 61.0
     _kill_and_register(match, hero)
 
-    assert match.ruleset.immediate_respawn_cost(match, hero) == 180
+    assert match.ruleset.immediate_respawn_cost(match, hero) == 200
     coins_before = economy.coins
     assert match.ruleset.purchase_immediate_respawn(match, hero)
 
-    assert economy.coins == coins_before - 180
+    assert economy.coins == coins_before - 200
     assert hero.alive
     assert hero.hp == hero.max_hp == 165
     assert lifecycle.respawn_progress == 0
@@ -604,11 +604,12 @@ def test_successful_immediate_respawn_count_increases_next_automatic_requirement
     assert match.ruleset.purchase_immediate_respawn(match, hero)
     assert lifecycle.immediate_respawn_count == 1
 
+    hp_before_second_death = hero.hp
     assert match.apply_damage(
         hero,
-        hero.hp,
+        hp_before_second_death,
         bypass_invincibility=True,
-    ) == hero.hp
+    ) == hp_before_second_death
     match.update(0)
 
     assert lifecycle.respawn_required == 35
