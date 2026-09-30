@@ -4315,12 +4315,18 @@ class RMUC2026RegionalRules:
             state.invincible_remaining = max(
                 0.0, state.invincible_remaining - dt
             )
+            if state.invincible_remaining <= 1e-9:
+                state.invincible_remaining = 0.0
             state.minimum_invincible_remaining = max(
                 0.0, state.minimum_invincible_remaining - dt
             )
+            if state.minimum_invincible_remaining <= 1e-9:
+                state.minimum_invincible_remaining = 0.0
             state.immediate_power_boost_remaining = max(
                 0.0, state.immediate_power_boost_remaining - dt
             )
+            if state.immediate_power_boost_remaining <= 1e-9:
+                state.immediate_power_boost_remaining = 0.0
             self._release_weak_if_detected(robot, state)
 
         return newly_respawned
