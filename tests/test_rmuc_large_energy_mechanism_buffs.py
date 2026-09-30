@@ -386,7 +386,7 @@ def test_team_window_survives_robot_death_and_applies_after_immediate_respawn() 
     hp = hero.hp
     assert match.apply_damage(
         hero,
-        hp,
+        hp * 2,
         source_team_id=BLUE,
         bypass_invincibility=True,
     ) == hp
