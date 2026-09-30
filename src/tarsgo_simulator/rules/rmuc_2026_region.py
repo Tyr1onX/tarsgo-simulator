@@ -132,6 +132,13 @@ class _TimedAttackBuff:
     remaining: float
 
 
+@dataclass
+class _TimedEnergyMechanismBuff:
+    defense: float
+    cooling_multiplier: float
+    remaining: float
+
+
 @dataclass(frozen=True)
 class _RadarVulnerabilityState:
     source_team_id: str
@@ -2203,6 +2210,9 @@ class RMUC2026RegionalRules:
 
         self.attack_damage_by_team: dict[str, int] = {}
         self._attack_buffs_by_team: dict[str, list[_TimedAttackBuff]] = {}
+        self._large_energy_mechanism_buffs_by_team: dict[
+            str, list[_TimedEnergyMechanismBuff]
+        ] = {}
         self._radar_vulnerability_by_robot: dict[str, _RadarVulnerabilityState] = {}
         self._radar_double_vulnerability_by_team: dict[
             str, _RadarDoubleVulnerabilityState
@@ -3099,6 +3109,106 @@ class RMUC2026RegionalRules:
             default=1.0,
         )
 
+    def _large_energy_mechanism_effects(
+        self,
+        average_ring_score: float,
+    ) -> tuple[float, float, float] | None:
+        if (
+            not math.isfinite(average_ring_score)
+            or average_ring_score < 1.0
+            or average_ring_score > 10.0
+        ):
+            return None
+        if average_ring_score <= 3.0:
+            return (1.5, 0.25, 1.0)
+        if average_ring_score <= 7.0:
+            return (1.5, 0.25, 2.0)
+        if average_ring_score <= 8.0:
+            return (2.0, 0.25, 2.0)
+        if average_ring_score <= 9.0:
+            return (2.0, 0.25, 3.0)
+        if average_ring_score <= 10.0:
+            return (3.0, 0.50, 5.0)
+        return None
+
+    def _large_energy_mechanism_duration(
+        self,
+        lit_arm_count: int,
+    ) -> float | None:
+        return {
+            5: 30.0,
+            6: 35.0,
+            7: 40.0,
+            8: 45.0,
+            9: 50.0,
+            10: 60.0,
+        }.get(lit_arm_count)
+
+    def activate_large_energy_mechanism_buff(
+        self,
+        team_id: str,
+        average_ring_score: float,
+        lit_arm_count: int,
+    ) -> bool:
+        """Apply one already-confirmed V1.4.0 large-mechanism activation result.
+
+        Rotation, hit detection, ring recognition, activation opportunities, and
+        the 20-second activation procedure remain outside this rule-level API.
+        """
+        buffs = self._large_energy_mechanism_buffs_by_team.get(team_id)
+        effects = self._large_energy_mechanism_effects(average_ring_score)
+        duration = (
+            None
+            if isinstance(lit_arm_count, bool)
+            else self._large_energy_mechanism_duration(lit_arm_count)
+        )
+        if (
+            buffs is None
+            or effects is None
+            or duration is None
+            or any(buff.remaining > 0 for buff in buffs)
+        ):
+            return False
+
+        attack_multiplier, defense, cooling_multiplier = effects
+        if not self.grant_attack_buff(team_id, attack_multiplier, duration):
+            return False
+        buffs.append(
+            _TimedEnergyMechanismBuff(
+                defense=defense,
+                cooling_multiplier=cooling_multiplier,
+                remaining=duration,
+            )
+        )
+        return True
+
+    def _current_large_energy_mechanism_defense(self, team_id: str) -> float:
+        return max(
+            (
+                buff.defense
+                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                    team_id, ()
+                )
+                if buff.remaining > 0
+            ),
+            default=0.0,
+        )
+
+    def _current_large_energy_mechanism_cooling_multiplier(
+        self,
+        team_id: str,
+    ) -> float:
+        return max(
+            (
+                buff.cooling_multiplier
+                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                    team_id, ()
+                )
+                if buff.remaining > 0
+            ),
+            default=1.0,
+        )
+
     def set_radar_vulnerability(
         self,
         source_team_id: str,
@@ -3224,10 +3334,12 @@ class RMUC2026RegionalRules:
         state = self._team_states.get(target.team)
         if state is None:
             return 0.0
+        energy_defense = self._current_large_energy_mechanism_defense(target.team)
         if not isinstance(target, Robot):
-            return state.tech_core_defense
+            return max(state.tech_core_defense, energy_defense)
         return max(
             state.tech_core_defense,
+            energy_defense,
             self._current_field_defense(target),
             self._current_terrain_defense(target),
             self._current_fortress_defense(target),
@@ -4015,6 +4127,7 @@ class RMUC2026RegionalRules:
         """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
         self._advance_attack_buffs(frame_dt)
+        self._advance_large_energy_mechanism_buffs(frame_dt)
         self._advance_radar_double_vulnerability(frame_dt)
         self._advance_field_defense_occupancy(match, frame_dt)
         self._advance_fortress_occupancy(frame_dt)
@@ -4064,6 +4177,17 @@ class RMUC2026RegionalRules:
                 if buff.remaining > 1e-9:
                     active.append(buff)
             self._attack_buffs_by_team[team_id] = active
+
+    def _advance_large_energy_mechanism_buffs(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, buffs in self._large_energy_mechanism_buffs_by_team.items():
+            active: list[_TimedEnergyMechanismBuff] = []
+            for buff in buffs:
+                buff.remaining = max(0.0, buff.remaining - dt)
+                if buff.remaining > 1e-9:
+                    active.append(buff)
+            self._large_energy_mechanism_buffs_by_team[team_id] = active
 
     def _advance_radar_double_vulnerability(self, dt: float) -> None:
         if dt <= 0:
@@ -4115,6 +4239,9 @@ class RMUC2026RegionalRules:
             team_id: 0 for team_id in team_by_side.values()
         }
         self._attack_buffs_by_team = {
+            team_id: [] for team_id in team_by_side.values()
+        }
+        self._large_energy_mechanism_buffs_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
         self._radar_vulnerability_by_robot = {}
@@ -4887,6 +5014,13 @@ class RMUC2026RegionalRules:
                 base_cooling_per_second
                 * self._terrain_rules["tunnel"].cooling_multiplier
             )
+
+        energy_multiplier = self._current_large_energy_mechanism_cooling_multiplier(
+            robot.team
+        )
+        if energy_multiplier > 1.0:
+            cooling_candidates.append(base_cooling_per_second * energy_multiplier)
+
         cooling_per_second = max(cooling_candidates)
 
         return _EffectiveHeatParameters(
