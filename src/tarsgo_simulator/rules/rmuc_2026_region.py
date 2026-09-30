@@ -3113,9 +3113,13 @@ class RMUC2026RegionalRules:
         self,
         average_ring_score: float,
     ) -> tuple[float, float, float] | None:
-        if not math.isfinite(average_ring_score):
+        if (
+            not math.isfinite(average_ring_score)
+            or average_ring_score < 1.0
+            or average_ring_score > 10.0
+        ):
             return None
-        if 1.0 <= average_ring_score <= 3.0:
+        if average_ring_score <= 3.0:
             return (1.5, 0.25, 1.0)
         if average_ring_score <= 7.0:
             return (1.5, 0.25, 2.0)
