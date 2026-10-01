@@ -8,6 +8,14 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.polish import (
+    BadgeSpec,
+    contextual_controls,
+    parse_virtual_shield,
+    status_badges,
+    structure_visual_profile,
+    zone_visual_style,
+)
 from tarsgo_simulator.desktop.viewport import Viewport
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
@@ -36,6 +44,18 @@ DAMAGE_GHOST_COLOR = (224, 176, 92)
 TRACER_COLOR = (245, 239, 197)
 IMPACT_COLOR = (255, 218, 132)
 ROBOT_OUTLINE = (27, 35, 42)
+ARENA_GRID = (72, 88, 94)
+ARENA_MIDLINE = (112, 130, 134)
+PANEL_BACKGROUND = (27, 35, 44)
+PANEL_SECTION = (35, 45, 55)
+PANEL_BORDER = (73, 88, 98)
+SHIELD_COLOR = (91, 178, 235)
+WARNING_COLOR = (240, 187, 92)
+DANGER_COLOR = (234, 104, 96)
+RESOURCE_COLOR = (142, 188, 128)
+ASSEMBLY_COLOR = (188, 154, 96)
+FORTRESS_COLOR = (173, 141, 207)
+DEFENSE_ZONE_COLOR = (100, 159, 185)
 HUD_HEIGHT = 68
 WINDOW_MARGIN = 32
 WINDOW_SIZE = (1100, 780)
