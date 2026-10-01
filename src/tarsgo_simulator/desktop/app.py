@@ -1346,6 +1346,361 @@ def _draw_rmuc_hud(
         match_label.get_rect(center=(screen.get_width() // 2, 57)),
     )
 
+def _blend_color(
+    first: tuple[int, int, int],
+    second: tuple[int, int, int],
+    amount: float,
+) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, amount))
+    return tuple(
+        round(a + (b - a) * ratio)
+        for a, b in zip(first, second)
+    )
+
+
+def _draw_rmuc_battlefield(
+    screen: pygame.Surface,
+    field_rect: pygame.Rect,
+) -> None:
+    pygame.draw.rect(screen, (37, 48, 52), field_rect)
+    overlay = pygame.Surface(field_rect.size, pygame.SRCALPHA)
+    half = field_rect.width // 2
+    pygame.draw.rect(
+        overlay,
+        (*PLAYER_COLOR, 13),
+        pygame.Rect(0, 0, half, field_rect.height),
+    )
+    pygame.draw.rect(
+        overlay,
+        (*OPPONENT_COLOR, 13),
+        pygame.Rect(half, 0, field_rect.width - half, field_rect.height),
+    )
+    screen.blit(overlay, field_rect.topleft)
+
+    grid_x = max(44, field_rect.width // 12)
+    grid_y = max(44, field_rect.height // 8)
+    for x in range(field_rect.left + grid_x, field_rect.right, grid_x):
+        pygame.draw.line(
+            screen,
+            ARENA_GRID,
+            (x, field_rect.top),
+            (x, field_rect.bottom),
+            width=1,
+        )
+    for y in range(field_rect.top + grid_y, field_rect.bottom, grid_y):
+        pygame.draw.line(
+            screen,
+            ARENA_GRID,
+            (field_rect.left, y),
+            (field_rect.right, y),
+            width=1,
+        )
+
+    center = field_rect.center
+    pygame.draw.line(
+        screen,
+        ARENA_MIDLINE,
+        (center[0], field_rect.top),
+        (center[0], field_rect.bottom),
+        width=2,
+    )
+    pygame.draw.circle(
+        screen,
+        ARENA_MIDLINE,
+        center,
+        min(52, max(28, field_rect.height // 8)),
+        width=1,
+    )
+    pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=3)
+
+
+def _zone_family_color(family: str) -> tuple[int, int, int]:
+    return {
+        "resource": RESOURCE_COLOR,
+        "assembly": ASSEMBLY_COLOR,
+        "supply": PLAYER_COLOR,
+        "fortress": FORTRESS_COLOR,
+        "defense": DEFENSE_ZONE_COLOR,
+        "central": DEFENSE_ZONE_COLOR,
+        "rebuild": WARNING_COLOR,
+    }.get(family, ZONE_COLOR)
+
+
+def _draw_zone_symbol(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    family: str,
+    color: tuple[int, int, int],
+) -> None:
+    if family == "supply":
+        pygame.draw.line(
+            screen,
+            color,
+            (center[0] - 6, center[1]),
+            (center[0] + 6, center[1]),
+            width=2,
+        )
+        pygame.draw.line(
+            screen,
+            color,
+            (center[0], center[1] - 6),
+            (center[0], center[1] + 6),
+            width=2,
+        )
+    elif family == "resource":
+        pygame.draw.polygon(
+            screen,
+            color,
+            [
+                (center[0], center[1] - 7),
+                (center[0] + 7, center[1]),
+                (center[0], center[1] + 7),
+                (center[0] - 7, center[1]),
+            ],
+            width=2,
+        )
+    elif family == "assembly":
+        pygame.draw.circle(screen, color, center, 6, width=2)
+        for angle in (0, math.pi / 2):
+            dx = round(math.cos(angle) * 10)
+            dy = round(math.sin(angle) * 10)
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - dx, center[1] - dy),
+                (center[0] + dx, center[1] + dy),
+                width=2,
+            )
+    elif family == "fortress":
+        pygame.draw.rect(
+            screen,
+            color,
+            pygame.Rect(center[0] - 8, center[1] - 7, 16, 14),
+            width=2,
+        )
+        pygame.draw.line(
+            screen,
+            color,
+            (center[0] - 5, center[1]),
+            (center[0] + 5, center[1]),
+            width=2,
+        )
+    elif family in {"defense", "central"}:
+        pygame.draw.polygon(
+            screen,
+            color,
+            [
+                (center[0], center[1] - 8),
+                (center[0] + 7, center[1] - 4),
+                (center[0] + 5, center[1] + 6),
+                (center[0], center[1] + 9),
+                (center[0] - 5, center[1] + 6),
+                (center[0] - 7, center[1] - 4),
+            ],
+            width=2,
+        )
+    elif family == "rebuild":
+        pygame.draw.circle(screen, color, center, 7, width=2)
+
+
+def _draw_rmuc_zone(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    zone_rect: pygame.Rect,
+    *,
+    zone_id: str,
+    selected_types: set[str],
+    occupied_by_selected: bool,
+    animation_time: float,
+) -> None:
+    style = zone_visual_style(
+        zone_id,
+        selected_robot_types=selected_types,
+    )
+    if style is None:
+        return
+    emphasized = style.emphasized or occupied_by_selected
+    family_color = _zone_family_color(style.family)
+    team_color = (
+        RED_SUPPLY_COLOR
+        if zone_id.startswith("red-")
+        else BLUE_SUPPLY_COLOR
+        if zone_id.startswith("blue-")
+        else family_color
+    )
+    color = _blend_color(family_color, team_color, 0.32)
+    pulse = 0.5 + 0.5 * math.sin(animation_time * 3.4)
+    fill_alpha = 20 if not emphasized else round(38 + 16 * pulse)
+    overlay = pygame.Surface(zone_rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(
+        overlay,
+        (*color, fill_alpha),
+        overlay.get_rect(),
+        border_radius=5,
+    )
+    screen.blit(overlay, zone_rect.topleft)
+
+    border_width = 1 if not emphasized else 3
+    pygame.draw.rect(
+        screen,
+        color,
+        zone_rect,
+        width=border_width,
+        border_radius=5,
+    )
+    if style.family == "fortress":
+        inner = zone_rect.inflate(-8, -8)
+        if inner.width > 0 and inner.height > 0:
+            pygame.draw.rect(screen, color, inner, width=1, border_radius=4)
+
+    symbol_center = (zone_rect.centerx, zone_rect.centery - 7)
+    _draw_zone_symbol(
+        screen,
+        center=symbol_center,
+        family=style.family,
+        color=color,
+    )
+    label_color = color if emphasized else _blend_color(color, MUTED_COLOR, 0.45)
+    label_surface = small_font.render(style.label, True, label_color)
+    screen.blit(
+        label_surface,
+        label_surface.get_rect(
+            center=(zone_rect.centerx, zone_rect.centery + 11)
+        ),
+    )
+
+
+def _draw_virtual_shield(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    *,
+    center: tuple[int, int],
+    radius: int,
+    shield: int,
+    animation_time: float,
+) -> None:
+    if shield <= 0:
+        return
+    pulse = 1 + round(2 * (0.5 + 0.5 * math.sin(animation_time * 2.8)))
+    pygame.draw.circle(
+        screen,
+        SHIELD_COLOR,
+        center,
+        radius + 7 + pulse,
+        width=2,
+    )
+    label = small_font.render(f"SHIELD {shield}", True, SHIELD_COLOR)
+    screen.blit(
+        label,
+        label.get_rect(center=(center[0], center[1] - radius - 19)),
+    )
+
+
+def _draw_rmuc_structure(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    *,
+    structure_type: str,
+    center: tuple[int, int],
+    color: tuple[int, int, int],
+    alive: bool,
+    hp: int,
+    max_hp: int,
+    status: str,
+    animation_time: float,
+    debug_geometry: bool,
+) -> int:
+    profile = structure_visual_profile(structure_type)
+    draw_color = color if alive else MUTED_COLOR
+    size = profile.size
+
+    if structure_type == "base":
+        outer = [
+            (center[0], center[1] - size),
+            (center[0] + size, center[1]),
+            (center[0], center[1] + size),
+            (center[0] - size, center[1]),
+        ]
+        pygame.draw.polygon(screen, ROBOT_OUTLINE, outer)
+        inner_size = size - 4
+        inner = [
+            (center[0], center[1] - inner_size),
+            (center[0] + inner_size, center[1]),
+            (center[0], center[1] + inner_size),
+            (center[0] - inner_size, center[1]),
+        ]
+        pygame.draw.polygon(screen, draw_color, inner, width=3)
+        pygame.draw.rect(
+            screen,
+            draw_color,
+            pygame.Rect(
+                center[0] - size // 2,
+                center[1] - size // 2,
+                size,
+                size,
+            ),
+            width=2,
+        )
+        pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+    else:
+        pygame.draw.circle(screen, ROBOT_OUTLINE, center, size + 2)
+        pygame.draw.circle(screen, draw_color, center, size, width=3)
+        pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+        for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
+            endpoint = (
+                center[0] + round(math.cos(angle) * (size - 4)),
+                center[1] + round(math.sin(angle) * (size - 4)),
+            )
+            pygame.draw.line(screen, draw_color, center, endpoint, width=2)
+
+    shield = parse_virtual_shield(status) if structure_type == "base" else 0
+    _draw_virtual_shield(
+        screen,
+        small_font,
+        center=center,
+        radius=size,
+        shield=shield,
+        animation_time=animation_time,
+    )
+
+    bar_width = size * 2 + 14
+    bar_rect = pygame.Rect(
+        center[0] - bar_width // 2,
+        center[1] + size + 10,
+        bar_width,
+        7,
+    )
+    _draw_progress_bar(
+        screen,
+        rect=bar_rect,
+        value=hp,
+        maximum=max_hp,
+        fill_color=HP_COLOR if alive else MUTED_COLOR,
+    )
+    label = "BASE" if structure_type == "base" else "OUTPOST"
+    label_surface = small_font.render(
+        f"{label} {hp}/{max_hp}",
+        True,
+        TEXT_COLOR if alive else MUTED_COLOR,
+    )
+    screen.blit(
+        label_surface,
+        label_surface.get_rect(
+            center=(center[0], bar_rect.bottom + 10)
+        ),
+    )
+    if debug_geometry and status:
+        debug_surface = small_font.render(status, True, MUTED_COLOR)
+        screen.blit(
+            debug_surface,
+            debug_surface.get_rect(
+                center=(center[0], bar_rect.bottom + 26)
+            ),
+        )
+    return size
+
+
 def _rotate_point(
     center: tuple[int, int],
     local: tuple[float, float],
