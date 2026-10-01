@@ -1232,6 +1232,47 @@ def _draw_rmuc_panel(
         debug_geometry=debug_geometry,
     )
 
+def _draw_team_hud_card(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    small_font: pygame.font.Font,
+    *,
+    rect: pygame.Rect,
+    name: str,
+    base_hp: int,
+    outpost_hp: int,
+    coins: int,
+    color: tuple[int, int, int],
+    align_right: bool = False,
+) -> None:
+    pygame.draw.rect(screen, PANEL_BACKGROUND, rect, border_radius=8)
+    pygame.draw.rect(screen, color, rect, width=2, border_radius=8)
+    name_surface = font.render(name, True, color)
+    stats_surface = small_font.render(
+        f"BASE {base_hp:>4}   OUT {outpost_hp:>4}",
+        True,
+        TEXT_COLOR,
+    )
+    coins_surface = small_font.render(f"COINS {coins}", True, MUTED_COLOR)
+    if align_right:
+        screen.blit(
+            name_surface,
+            (rect.right - 12 - name_surface.get_width(), rect.y + 7),
+        )
+        screen.blit(
+            stats_surface,
+            (rect.right - 12 - stats_surface.get_width(), rect.y + 34),
+        )
+        screen.blit(
+            coins_surface,
+            (rect.right - 12 - coins_surface.get_width(), rect.y + 50),
+        )
+    else:
+        screen.blit(name_surface, (rect.x + 12, rect.y + 7))
+        screen.blit(stats_surface, (rect.x + 12, rect.y + 34))
+        screen.blit(coins_surface, (rect.x + 12, rect.y + 50))
+
+
 def _draw_rmuc_hud(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -1251,55 +1292,59 @@ def _draw_rmuc_hud(
     opponent_base = structures[(opponent_team, "base")]
     opponent_outpost = structures[(opponent_team, "outpost")]
 
-    player_name = "TARS-Go" if player_team.startswith("tarsgo") else match.team_name(player_team)
+    player_name = (
+        "TARS-Go"
+        if player_team.startswith("tarsgo")
+        else match.team_name(player_team)
+    )
     opponent_name = (
         "Opponent"
         if opponent_team.startswith("opponent")
         else match.team_name(opponent_team)
     )
-    screen.blit(font.render(player_name, True, PLAYER_COLOR), (24, 13))
-    player_stats = (
-        f"Base {player_base.hp} | Outpost {player_outpost.hp} | "
-        f"Coins {coins.get(player_team, 0)}"
+    _draw_team_hud_card(
+        screen,
+        font,
+        small_font,
+        rect=pygame.Rect(20, 9, 316, 68),
+        name=player_name,
+        base_hp=player_base.hp,
+        outpost_hp=player_outpost.hp,
+        coins=coins.get(player_team, 0),
+        color=PLAYER_COLOR,
     )
-    screen.blit(small_font.render(player_stats, True, PLAYER_COLOR), (24, 43))
-
-    opponent_name_surface = font.render(opponent_name, True, OPPONENT_COLOR)
-    screen.blit(
-        opponent_name_surface,
-        (
-            screen.get_width() - 24 - opponent_name_surface.get_width(),
-            13,
-        ),
-    )
-    opponent_stats = (
-        f"Base {opponent_base.hp} | Outpost {opponent_outpost.hp} | "
-        f"Coins {coins.get(opponent_team, 0)}"
-    )
-    opponent_stats_surface = small_font.render(
-        opponent_stats,
-        True,
-        OPPONENT_COLOR,
-    )
-    screen.blit(
-        opponent_stats_surface,
-        (
-            screen.get_width() - 24 - opponent_stats_surface.get_width(),
-            43,
-        ),
+    _draw_team_hud_card(
+        screen,
+        font,
+        small_font,
+        rect=pygame.Rect(screen.get_width() - 336, 9, 316, 68),
+        name=opponent_name,
+        base_hp=opponent_base.hp,
+        outpost_hp=opponent_outpost.hp,
+        coins=coins.get(opponent_team, 0),
+        color=OPPONENT_COLOR,
+        align_right=True,
     )
 
     timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
-        status = f"{match.team_name(match.winner)} WINS" if match.winner else "DRAW"
+        status = (
+            f"{match.team_name(match.winner)} WINS"
+            if match.winner
+            else "DRAW"
+        )
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
-    status_surface = font.render(status, True, TEXT_COLOR)
+    timer_surface = font.render(status, True, TEXT_COLOR)
     screen.blit(
-        status_surface,
-        status_surface.get_rect(center=(screen.get_width() // 2, 31)),
+        timer_surface,
+        timer_surface.get_rect(center=(screen.get_width() // 2, 31)),
     )
-
+    match_label = small_font.render("MATCH", True, MUTED_COLOR)
+    screen.blit(
+        match_label,
+        match_label.get_rect(center=(screen.get_width() // 2, 57)),
+    )
 
 def _rotate_point(
     center: tuple[int, int],
