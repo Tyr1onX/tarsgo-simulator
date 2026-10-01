@@ -702,8 +702,10 @@ def _rmuc_team_detail_lines(
         if penalty
         else f"Income    {net:+d} / 10s"
     )
+    coins = dict(display_state.coins)
     lines = [
         "TEAM SYSTEMS",
+        f"Coins     {coins.get(player_team, 0)}",
         income,
         f"Rebuild   {rebuild.get(player_team, 0)}",
         f"Damage    {attack_damage.get(player_team, 0)}",
@@ -1182,7 +1184,7 @@ def _draw_context_controls(
             small_font.render(f"{key:<10} {action}", True, color),
             (x, y),
         )
-        y += 16
+        y += 15
 
 
 def _draw_rmuc_panel(
@@ -1201,7 +1203,7 @@ def _draw_rmuc_panel(
 
     inner_x = panel.x + 9
     inner_width = panel.width - 18
-    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 360)
+    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 332)
     team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 112)
     controls_rect = pygame.Rect(
         inner_x,
@@ -1757,6 +1759,9 @@ def _draw_rmuc_robot_shape(
     muzzle_remaining: float,
     muzzle_caliber: str,
     impact_remaining: float,
+    raw_status: str = "",
+    invincible: bool = False,
+    hp_ratio: float = 1.0,
 ) -> int:
     profile = robot_visual_profile(robot_type)
     draw_color = color if alive else MUTED_COLOR
@@ -1870,6 +1875,35 @@ def _draw_rmuc_robot_shape(
         )
 
     radius = max(profile.body_width, profile.body_height) // 2
+    if invincible:
+        shield_pulse = 1 + round(
+            2 * (0.5 + 0.5 * math.sin(animation_time * 3.0))
+        )
+        pygame.draw.circle(
+            screen,
+            SHIELD_COLOR,
+            center,
+            radius + 5 + shield_pulse,
+            width=2,
+        )
+    if "VULN" in raw_status:
+        pygame.draw.circle(
+            screen,
+            DANGER_COLOR,
+            center,
+            radius + 7,
+            width=2,
+        )
+    if 0 < hp_ratio <= 0.25 and alive:
+        warning_pulse = 0.5 + 0.5 * math.sin(animation_time * 5.0)
+        warning_radius = radius + 10 + round(2 * warning_pulse)
+        pygame.draw.circle(
+            screen,
+            WARNING_COLOR,
+            center,
+            warning_radius,
+            width=1,
+        )
     if impact_remaining > 0:
         pygame.draw.circle(
             screen,
@@ -2283,6 +2317,12 @@ def _draw(
                 muzzle_remaining=visual_robot.muzzle_remaining,
                 muzzle_caliber=visual_robot.muzzle_caliber,
                 impact_remaining=visual_robot.impact_remaining,
+                raw_status=robot_statuses.get(robot.id, ""),
+                invincible=(
+                    robot.alive
+                    and not match.ruleset.can_receive_damage(robot)
+                ),
+                hp_ratio=(robot.hp / robot.max_hp if robot.max_hp else 0.0),
             )
         else:
             radius = max(
