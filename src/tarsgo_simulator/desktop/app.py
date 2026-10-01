@@ -2120,8 +2120,12 @@ def _draw(
         round(field_width),
         round(field_height),
     )
-    pygame.draw.rect(screen, FIELD_COLOR, field_rect)
-    pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
+    animation_time = pygame.time.get_ticks() / 1000.0
+    if is_rmuc:
+        _draw_rmuc_battlefield(screen, field_rect)
+    else:
+        pygame.draw.rect(screen, FIELD_COLOR, field_rect)
+        pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
 
     for obstacle in match.map.obstacles:
         obstacle_rect = _world_rect_to_screen(
@@ -2133,9 +2137,42 @@ def _draw(
         )
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
 
+    selected_types = _selected_robot_types(match, selected_robot_ids)
+    selected_positions = [
+        robot.position
+        for robot in match.robots
+        if robot.id in selected_robot_ids
+    ]
     for zone in match.map.zones:
+        zone_rect = _world_rect_to_screen(
+            viewport,
+            zone.x,
+            zone.y,
+            zone.width,
+            zone.height,
+        )
+        if is_rmuc and not debug_geometry:
+            if zone_visual_style(
+                zone.id,
+                selected_robot_types=selected_types,
+            ) is None:
+                continue
+            _draw_rmuc_zone(
+                screen,
+                small_font,
+                zone_rect,
+                zone_id=zone.id,
+                selected_types=selected_types,
+                occupied_by_selected=any(
+                    zone.contains(position)
+                    for position in selected_positions
+                ),
+                animation_time=animation_time,
+            )
+            continue
+
         if is_rmuc:
-            style = _rmuc_zone_style(zone.id, debug_geometry=debug_geometry)
+            style = _rmuc_zone_style(zone.id, debug_geometry=True)
             if style is None:
                 continue
             zone_color, zone_label = style
@@ -2144,13 +2181,6 @@ def _draw(
                 zone.id,
                 (ZONE_COLOR, zone.id.upper()),
             )
-        zone_rect = _world_rect_to_screen(
-            viewport,
-            zone.x,
-            zone.y,
-            zone.width,
-            zone.height,
-        )
         pygame.draw.rect(screen, zone_color, zone_rect, width=2)
         label_surface = small_font.render(zone_label, True, zone_color)
         screen.blit(
@@ -2172,34 +2202,47 @@ def _draw(
             round(value)
             for value in viewport.world_to_screen(structure.position)
         )
-        size = max(13, round(viewport.world_length_to_screen(34)))
         color = PLAYER_COLOR if structure.team == player_team else OPPONENT_COLOR
-        rect = pygame.Rect(
-            center[0] - size,
-            center[1] - size,
-            size * 2,
-            size * 2,
-        )
-        pygame.draw.rect(
-            screen,
-            color if structure.alive else MUTED_COLOR,
-            rect,
-            width=3,
-        )
         hp, max_hp, structure_status = structure_statuses.get(
             structure.id,
             (structure.hp, structure.max_hp, ""),
         )
-        label = f"{'B' if structure.type == 'base' else 'O'} {hp}/{max_hp}"
-        if debug_geometry and structure_status:
-            label = f"{label} {structure_status}"
-        label_surface = small_font.render(label, True, TEXT_COLOR)
-        screen.blit(
-            label_surface,
-            label_surface.get_rect(
-                center=(center[0], center[1] + size + 12)
-            ),
-        )
+        if is_rmuc:
+            _draw_rmuc_structure(
+                screen,
+                small_font,
+                structure_type=structure.type,
+                center=center,
+                color=color,
+                alive=structure.alive,
+                hp=hp,
+                max_hp=max_hp,
+                status=structure_status,
+                animation_time=animation_time,
+                debug_geometry=debug_geometry,
+            )
+        else:
+            size = max(13, round(viewport.world_length_to_screen(34)))
+            rect = pygame.Rect(
+                center[0] - size,
+                center[1] - size,
+                size * 2,
+                size * 2,
+            )
+            pygame.draw.rect(
+                screen,
+                color if structure.alive else MUTED_COLOR,
+                rect,
+                width=3,
+            )
+            label = f"{'B' if structure.type == 'base' else 'O'} {hp}/{max_hp}"
+            label_surface = small_font.render(label, True, TEXT_COLOR)
+            screen.blit(
+                label_surface,
+                label_surface.get_rect(
+                    center=(center[0], center[1] + size + 12)
+                ),
+            )
 
     labels = (
         _rmuc_robot_labels(match)
@@ -2215,7 +2258,6 @@ def _draw(
         )
         _draw_move_markers(screen, viewport, visual_state)
 
-    animation_time = pygame.time.get_ticks() / 1000.0
     for robot in match.robots:
         center = tuple(
             round(value)
