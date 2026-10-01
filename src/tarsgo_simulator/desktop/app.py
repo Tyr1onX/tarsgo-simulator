@@ -819,6 +819,372 @@ def _draw_panel_lines(
     return cursor_y
 
 
+def _badge_color(tone: str) -> tuple[int, int, int]:
+    return {
+        "shield": SHIELD_COLOR,
+        "defense": DEFENSE_ZONE_COLOR,
+        "danger": DANGER_COLOR,
+        "warning": WARNING_COLOR,
+        "fortress": FORTRESS_COLOR,
+        "terrain": RESOURCE_COLOR,
+    }.get(tone, MUTED_COLOR)
+
+
+def _draw_badges(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    badges: tuple[BadgeSpec, ...],
+    *,
+    x: int,
+    y: int,
+    max_width: int,
+) -> int:
+    cursor_x = x
+    cursor_y = y
+    row_height = 23
+    for badge in badges:
+        text_surface = small_font.render(badge.text, True, TEXT_COLOR)
+        width = text_surface.get_width() + 14
+        if cursor_x != x and cursor_x + width > x + max_width:
+            cursor_x = x
+            cursor_y += row_height
+        rect = pygame.Rect(cursor_x, cursor_y, width, 19)
+        color = _badge_color(badge.tone)
+        pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=5)
+        pygame.draw.rect(screen, color, rect, width=1, border_radius=5)
+        screen.blit(
+            text_surface,
+            text_surface.get_rect(center=rect.center),
+        )
+        cursor_x += width + 6
+    return cursor_y + (row_height if badges else 0)
+
+
+def _draw_progress_bar(
+    screen: pygame.Surface,
+    *,
+    rect: pygame.Rect,
+    value: float,
+    maximum: float,
+    fill_color: tuple[int, int, int],
+) -> None:
+    pygame.draw.rect(screen, HP_BACKGROUND, rect, border_radius=3)
+    ratio = 0.0 if maximum <= 0 else max(0.0, min(1.0, value / maximum))
+    width = round(rect.width * ratio)
+    if width > 0:
+        pygame.draw.rect(
+            screen,
+            fill_color,
+            pygame.Rect(rect.x, rect.y, width, rect.height),
+            border_radius=3,
+        )
+
+
+def _draw_section_title(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    title: str,
+    *,
+    x: int,
+    y: int,
+) -> int:
+    surface = small_font.render(title, True, MUTED_COLOR)
+    screen.blit(surface, (x, y))
+    return y + 18
+
+
+def _selected_robot_types(
+    match: Match,
+    selected_robot_ids: set[str],
+) -> set[str]:
+    return {
+        robot.type
+        for robot in match.robots
+        if robot.id in selected_robot_ids
+    }
+
+
+def _draw_selected_unit_card(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    match: Match,
+    selected_robot_ids: set[str],
+    labels: dict[str, str],
+    rect: pygame.Rect,
+) -> None:
+    pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=7)
+    pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
+    x = rect.x + 12
+    y = rect.y + 10
+    robots_by_id = {robot.id: robot for robot in match.robots}
+    selected = [
+        robots_by_id[robot_id]
+        for robot_id in sorted(selected_robot_ids)
+        if robot_id in robots_by_id
+    ]
+
+    if not selected:
+        screen.blit(
+            small_font.render("SELECTED UNIT", True, SELECTION_COLOR),
+            (x, y),
+        )
+        screen.blit(
+            small_font.render("Select a unit", True, MUTED_COLOR),
+            (x, y + 26),
+        )
+        return
+
+    if len(selected) != 1:
+        screen.blit(
+            small_font.render(
+                f"{len(selected)} UNITS SELECTED",
+                True,
+                SELECTION_COLOR,
+            ),
+            (x, y),
+        )
+        y += 28
+        for robot in selected[:7]:
+            label = labels.get(robot.id, robot.id)
+            text = f"{label:<7} {robot.hp:>4}/{robot.max_hp:<4} HP"
+            color = TEXT_COLOR if robot.alive else MUTED_COLOR
+            screen.blit(small_font.render(text, True, color), (x, y))
+            y += 20
+        return
+
+    robot = selected[0]
+    display_state = match.ruleset.display_state
+    if display_state is None:
+        return
+    statuses = dict(display_state.robot_statuses)
+    progression = {
+        robot_id: (level, experience, level_cap)
+        for robot_id, level, experience, level_cap
+        in display_state.robot_progression
+    }
+    projectiles = {
+        robot_id: (projectile, count)
+        for robot_id, projectile, count in display_state.robot_projectiles
+    }
+    reserves = dict(display_state.robot_projectile_reserves)
+    heat = {
+        robot_id: (current, limit, locked, permanently_locked)
+        for robot_id, current, limit, locked, permanently_locked
+        in display_state.robot_shooting_heat
+    }
+    chassis = {
+        robot_id: (buffer, maximum, power, limit, power_off_remaining)
+        for (
+            robot_id,
+            buffer,
+            maximum,
+            power,
+            limit,
+            power_off_remaining,
+        ) in display_state.robot_chassis_power
+    }
+    engineer_units = dict(display_state.engineer_energy_units)
+
+    level_state = progression.get(robot.id)
+    title = robot.type.upper()
+    if level_state is not None:
+        title += f" · Lv {level_state[0]}"
+    screen.blit(
+        small_font.render("IDENTITY", True, MUTED_COLOR),
+        (x, y),
+    )
+    y += 18
+    title_surface = small_font.render(title, True, SELECTION_COLOR)
+    screen.blit(title_surface, (x, y))
+    y += 27
+
+    y = _draw_section_title(screen, small_font, "HEALTH", x=x, y=y)
+    hp_text = small_font.render(
+        f"HP        {robot.hp:>4} / {robot.max_hp:<4}",
+        True,
+        TEXT_COLOR,
+    )
+    screen.blit(hp_text, (x, y))
+    y += 18
+    _draw_progress_bar(
+        screen,
+        rect=pygame.Rect(x, y, rect.width - 24, 7),
+        value=robot.hp,
+        maximum=robot.max_hp,
+        fill_color=HP_COLOR,
+    )
+    y += 16
+
+    if level_state is not None:
+        _level, experience, _cap = level_state
+        screen.blit(
+            small_font.render(f"XP        {experience:g}", True, TEXT_COLOR),
+            (x, y),
+        )
+        y += 21
+
+    projectile_state = projectiles.get(robot.id)
+    heat_state = heat.get(robot.id)
+    if projectile_state is not None or heat_state is not None:
+        y = _draw_section_title(screen, small_font, "WEAPON", x=x, y=y)
+    if projectile_state is not None:
+        projectile, count = projectile_state
+        screen.blit(
+            small_font.render(
+                f"Ammo      {projectile}: {count}",
+                True,
+                TEXT_COLOR,
+            ),
+            (x, y),
+        )
+        y += 19
+    if heat_state is not None:
+        current, limit, _locked, _permanent = heat_state
+        screen.blit(
+            small_font.render(
+                f"Heat      {current:g} / {limit:g}",
+                True,
+                TEXT_COLOR,
+            ),
+            (x, y),
+        )
+        y += 18
+        _draw_progress_bar(
+            screen,
+            rect=pygame.Rect(x, y, rect.width - 24, 6),
+            value=current,
+            maximum=limit,
+            fill_color=WARNING_COLOR,
+        )
+        y += 15
+
+    chassis_state = chassis.get(robot.id)
+    if chassis_state is not None:
+        buffer, maximum, power, limit, power_off_remaining = chassis_state
+        y = _draw_section_title(screen, small_font, "CHASSIS", x=x, y=y)
+        screen.blit(
+            small_font.render(
+                f"Buffer    {buffer:g} / {maximum:g}",
+                True,
+                TEXT_COLOR,
+            ),
+            (x, y),
+        )
+        y += 18
+        _draw_progress_bar(
+            screen,
+            rect=pygame.Rect(x, y, rect.width - 24, 6),
+            value=buffer,
+            maximum=maximum,
+            fill_color=PLAYER_COLOR,
+        )
+        y += 15
+        screen.blit(
+            small_font.render(
+                f"Power     {power:g} / {limit:g} W",
+                True,
+                TEXT_COLOR,
+            ),
+            (x, y),
+        )
+        y += 19
+    else:
+        power_off_remaining = 0.0
+
+    if robot.id in engineer_units:
+        screen.blit(
+            small_font.render(
+                f"Energy Units   {engineer_units[robot.id]}",
+                True,
+                RESOURCE_COLOR,
+            ),
+            (x, y),
+        )
+        y += 19
+    if robot.id in reserves:
+        screen.blit(
+            small_font.render(
+                f"Fortress Reserve   {reserves[robot.id]}",
+                True,
+                FORTRESS_COLOR,
+            ),
+            (x, y),
+        )
+        y += 19
+
+    raw_status = statuses.get(robot.id, "")
+    heat_locked = bool(heat_state and heat_state[2])
+    permanently_locked = bool(heat_state and heat_state[3])
+    invincible = robot.alive and not match.ruleset.can_receive_damage(robot)
+    badges = status_badges(
+        raw_status,
+        invincible=invincible,
+        heat_locked=heat_locked,
+        permanently_locked=permanently_locked,
+        power_off=power_off_remaining > 0,
+    )
+    y = _draw_section_title(screen, small_font, "STATUS", x=x, y=y)
+    if badges:
+        _draw_badges(
+            screen,
+            small_font,
+            badges,
+            x=x,
+            y=y,
+            max_width=rect.width - 24,
+        )
+    else:
+        screen.blit(small_font.render("—", True, MUTED_COLOR), (x, y))
+
+
+def _draw_team_systems_card(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    match: Match,
+    player_team: str,
+    rect: pygame.Rect,
+) -> None:
+    pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=7)
+    pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
+    lines = _rmuc_team_detail_lines(match, player_team)
+    x = rect.x + 12
+    y = rect.y + 10
+    if not lines:
+        return
+    screen.blit(small_font.render(lines[0], True, MUTED_COLOR), (x, y))
+    y += 22
+    for line in lines[1:]:
+        if y > rect.bottom - 18:
+            break
+        screen.blit(small_font.render(line, True, MUTED_COLOR), (x, y))
+        y += 17
+
+
+def _draw_context_controls(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    selected_types: set[str],
+    rect: pygame.Rect,
+    *,
+    debug_geometry: bool,
+) -> None:
+    pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=7)
+    pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
+    x = rect.x + 12
+    y = rect.y + 9
+    title = "DEBUG GEOMETRY: ON" if debug_geometry else "CONTROLS"
+    title_color = SELECTION_COLOR if debug_geometry else MUTED_COLOR
+    screen.blit(small_font.render(title, True, title_color), (x, y))
+    y += 22
+    for key, action, enabled in contextual_controls(selected_types):
+        color = TEXT_COLOR if enabled else MUTED_COLOR
+        screen.blit(
+            small_font.render(f"{key:<10} {action}", True, color),
+            (x, y),
+        )
+        y += 16
+
+
 def _draw_rmuc_panel(
     screen: pygame.Surface,
     small_font: pygame.font.Font,
@@ -830,50 +1196,41 @@ def _draw_rmuc_panel(
     debug_geometry: bool,
 ) -> None:
     panel = pygame.Rect(*RMUC_PANEL_RECT)
-    pygame.draw.rect(screen, HP_BACKGROUND, panel, border_radius=5)
-    pygame.draw.rect(screen, FIELD_BORDER, panel, width=1, border_radius=5)
-    x = panel.x + 14
-    y = panel.y + 14
+    pygame.draw.rect(screen, PANEL_BACKGROUND, panel, border_radius=9)
+    pygame.draw.rect(screen, PANEL_BORDER, panel, width=1, border_radius=9)
 
-    selected_lines = _selected_unit_lines(match, selected_robot_ids, labels)
-    y = _draw_panel_lines(
+    inner_x = panel.x + 9
+    inner_width = panel.width - 18
+    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 360)
+    team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 112)
+    controls_rect = pygame.Rect(
+        inner_x,
+        team_rect.bottom + 8,
+        inner_width,
+        panel.bottom - (team_rect.bottom + 17),
+    )
+    _draw_selected_unit_card(
         screen,
         small_font,
-        selected_lines,
-        x=x,
-        y=y,
-        max_chars=28,
-        title_color=SELECTION_COLOR,
+        match,
+        selected_robot_ids,
+        labels,
+        unit_rect,
     )
-    y += 14
-
-    team_lines = _rmuc_team_detail_lines(match, player_team)
-    y = _draw_panel_lines(
+    _draw_team_systems_card(
         screen,
         small_font,
-        team_lines,
-        x=x,
-        y=y,
-        max_chars=28,
-        title_color=PLAYER_COLOR,
+        match,
+        player_team,
+        team_rect,
     )
-    y += 14
-
-    debug_label = "DEBUG GEOMETRY: ON" if debug_geometry else "CONTROLS"
-    controls_y = max(y, panel.bottom - 230)
-    title_surface = small_font.render(
-        debug_label,
-        True,
-        SELECTION_COLOR if debug_geometry else MUTED_COLOR,
+    _draw_context_controls(
+        screen,
+        small_font,
+        _selected_robot_types(match, selected_robot_ids),
+        controls_rect,
+        debug_geometry=debug_geometry,
     )
-    screen.blit(title_surface, (x, controls_y))
-    controls_y += 22
-    for key, action in CONTROLS:
-        line = f"{key:<10} {action}"
-        surface = small_font.render(line, True, TEXT_COLOR)
-        screen.blit(surface, (x, controls_y))
-        controls_y += 16
-
 
 def _draw_rmuc_hud(
     screen: pygame.Surface,
