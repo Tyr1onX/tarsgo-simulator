@@ -102,7 +102,15 @@ def test_badge_helper_uses_existing_display_facts_only() -> None:
     )
 
     texts = {badge.text for badge in badges}
-    assert {"INV", "DEF 50", "VUL 100", "FORT", "TERRAIN", "LOCK", "PWR OFF"} <= texts
+    assert {
+        "无敌",
+        "防御 50%",
+        "易伤 100%",
+        "堡垒",
+        "地形增益",
+        "禁射",
+        "底盘断电",
+    } <= texts
 
 
 def test_engineer_controls_are_contextual() -> None:
@@ -114,7 +122,7 @@ def test_engineer_controls_are_contextual() -> None:
     combat_labels = {key for key, _action, _enabled in combat}
     none_labels = {key for key, _action, _enabled in none}
 
-    assert {"G", "1-4", "Enter", "Q / W"} <= engineer_labels
+    assert {"G", "1-4", "回车", "Q / W"} <= engineer_labels
     assert "G" not in combat_labels
     assert {"E", "F"} <= combat_labels
     assert "E" not in none_labels
