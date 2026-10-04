@@ -7,6 +7,7 @@ import math
 from typing import TYPE_CHECKING
 
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
+from tarsgo_simulator.desktop.polish import parse_virtual_shield
 
 if TYPE_CHECKING:
     from tarsgo_simulator.core.match import Match
@@ -40,9 +41,16 @@ ROBOT_VISUAL_PROFILES = {
 }
 
 PROJECTILE_VISUAL_PROFILES = {
-    "17mm": ProjectileVisualProfile("17mm", 0.10, 2, 2, 0.055, 0.12),
-    "42mm": ProjectileVisualProfile("42mm", 0.18, 5, 4, 0.090, 0.20),
+    "17mm": ProjectileVisualProfile("17mm", 0.11, 2, 2, 0.055, 0.12),
+    "42mm": ProjectileVisualProfile("42mm", 0.19, 5, 4, 0.090, 0.22),
 }
+
+DESTROY_VISUAL_DURATION = 0.46
+RESPAWN_VISUAL_DURATION = 0.68
+SHIELD_IMPACT_DURATION = 0.20
+MAX_SCREEN_SHAKE_AMPLITUDE = 2.25
+MAX_SCREEN_SHAKE_DURATION = 0.14
+SCREEN_SHAKE_COOLDOWN = 0.08
 
 
 def robot_visual_profile(robot_type: str) -> RobotVisualProfile:
@@ -57,6 +65,13 @@ def projectile_visual_profile(caliber: str) -> ProjectileVisualProfile:
         caliber,
         PROJECTILE_VISUAL_PROFILES["17mm"],
     )
+
+
+def low_hp_warning_strength(hp_ratio: float, animation_time: float) -> float:
+    if hp_ratio <= 0 or hp_ratio > 0.25:
+        return 0.0
+    pulse = 0.5 + 0.5 * math.sin(animation_time * 5.0)
+    return 0.30 + 0.55 * pulse
 
 
 def _wrap_angle(angle: float) -> float:
@@ -77,6 +92,7 @@ class VisualRobotState:
     position: tuple[float, float]
     hp: int
     cooldown: float
+    alive: bool = True
     body_angle: float = 0.0
     turret_angle: float = 0.0
     target_position: tuple[float, float] | None = None
@@ -84,6 +100,9 @@ class VisualRobotState:
     muzzle_remaining: float = 0.0
     muzzle_caliber: str = "17mm"
     impact_remaining: float = 0.0
+    impact_caliber: str = "17mm"
+    destroy_remaining: float = 0.0
+    respawn_remaining: float = 0.0
     ghost_from_hp: float = 0.0
     ghost_remaining: float = 0.0
     ghost_duration: float = 0.38
@@ -132,6 +151,27 @@ class VisualRobotState:
         self.ghost_remaining = self.ghost_duration
         self.hp = current_hp
 
+    def register_lifecycle(self, alive: bool) -> None:
+        if self.alive and not alive:
+            self.destroy_remaining = DESTROY_VISUAL_DURATION
+            self.respawn_remaining = 0.0
+        elif not self.alive and alive:
+            self.respawn_remaining = RESPAWN_VISUAL_DURATION
+            self.destroy_remaining = 0.0
+        self.alive = alive
+
+    @property
+    def destroy_progress(self) -> float:
+        if self.destroy_remaining <= 0:
+            return 1.0
+        return 1.0 - min(1.0, self.destroy_remaining / DESTROY_VISUAL_DURATION)
+
+    @property
+    def respawn_progress(self) -> float:
+        if self.respawn_remaining <= 0:
+            return 1.0
+        return 1.0 - min(1.0, self.respawn_remaining / RESPAWN_VISUAL_DURATION)
+
     def ghost_hp(self, current_hp: int) -> float:
         if self.ghost_remaining <= 0 or self.ghost_from_hp <= current_hp:
             return float(current_hp)
@@ -142,7 +182,25 @@ class VisualRobotState:
         self.target_hold_remaining = max(0.0, self.target_hold_remaining - dt)
         self.muzzle_remaining = max(0.0, self.muzzle_remaining - dt)
         self.impact_remaining = max(0.0, self.impact_remaining - dt)
+        self.destroy_remaining = max(0.0, self.destroy_remaining - dt)
+        self.respawn_remaining = max(0.0, self.respawn_remaining - dt)
         self.ghost_remaining = max(0.0, self.ghost_remaining - dt)
+
+
+@dataclass
+class VisualStructureState:
+    hp: int
+    shield: int = 0
+    impact_remaining: float = 0.0
+    impact_caliber: str = "17mm"
+    shield_impact_remaining: float = 0.0
+
+    def advance_timers(self, dt: float) -> None:
+        self.impact_remaining = max(0.0, self.impact_remaining - max(0.0, dt))
+        self.shield_impact_remaining = max(
+            0.0,
+            self.shield_impact_remaining - max(0.0, dt),
+        )
 
 
 @dataclass
@@ -153,6 +211,7 @@ class VisualProjectile:
     attacker_team_id: str
     target_id: str | None
     damaging: bool
+    shielded: bool = False
     age: float = 0.0
 
     @property
@@ -185,6 +244,8 @@ class ImpactEffect:
     caliber: str
     remaining: float
     duration: float
+    shielded: bool = False
+    target_kind: str = "robot"
 
     @property
     def progress(self) -> float:
@@ -213,29 +274,51 @@ class MoveMarker:
 @dataclass
 class CombatVisualState:
     robots: dict[str, VisualRobotState] = field(default_factory=dict)
+    structures: dict[str, VisualStructureState] = field(default_factory=dict)
     projectiles: list[VisualProjectile] = field(default_factory=list)
     impacts: list[ImpactEffect] = field(default_factory=list)
     move_markers: list[MoveMarker] = field(default_factory=list)
+    shake_remaining: float = 0.0
+    shake_duration: float = 0.0
+    shake_amplitude: float = 0.0
+    shake_cooldown_remaining: float = 0.0
     _before_cooldowns: dict[str, float] = field(default_factory=dict)
+    _before_structure_shields: dict[str, int] = field(default_factory=dict)
 
     def reset(self, match: "Match") -> None:
+        structure_statuses = self._structure_statuses(match)
         self.robots = {
             robot.id: VisualRobotState(
                 position=robot.position,
                 hp=robot.hp,
                 cooldown=robot.attack_cooldown,
+                alive=robot.alive,
             )
             for robot in match.robots
+        }
+        self.structures = {
+            structure.id: VisualStructureState(
+                hp=structure.hp,
+                shield=parse_virtual_shield(structure_statuses.get(structure.id, "")),
+            )
+            for structure in match.structures
         }
         self.projectiles.clear()
         self.impacts.clear()
         self.move_markers.clear()
+        self.shake_remaining = 0.0
+        self.shake_duration = 0.0
+        self.shake_amplitude = 0.0
+        self.shake_cooldown_remaining = 0.0
         self._before_cooldowns.clear()
+        self._before_structure_shields.clear()
 
     def begin_frame(self, match: "Match") -> None:
         self._before_cooldowns = {
             robot.id: robot.attack_cooldown for robot in match.robots
         }
+        structure_statuses = self._structure_statuses(match)
+        self._before_structure_shields = {}
         for robot in match.robots:
             self.robots.setdefault(
                 robot.id,
@@ -243,14 +326,74 @@ class CombatVisualState:
                     position=robot.position,
                     hp=robot.hp,
                     cooldown=robot.attack_cooldown,
+                    alive=robot.alive,
                 ),
             )
+        for structure in match.structures:
+            state = self.structures.setdefault(
+                structure.id,
+                VisualStructureState(
+                    hp=structure.hp,
+                    shield=parse_virtual_shield(
+                        structure_statuses.get(structure.id, "")
+                    ),
+                ),
+            )
+            self._before_structure_shields[structure.id] = state.shield
 
     def add_move_marker(self, position: tuple[float, float]) -> None:
         self.move_markers.append(MoveMarker(position=position))
 
+    def trigger_screen_shake(self, amplitude: float, duration: float) -> None:
+        if self.shake_cooldown_remaining > 0:
+            return
+        amplitude = min(MAX_SCREEN_SHAKE_AMPLITUDE, max(0.0, amplitude))
+        duration = min(MAX_SCREEN_SHAKE_DURATION, max(0.0, duration))
+        if amplitude <= 0 or duration <= 0:
+            return
+        self.shake_amplitude = max(self.shake_amplitude, amplitude)
+        self.shake_duration = max(self.shake_duration, duration)
+        self.shake_remaining = max(self.shake_remaining, duration)
+        self.shake_cooldown_remaining = SCREEN_SHAKE_COOLDOWN
+
+    def screen_shake_offset(self) -> tuple[int, int]:
+        if self.shake_remaining <= 0 or self.shake_duration <= 0:
+            return (0, 0)
+        envelope = min(1.0, self.shake_remaining / self.shake_duration)
+        elapsed = self.shake_duration - self.shake_remaining
+        magnitude = self.shake_amplitude * envelope
+        return (
+            round(math.sin(elapsed * 92.0) * magnitude),
+            round(math.cos(elapsed * 73.0) * magnitude * 0.72),
+        )
+
     def after_match_update(self, match: "Match", dt: float) -> None:
+        dt = max(0.0, dt)
+        self.shake_remaining = max(0.0, self.shake_remaining - dt)
+        self.shake_cooldown_remaining = max(
+            0.0,
+            self.shake_cooldown_remaining - dt,
+        )
+        if self.shake_remaining <= 0:
+            self.shake_duration = 0.0
+            self.shake_amplitude = 0.0
+
         robot_by_id = {robot.id: robot for robot in match.robots}
+        structure_by_id = {
+            structure.id: structure for structure in match.structures
+        }
+        structure_statuses = self._structure_statuses(match)
+        current_shields = {
+            structure.id: parse_virtual_shield(
+                structure_statuses.get(structure.id, "")
+            )
+            for structure in match.structures
+        }
+        shield_drops = {
+            structure_id
+            for structure_id, previous in self._before_structure_shields.items()
+            if current_shields.get(structure_id, 0) < previous
+        }
         damage_events = {
             event.attacker_id: event
             for event in match.current_events
@@ -269,15 +412,28 @@ class CombatVisualState:
                     position=robot.position,
                     hp=robot.hp,
                     cooldown=robot.attack_cooldown,
+                    alive=robot.alive,
                 ),
             )
             previous_hp = state.hp
             state.advance_motion(robot.position, dt)
             state.register_damage(previous_hp, robot.hp)
+            state.register_lifecycle(robot.alive)
+
+        for structure in match.structures:
+            state = self.structures.setdefault(
+                structure.id,
+                VisualStructureState(
+                    hp=structure.hp,
+                    shield=current_shields.get(structure.id, 0),
+                ),
+            )
+            state.hp = structure.hp
+            state.shield = current_shields.get(structure.id, 0)
 
         for robot in match.robots:
             previous = self._before_cooldowns.get(robot.id, robot.attack_cooldown)
-            expected_without_shot = max(0.0, previous - max(0.0, dt))
+            expected_without_shot = max(0.0, previous - dt)
             committed = robot.attack_cooldown > expected_without_shot + 1e-6
             if not committed:
                 continue
@@ -305,11 +461,14 @@ class CombatVisualState:
                     attacker_team_id=robot.team,
                     target_id=target_id,
                     damaging=damaging,
+                    shielded=target_id in shield_drops,
                 )
             )
 
         for state in self.robots.values():
             state.advance_turret(dt)
+            state.advance_timers(dt)
+        for state in self.structures.values():
             state.advance_timers(dt)
 
         active_projectiles: list[VisualProjectile] = []
@@ -318,21 +477,61 @@ class CombatVisualState:
             if not projectile.expired:
                 active_projectiles.append(projectile)
                 continue
-            if projectile.damaging:
-                profile = projectile.profile
-                self.impacts.append(
-                    ImpactEffect(
-                        position=projectile.end,
-                        caliber=projectile.caliber,
-                        remaining=profile.impact_duration,
-                        duration=profile.impact_duration,
-                    )
+            if projectile.target_id is None:
+                continue
+
+            profile = projectile.profile
+            target_kind = (
+                "structure"
+                if projectile.target_id in structure_by_id
+                else "robot"
+            )
+            self.impacts.append(
+                ImpactEffect(
+                    position=projectile.end,
+                    caliber=projectile.caliber,
+                    remaining=(
+                        SHIELD_IMPACT_DURATION
+                        if projectile.shielded
+                        else profile.impact_duration
+                    ),
+                    duration=(
+                        SHIELD_IMPACT_DURATION
+                        if projectile.shielded
+                        else profile.impact_duration
+                    ),
+                    shielded=projectile.shielded,
+                    target_kind=target_kind,
                 )
-                if projectile.target_id in self.robots:
-                    self.robots[projectile.target_id].impact_remaining = max(
-                        self.robots[projectile.target_id].impact_remaining,
+            )
+
+            if projectile.target_id in self.robots:
+                target_state = self.robots[projectile.target_id]
+                target_state.impact_remaining = max(
+                    target_state.impact_remaining,
+                    profile.impact_duration,
+                )
+                target_state.impact_caliber = projectile.caliber
+            elif projectile.target_id in self.structures:
+                target_state = self.structures[projectile.target_id]
+                if projectile.shielded:
+                    target_state.shield_impact_remaining = max(
+                        target_state.shield_impact_remaining,
+                        SHIELD_IMPACT_DURATION,
+                    )
+                else:
+                    target_state.impact_remaining = max(
+                        target_state.impact_remaining,
                         profile.impact_duration,
                     )
+                    target_state.impact_caliber = projectile.caliber
+
+            if projectile.caliber == "42mm" or target_kind == "structure":
+                amplitude = 1.55 if projectile.caliber == "42mm" else 0.65
+                if target_kind == "structure":
+                    amplitude += 0.35
+                self.trigger_screen_shake(amplitude, 0.11)
+
         self.projectiles = active_projectiles
 
         for impact in self.impacts:
@@ -347,6 +546,17 @@ class CombatVisualState:
 
         for robot_id, robot in robot_by_id.items():
             self.robots[robot_id].cooldown = robot.attack_cooldown
+
+    @staticmethod
+    def _structure_statuses(match: "Match") -> dict[str, str]:
+        display_state = match.ruleset.display_state
+        if display_state is None:
+            return {}
+        return {
+            structure_id: status
+            for structure_id, _hp, _max_hp, status
+            in getattr(display_state, "structure_statuses", ())
+        }
 
     @staticmethod
     def _target_from_event(

@@ -20,6 +20,7 @@ from tarsgo_simulator.desktop.polish import (
 from tarsgo_simulator.desktop.viewport import Viewport
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
+    low_hp_warning_strength,
     projectile_visual_profile,
     robot_visual_profile,
 )
@@ -1970,9 +1971,15 @@ def _draw_rmuc_structure(
     status: str,
     animation_time: float,
     debug_geometry: bool,
+    impact_remaining: float = 0.0,
+    impact_caliber: str = "17mm",
+    shield_impact_remaining: float = 0.0,
 ) -> int:
     profile = structure_visual_profile(structure_type)
     draw_color = color if alive else _blend_color(MUTED_COLOR, ARENA_FLOOR_DARK, 0.38)
+    if alive and impact_remaining > 0:
+        flash_mix = 0.68 if impact_caliber == "42mm" else 0.38
+        draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     body_color = _blend_color(draw_color, ARENA_FLOOR_DARK, 0.58)
     edge_color = draw_color if alive else _blend_color(MUTED_COLOR, ARENA_GRID, 0.35)
     size = profile.size
@@ -2104,6 +2111,35 @@ def _draw_rmuc_structure(
         animation_time=animation_time,
         show_label=hovered or debug_geometry,
     )
+    if structure_type == "base" and shield_impact_remaining > 0:
+        progress = 1.0 - min(1.0, shield_impact_remaining / 0.20)
+        impact_radius = size + 9 + round(progress * 8)
+        pygame.draw.circle(
+            screen,
+            SHIELD_COLOR,
+            center,
+            impact_radius,
+            width=3,
+        )
+        for angle in (-0.55, -0.18, 0.22, 0.58):
+            start = (
+                center[0] + round(math.cos(angle) * (size + 4)),
+                center[1] + round(math.sin(angle) * (size + 4)),
+            )
+            end = (
+                center[0] + round(math.cos(angle) * (impact_radius + 5)),
+                center[1] + round(math.sin(angle) * (impact_radius + 5)),
+            )
+            pygame.draw.line(screen, SHIELD_COLOR, start, end, width=2)
+    elif impact_remaining > 0:
+        ring_radius = size + (7 if impact_caliber == "42mm" else 4)
+        pygame.draw.circle(
+            screen,
+            IMPACT_COLOR,
+            center,
+            ring_radius,
+            width=3 if impact_caliber == "42mm" else 2,
+        )
 
     bar_width = size * 2 + 14
     bar_rect = pygame.Rect(
@@ -2185,6 +2221,95 @@ def _draw_selection_feedback(
         )
 
 
+def _draw_robot_lifecycle_effects(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    radius: int,
+    color: tuple[int, int, int],
+    alive: bool,
+    destroy_remaining: float,
+    destroy_progress: float,
+    respawn_remaining: float,
+    respawn_progress: float,
+) -> None:
+    if destroy_remaining > 0:
+        burst = radius + 6 + round(18 * destroy_progress)
+        for index in range(8):
+            angle = index * math.tau / 8 + 0.22
+            inner = radius * (0.45 + 0.10 * (index % 2))
+            start = (
+                center[0] + round(math.cos(angle) * inner),
+                center[1] + round(math.sin(angle) * inner),
+            )
+            end = (
+                center[0] + round(math.cos(angle) * burst),
+                center[1] + round(math.sin(angle) * burst),
+            )
+            spark_color = IMPACT_COLOR if index % 2 == 0 else WARNING_COLOR
+            pygame.draw.line(screen, spark_color, start, end, width=2)
+        core_radius = max(2, round(8 * (1.0 - destroy_progress)))
+        pygame.draw.circle(screen, IMPACT_COLOR, center, core_radius)
+    elif not alive:
+        wreck = max(5, radius // 2)
+        pygame.draw.line(
+            screen,
+            ROBOT_OUTLINE,
+            (center[0] - wreck, center[1] - wreck),
+            (center[0] + wreck, center[1] + wreck),
+            width=2,
+        )
+        pygame.draw.line(
+            screen,
+            ROBOT_OUTLINE,
+            (center[0] + wreck, center[1] - wreck),
+            (center[0] - wreck, center[1] + wreck),
+            width=2,
+        )
+
+    if respawn_remaining > 0 and alive:
+        layer_radius = radius + 16
+        layer = pygame.Surface(
+            (layer_radius * 2 + 6, layer_radius * 2 + 6),
+            pygame.SRCALPHA,
+        )
+        local_center = (layer.get_width() // 2, layer.get_height() // 2)
+        alpha = round(55 + 70 * (1.0 - respawn_progress))
+        pygame.draw.circle(
+            layer,
+            (*SHIELD_COLOR, alpha),
+            local_center,
+            radius + 7,
+            width=2,
+        )
+        outer = radius + 13 - round(5 * respawn_progress)
+        pygame.draw.circle(
+            layer,
+            (*color, max(35, alpha - 25)),
+            local_center,
+            outer,
+            width=1,
+        )
+        scan_y = round(
+            local_center[1] - radius
+            + min(1.0, respawn_progress) * radius * 2
+        )
+        pygame.draw.line(
+            layer,
+            (*SHIELD_COLOR, 150),
+            (local_center[0] - radius, scan_y),
+            (local_center[0] + radius, scan_y),
+            width=2,
+        )
+        screen.blit(
+            layer,
+            (
+                center[0] - local_center[0],
+                center[1] - local_center[1],
+            ),
+        )
+
+
 def _draw_rmuc_robot_shape(
     screen: pygame.Surface,
     *,
@@ -2199,12 +2324,22 @@ def _draw_rmuc_robot_shape(
     muzzle_remaining: float,
     muzzle_caliber: str,
     impact_remaining: float,
+    impact_caliber: str = "17mm",
+    destroy_remaining: float = 0.0,
+    destroy_progress: float = 1.0,
+    respawn_remaining: float = 0.0,
+    respawn_progress: float = 1.0,
     raw_status: str = "",
     invincible: bool = False,
     hp_ratio: float = 1.0,
 ) -> int:
     profile = robot_visual_profile(robot_type)
     draw_color = color if alive else MUTED_COLOR
+    if alive and impact_remaining > 0:
+        flash_mix = 0.72 if impact_caliber == "42mm" else 0.44
+        draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
+    if alive and respawn_remaining > 0:
+        draw_color = _blend_color(draw_color, SHIELD_COLOR, 0.28)
     half_w = profile.body_width / 2
     half_h = profile.body_height / 2
     body_points = [
@@ -2319,12 +2454,31 @@ def _draw_rmuc_robot_shape(
         shield_pulse = 1 + round(
             2 * (0.5 + 0.5 * math.sin(animation_time * 3.0))
         )
+        shield_radius = radius + 5 + shield_pulse
+        layer = pygame.Surface(
+            (shield_radius * 2 + 8, shield_radius * 2 + 8),
+            pygame.SRCALPHA,
+        )
+        local_center = (layer.get_width() // 2, layer.get_height() // 2)
         pygame.draw.circle(
-            screen,
-            SHIELD_COLOR,
-            center,
-            radius + 5 + shield_pulse,
+            layer,
+            (*SHIELD_COLOR, 22),
+            local_center,
+            shield_radius + 2,
+        )
+        pygame.draw.circle(
+            layer,
+            (*SHIELD_COLOR, 105),
+            local_center,
+            shield_radius,
             width=2,
+        )
+        screen.blit(
+            layer,
+            (
+                center[0] - local_center[0],
+                center[1] - local_center[1],
+            ),
         )
     if "VULN" in raw_status:
         pygame.draw.circle(
@@ -2334,24 +2488,37 @@ def _draw_rmuc_robot_shape(
             radius + 7,
             width=2,
         )
-    if 0 < hp_ratio <= 0.25 and alive:
-        warning_pulse = 0.5 + 0.5 * math.sin(animation_time * 5.0)
-        warning_radius = radius + 10 + round(2 * warning_pulse)
+    warning_strength = low_hp_warning_strength(hp_ratio, animation_time)
+    if warning_strength > 0 and alive:
+        warning_radius = radius + 9 + round(3 * warning_strength)
+        warning_color = _blend_color(WARNING_COLOR, DANGER_COLOR, warning_strength * 0.45)
         pygame.draw.circle(
             screen,
-            WARNING_COLOR,
+            warning_color,
             center,
             warning_radius,
             width=1,
         )
     if impact_remaining > 0:
+        impact_radius = radius + (7 if impact_caliber == "42mm" else 4)
         pygame.draw.circle(
             screen,
             IMPACT_COLOR,
             center,
-            radius + 4,
-            width=2,
+            impact_radius,
+            width=3 if impact_caliber == "42mm" else 2,
         )
+    _draw_robot_lifecycle_effects(
+        screen,
+        center=center,
+        radius=radius,
+        color=color,
+        alive=alive,
+        destroy_remaining=destroy_remaining,
+        destroy_progress=destroy_progress,
+        respawn_remaining=respawn_remaining,
+        respawn_progress=respawn_progress,
+    )
     if selected:
         _draw_selection_feedback(
             screen,
@@ -2371,20 +2538,43 @@ def _draw_visual_projectiles(
         profile = projectile.profile
         progress = projectile.progress
         head = viewport.world_to_screen(projectile.position)
-        tail_progress = max(0.0, progress - (0.20 if profile.caliber == "17mm" else 0.14))
-        tail_world = (
-            projectile.start[0]
-            + (projectile.end[0] - projectile.start[0]) * tail_progress,
-            projectile.start[1]
-            + (projectile.end[1] - projectile.start[1]) * tail_progress,
-        )
-        tail = viewport.world_to_screen(tail_world)
-        start = (round(tail[0]), round(tail[1]))
+        trail_fraction = 0.24 if profile.caliber == "17mm" else 0.18
+        tail_progress = max(0.0, progress - trail_fraction)
+        mid_progress = max(0.0, progress - trail_fraction * 0.42)
+
+        def _point_at(value: float) -> tuple[int, int]:
+            world = (
+                projectile.start[0]
+                + (projectile.end[0] - projectile.start[0]) * value,
+                projectile.start[1]
+                + (projectile.end[1] - projectile.start[1]) * value,
+            )
+            point = viewport.world_to_screen(world)
+            return (round(point[0]), round(point[1]))
+
+        tail = _point_at(tail_progress)
+        mid = _point_at(mid_progress)
         end = (round(head[0]), round(head[1]))
+        faded = _blend_color(TRACER_COLOR, ARENA_FLOOR, 0.58)
+        pygame.draw.line(
+            screen,
+            faded,
+            tail,
+            mid,
+            width=max(1, profile.tracer_width - 1),
+        )
+        if profile.caliber == "42mm":
+            pygame.draw.line(
+                screen,
+                _blend_color(IMPACT_COLOR, ARENA_FLOOR, 0.30),
+                mid,
+                end,
+                width=profile.tracer_width + 2,
+            )
         pygame.draw.line(
             screen,
             TRACER_COLOR,
-            start,
+            mid,
             end,
             width=profile.tracer_width,
         )
@@ -2397,18 +2587,51 @@ def _draw_visual_projectiles(
 
     for impact in visual_state.impacts:
         point = viewport.world_to_screen(impact.position)
+        center = (round(point[0]), round(point[1]))
         profile = projectile_visual_profile(impact.caliber)
+        if impact.shielded:
+            radius = round(9 + impact.progress * 13)
+            pygame.draw.circle(
+                screen,
+                SHIELD_COLOR,
+                center,
+                radius,
+                width=3,
+            )
+            pygame.draw.circle(
+                screen,
+                _blend_color(SHIELD_COLOR, TEXT_COLOR, 0.35),
+                center,
+                max(3, radius // 3),
+                width=1,
+            )
+            continue
+
         radius = round(
             (5 if profile.caliber == "17mm" else 9)
-            + impact.progress * (7 if profile.caliber == "17mm" else 13)
+            + impact.progress * (7 if profile.caliber == "17mm" else 14)
         )
         pygame.draw.circle(
             screen,
             IMPACT_COLOR,
-            (round(point[0]), round(point[1])),
+            center,
             radius,
             width=2 if profile.caliber == "17mm" else 3,
         )
+        if profile.caliber == "42mm":
+            inner = max(3, round(radius * 0.35))
+            pygame.draw.circle(screen, WARNING_COLOR, center, inner)
+            ray = radius + 5
+            for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
+                start = (
+                    center[0] + round(math.cos(angle) * (radius - 2)),
+                    center[1] + round(math.sin(angle) * (radius - 2)),
+                )
+                end = (
+                    center[0] + round(math.cos(angle) * ray),
+                    center[1] + round(math.sin(angle) * ray),
+                )
+                pygame.draw.line(screen, IMPACT_COLOR, start, end, width=2)
 
 
 def _draw_move_markers(
@@ -2522,6 +2745,17 @@ def _draw(
         if display_state is not None
         else {}
     )
+    if is_rmuc and visual_state is not None:
+        shake_x, shake_y = visual_state.screen_shake_offset()
+        if shake_x or shake_y:
+            viewport = Viewport(
+                origin=(
+                    viewport.origin[0] + shake_x,
+                    viewport.origin[1] + shake_y,
+                ),
+                scale=viewport.scale,
+                world_size=viewport.world_size,
+            )
 
     if is_rmuc:
         _draw_rmuc_hud(
@@ -2725,6 +2959,11 @@ def _draw(
             (structure.hp, structure.max_hp, ""),
         )
         if is_rmuc:
+            visual_structure = (
+                visual_state.structures.get(structure.id)
+                if visual_state is not None
+                else None
+            )
             _draw_rmuc_structure(
                 screen,
                 small_font,
@@ -2737,6 +2976,21 @@ def _draw(
                 status=structure_status,
                 animation_time=animation_time,
                 debug_geometry=debug_geometry,
+                impact_remaining=(
+                    visual_structure.impact_remaining
+                    if visual_structure is not None
+                    else 0.0
+                ),
+                impact_caliber=(
+                    visual_structure.impact_caliber
+                    if visual_structure is not None
+                    else "17mm"
+                ),
+                shield_impact_remaining=(
+                    visual_structure.shield_impact_remaining
+                    if visual_structure is not None
+                    else 0.0
+                ),
             )
         else:
             size = max(13, round(viewport.world_length_to_screen(34)))
@@ -2795,6 +3049,11 @@ def _draw(
                 muzzle_remaining=visual_robot.muzzle_remaining,
                 muzzle_caliber=visual_robot.muzzle_caliber,
                 impact_remaining=visual_robot.impact_remaining,
+                impact_caliber=visual_robot.impact_caliber,
+                destroy_remaining=visual_robot.destroy_remaining,
+                destroy_progress=visual_robot.destroy_progress,
+                respawn_remaining=visual_robot.respawn_remaining,
+                respawn_progress=visual_robot.respawn_progress,
                 raw_status=robot_statuses.get(robot.id, ""),
                 invincible=(
                     robot.alive
@@ -2844,9 +3103,21 @@ def _draw(
                 )
         hp_width = round(bar_width * robot.hp / robot.max_hp)
         if hp_width:
+            hp_fill = HP_COLOR
+            if is_rmuc and robot.alive and robot.max_hp:
+                warning = low_hp_warning_strength(
+                    robot.hp / robot.max_hp,
+                    animation_time,
+                )
+                if warning > 0:
+                    hp_fill = _blend_color(
+                        HP_COLOR,
+                        DANGER_COLOR,
+                        min(0.72, warning * 0.72),
+                    )
             pygame.draw.rect(
                 screen,
-                HP_COLOR,
+                hp_fill,
                 (bar_x, bar_y, hp_width, bar_height),
             )
 
