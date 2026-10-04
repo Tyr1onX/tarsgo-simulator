@@ -117,15 +117,19 @@ def test_engineer_controls_are_contextual() -> None:
     engineer = contextual_controls({"engineer"})
     combat = contextual_controls({"hero"})
     none = contextual_controls(set())
+    spectator = contextual_controls({"hero"}, spectator=True)
 
     engineer_labels = {key for key, _action, _enabled in engineer}
     combat_labels = {key for key, _action, _enabled in combat}
     none_labels = {key for key, _action, _enabled in none}
+    spectator_rows = {(key, action) for key, action, _enabled in spectator}
 
     assert {"G", "1-4", "回车", "Q / W"} <= engineer_labels
     assert "G" not in combat_labels
     assert {"E", "F"} <= combat_labels
     assert "E" not in none_labels
+    assert ("左键", "查看单位") in spectator_rows
+    assert all(key not in {"E", "F", "G", "1-4", "右键"} for key, _action in spectator_rows)
 
 
 def test_base_and_outpost_have_distinct_structure_profiles() -> None:
