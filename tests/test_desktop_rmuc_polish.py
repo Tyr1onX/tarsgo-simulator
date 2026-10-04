@@ -243,6 +243,14 @@ def test_observer_panel_cards_are_compact_and_non_overlapping() -> None:
         assert team.bottom < controls.top
 
 
+def test_hover_helper_is_safe_without_video_system() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.display.quit()
+
+    assert not app._screen_rect_is_hovered(pygame.Rect(0, 0, 20, 20))
+
+
 def test_zone_labels_are_contextual_in_observer_view() -> None:
     app = _app()
 
