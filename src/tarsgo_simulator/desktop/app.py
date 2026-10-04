@@ -47,9 +47,12 @@ IMPACT_COLOR = (255, 218, 132)
 ROBOT_OUTLINE = (27, 35, 42)
 ARENA_GRID = (72, 88, 94)
 ARENA_MIDLINE = (112, 130, 134)
-PANEL_BACKGROUND = (27, 35, 44)
-PANEL_SECTION = (35, 45, 55)
-PANEL_BORDER = (73, 88, 98)
+PANEL_BACKGROUND = (23, 30, 38)
+PANEL_SECTION = (31, 40, 49)
+PANEL_SECTION_ALT = (27, 35, 43)
+PANEL_BORDER = (67, 82, 94)
+TEAM_RED_COLOR = (213, 83, 78)
+TEAM_BLUE_COLOR = (80, 137, 211)
 SHIELD_COLOR = (91, 178, 235)
 WARNING_COLOR = (240, 187, 92)
 DANGER_COLOR = (234, 104, 96)
@@ -67,19 +70,19 @@ FIELD_VIEW_RECT = (
     WINDOW_SIZE[0] - WINDOW_MARGIN * 2,
     WINDOW_SIZE[1] - FIELD_TOP - WINDOW_MARGIN,
 )
-RMUC_PANEL_WIDTH = 250
-RMUC_PANEL_GAP = 14
+RMUC_PANEL_WIDTH = 236
+RMUC_PANEL_GAP = 12
 RMUC_FIELD_VIEW_RECT = (
-    20,
-    96,
-    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - RMUC_PANEL_GAP - 34,
-    520,
+    18,
+    92,
+    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - RMUC_PANEL_GAP - 30,
+    536,
 )
 RMUC_PANEL_RECT = (
-    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - 18,
+    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - 16,
     92,
     RMUC_PANEL_WIDTH,
-    WINDOW_SIZE[1] - 110,
+    WINDOW_SIZE[1] - 108,
 )
 ZONE_STYLE = {
     "red-supply": (RED_SUPPLY_COLOR, "RED SUPPLY"),
@@ -515,16 +518,6 @@ def _rmuc_zone_style(
 
 
 def _rmuc_robot_labels(match: Match) -> dict[str, str]:
-    display_state = match.ruleset.display_state
-    progression = (
-        {
-            robot_id: level
-            for robot_id, level, _experience, _level_cap
-            in display_state.robot_progression
-        }
-        if display_state is not None
-        else {}
-    )
     labels: dict[str, str] = {}
     team_ids = sorted({robot.team for robot in match.robots})
     for team_id in team_ids:
@@ -540,18 +533,15 @@ def _rmuc_robot_labels(match: Match) -> dict[str, str]:
         }
         for robot in team_robots:
             if robot.type == "hero":
-                label = "英"
+                label = "H"
             elif robot.type == "engineer":
-                label = "工"
+                label = "E"
             elif robot.type == "infantry":
-                label = f"步{infantry_index[robot.id]}"
+                label = f"I{infantry_index[robot.id]}"
             elif robot.type == "sentry":
-                label = "哨"
+                label = "S"
             else:
                 label = robot.type[:1].upper()
-            level = progression.get(robot.id)
-            if level is not None:
-                label = f"{label} {level}级"
             labels[robot.id] = label
     return labels
 
@@ -908,17 +898,48 @@ def _draw_progress_bar(
         )
 
 
-def _draw_section_title(
-    screen: pygame.Surface,
-    small_font: pygame.font.Font,
-    title: str,
+def _rmuc_team_color(match: Match, team_id: str) -> tuple[int, int, int]:
+    for side, team in match.config.scenario.teams.items():
+        if team.team_id == team_id:
+            return TEAM_RED_COLOR if side == "red" else TEAM_BLUE_COLOR
+    return MUTED_COLOR
+
+
+def _should_show_zone_label(
     *,
-    x: int,
-    y: int,
-) -> int:
-    surface = small_font.render(title, True, MUTED_COLOR)
-    screen.blit(surface, (x, y))
-    return y + 18
+    emphasized: bool,
+    occupied_by_selected: bool,
+    hovered: bool,
+) -> bool:
+    return emphasized or occupied_by_selected or hovered
+
+
+def _rmuc_hud_rects(
+    screen_width: int,
+) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
+    return (
+        pygame.Rect(18, 9, 324, 66),
+        pygame.Rect(screen_width // 2 - 62, 7, 124, 68),
+        pygame.Rect(screen_width - 342, 9, 324, 66),
+    )
+
+
+def _rmuc_panel_layout(
+    panel: pygame.Rect,
+    selected_count: int,
+) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
+    inner_x = panel.x + 4
+    inner_width = panel.width - 8
+    if selected_count == 0:
+        unit_height = 82
+    elif selected_count == 1:
+        unit_height = 286
+    else:
+        unit_height = min(166, 52 + min(selected_count, 5) * 20)
+    unit_rect = pygame.Rect(inner_x, panel.y + 2, inner_width, unit_height)
+    team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 108)
+    controls_rect = pygame.Rect(inner_x, team_rect.bottom + 8, inner_width, 82)
+    return unit_rect, team_rect, controls_rect
 
 
 def _selected_robot_types(
@@ -942,8 +963,9 @@ def _draw_selected_unit_card(
 ) -> None:
     pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=7)
     pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
-    x = rect.x + 12
-    y = rect.y + 10
+    x = rect.x + 11
+    y = rect.y + 9
+    content_width = rect.width - 22
     robots_by_id = {robot.id: robot for robot in match.robots}
     selected = [
         robots_by_id[robot_id]
@@ -952,12 +974,9 @@ def _draw_selected_unit_card(
     ]
 
     if not selected:
+        screen.blit(small_font.render("观察单位", True, TEXT_COLOR), (x, y))
         screen.blit(
-            small_font.render("已选单位", True, SELECTION_COLOR),
-            (x, y),
-        )
-        screen.blit(
-            small_font.render("请选择一个单位", True, MUTED_COLOR),
+            small_font.render("点击战场单位查看状态", True, MUTED_COLOR),
             (x, y + 26),
         )
         return
@@ -965,18 +984,28 @@ def _draw_selected_unit_card(
     if len(selected) != 1:
         screen.blit(
             small_font.render(
-                f"已选择 {len(selected)} 个单位",
+                f"多单位观察 · {len(selected)}",
                 True,
-                SELECTION_COLOR,
+                TEXT_COLOR,
             ),
             (x, y),
         )
         y += 28
-        for robot in selected[:7]:
+        for robot in selected[:5]:
             label = labels.get(robot.id, robot.id)
-            text = f"{label:<7} 生命 {robot.hp:>4}/{robot.max_hp:<4}"
-            color = TEXT_COLOR if robot.alive else MUTED_COLOR
-            screen.blit(small_font.render(text, True, color), (x, y))
+            team_color = _rmuc_team_color(match, robot.team)
+            pygame.draw.circle(screen, team_color, (x + 5, y + 7), 4)
+            screen.blit(
+                small_font.render(label, True, TEXT_COLOR if robot.alive else MUTED_COLOR),
+                (x + 14, y),
+            )
+            _draw_progress_bar(
+                screen,
+                rect=pygame.Rect(x + 46, y + 4, content_width - 48, 7),
+                value=robot.hp,
+                maximum=robot.max_hp,
+                fill_color=HP_COLOR if robot.alive else MUTED_COLOR,
+            )
             y += 20
         return
 
@@ -1013,138 +1042,115 @@ def _draw_selected_unit_card(
     }
     engineer_units = dict(display_state.engineer_energy_units)
 
-    level_state = progression.get(robot.id)
-    title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
-    if level_state is not None:
-        title += f" · {level_state[0]}级"
-    screen.blit(
-        small_font.render("单位", True, MUTED_COLOR),
-        (x, y),
+    team_color = _rmuc_team_color(match, robot.team)
+    pygame.draw.rect(
+        screen,
+        team_color,
+        pygame.Rect(rect.x, rect.y, 4, rect.height),
+        border_top_left_radius=7,
+        border_bottom_left_radius=7,
     )
-    y += 18
-    title_surface = small_font.render(title, True, SELECTION_COLOR)
-    screen.blit(title_surface, (x, y))
-    y += 22
+
+    level_state = progression.get(robot.id)
+    level = level_state[0] if level_state is not None else None
+    role = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
+    title = f"{role} · {level}级" if level is not None else role
+    label = labels.get(robot.id, robot.id)
+    screen.blit(small_font.render(title, True, TEXT_COLOR), (x, y))
+    label_surface = small_font.render(label, True, team_color)
+    screen.blit(label_surface, (rect.right - 11 - label_surface.get_width(), y))
+    y += 25
+
     ai_intent = match.ai_intent(robot.id)
     if ai_intent is not None:
+        intent_rect = pygame.Rect(x, y, content_width, 34)
+        pygame.draw.rect(screen, PANEL_SECTION_ALT, intent_rect, border_radius=5)
+        pygame.draw.rect(screen, team_color, intent_rect, width=1, border_radius=5)
         screen.blit(
-            small_font.render(f"当前 AI 意图  {ai_intent}", True, MUTED_COLOR),
-            (x, y),
+            small_font.render("AI", True, team_color),
+            (intent_rect.x + 7, intent_rect.y + 7),
         )
-        y += 20
+        screen.blit(
+            small_font.render(ai_intent, True, TEXT_COLOR),
+            (intent_rect.x + 32, intent_rect.y + 7),
+        )
+        y = intent_rect.bottom + 10
 
-    y = _draw_section_title(screen, small_font, "生命", x=x, y=y)
-    hp_text = small_font.render(
-        f"生命      {robot.hp:>4} / {robot.max_hp:<4}",
+    hp_label = small_font.render(
+        f"HP  {robot.hp} / {robot.max_hp}",
         True,
         TEXT_COLOR,
     )
-    screen.blit(hp_text, (x, y))
+    screen.blit(hp_label, (x, y))
     y += 18
     _draw_progress_bar(
         screen,
-        rect=pygame.Rect(x, y, rect.width - 24, 7),
+        rect=pygame.Rect(x, y, content_width, 8),
         value=robot.hp,
         maximum=robot.max_hp,
         fill_color=HP_COLOR,
     )
-    y += 16
-
-    if level_state is not None:
-        _level, experience, _cap = level_state
-        screen.blit(
-            small_font.render(f"经验      {experience:g}", True, TEXT_COLOR),
-            (x, y),
-        )
-        y += 21
+    y += 17
 
     projectile_state = projectiles.get(robot.id)
     heat_state = heat.get(robot.id)
-    if projectile_state is not None or heat_state is not None:
-        y = _draw_section_title(screen, small_font, "武器", x=x, y=y)
+    chassis_state = chassis.get(robot.id)
+    column_gap = 10
+    column_width = (content_width - column_gap) // 2
+    right_x = x + column_width + column_gap
+
     if projectile_state is not None:
         projectile, count = projectile_state
         screen.blit(
-            small_font.render(
-                f"弹量      {projectile}: {count}",
-                True,
-                TEXT_COLOR,
-            ),
+            small_font.render(f"弹 {count} · {projectile}", True, TEXT_COLOR),
             (x, y),
         )
-        y += 19
     if heat_state is not None:
         current, limit, _locked, _permanent = heat_state
         screen.blit(
-            small_font.render(
-                f"热量      {current:g} / {limit:g}",
-                True,
-                TEXT_COLOR,
-            ),
-            (x, y),
+            small_font.render(f"热 {current:g}/{limit:g}", True, TEXT_COLOR),
+            (right_x, y),
         )
-        y += 18
+    y += 21
+
+    if heat_state is not None:
+        current, limit, _locked, _permanent = heat_state
         _draw_progress_bar(
             screen,
-            rect=pygame.Rect(x, y, rect.width - 24, 6),
+            rect=pygame.Rect(right_x, y - 3, column_width, 5),
             value=current,
             maximum=limit,
             fill_color=WARNING_COLOR,
         )
-        y += 15
-
-    chassis_state = chassis.get(robot.id)
     if chassis_state is not None:
         buffer, maximum, power, limit, power_off_remaining = chassis_state
-        y = _draw_section_title(screen, small_font, "底盘", x=x, y=y)
         screen.blit(
-            small_font.render(
-                f"缓冲      {buffer:g} / {maximum:g}",
-                True,
-                TEXT_COLOR,
-            ),
-            (x, y),
+            small_font.render(f"缓冲 {buffer:g}/{maximum:g}", True, TEXT_COLOR),
+            (x, y + 8),
         )
-        y += 18
+        screen.blit(
+            small_font.render(f"功率 {power:g}/{limit:g}W", True, MUTED_COLOR),
+            (right_x, y + 8),
+        )
         _draw_progress_bar(
             screen,
-            rect=pygame.Rect(x, y, rect.width - 24, 6),
+            rect=pygame.Rect(x, y + 28, column_width, 5),
             value=buffer,
             maximum=maximum,
-            fill_color=PLAYER_COLOR,
+            fill_color=SHIELD_COLOR,
         )
-        y += 15
-        screen.blit(
-            small_font.render(
-                f"功率      {power:g} / {limit:g} W",
-                True,
-                TEXT_COLOR,
-            ),
-            (x, y),
-        )
-        y += 19
+        y += 42
     else:
         power_off_remaining = 0.0
+        y += 11
 
+    extra_parts: list[tuple[str, tuple[int, int, int]]] = []
     if robot.id in engineer_units:
-        screen.blit(
-            small_font.render(
-                f"能量单元      {engineer_units[robot.id]}",
-                True,
-                RESOURCE_COLOR,
-            ),
-            (x, y),
-        )
-        y += 19
+        extra_parts.append((f"能量单元 {engineer_units[robot.id]}", RESOURCE_COLOR))
     if robot.id in reserves:
-        screen.blit(
-            small_font.render(
-                f"堡垒储备      {reserves[robot.id]}",
-                True,
-                FORTRESS_COLOR,
-            ),
-            (x, y),
-        )
+        extra_parts.append((f"堡垒储备 {reserves[robot.id]}", FORTRESS_COLOR))
+    for text_value, text_color in extra_parts:
+        screen.blit(small_font.render(text_value, True, text_color), (x, y))
         y += 19
 
     raw_status = statuses.get(robot.id, "")
@@ -1158,18 +1164,15 @@ def _draw_selected_unit_card(
         permanently_locked=permanently_locked,
         power_off=power_off_remaining > 0,
     )
-    y = _draw_section_title(screen, small_font, "状态", x=x, y=y)
     if badges:
         _draw_badges(
             screen,
             small_font,
             badges,
             x=x,
-            y=y,
-            max_width=rect.width - 24,
+            y=min(y + 3, rect.bottom - 30),
+            max_width=content_width,
         )
-    else:
-        screen.blit(small_font.render("—", True, MUTED_COLOR), (x, y))
 
 
 def _draw_team_systems_card(
@@ -1186,12 +1189,13 @@ def _draw_team_systems_card(
     y = rect.y + 10
     if not lines:
         return
-    screen.blit(small_font.render(lines[0], True, MUTED_COLOR), (x, y))
+    screen.blit(small_font.render("队伍态势", True, TEXT_COLOR), (x, y))
     y += 22
     for line in lines[1:]:
         if y > rect.bottom - 18:
             break
-        screen.blit(small_font.render(line, True, MUTED_COLOR), (x, y))
+        color = TEXT_COLOR if line.startswith(("金币", "科技核心")) else MUTED_COLOR
+        screen.blit(small_font.render(line, True, color), (x, y))
         y += 17
 
 
@@ -1205,19 +1209,34 @@ def _draw_context_controls(
 ) -> None:
     pygame.draw.rect(screen, PANEL_SECTION, rect, border_radius=7)
     pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
-    x = rect.x + 12
-    y = rect.y + 9
-    title = "调试几何：开启" if debug_geometry else "操作"
+    x = rect.x + 11
+    y = rect.y + 8
+    title = "调试几何：开启" if debug_geometry else "观战操作"
     title_color = SELECTION_COLOR if debug_geometry else MUTED_COLOR
     screen.blit(small_font.render(title, True, title_color), (x, y))
-    y += 22
-    for key, action, enabled in contextual_controls(selected_types, spectator=True):
+    y += 23
+    rows = contextual_controls(selected_types, spectator=True)
+    compact_keys = {"Shift+左键": "Shift"}
+    compact_actions = {
+        "查看单位": "查看",
+        "多选查看": "多选",
+        "框选查看": "框选",
+        "调试几何": "调试",
+        "重新开始": "重开",
+    }
+    column_width = (rect.width - 22) // 2
+    for index, (key, action, enabled) in enumerate(rows[:6]):
+        column = index % 2
+        row = index // 2
         color = TEXT_COLOR if enabled else MUTED_COLOR
+        item_x = x + column * column_width
+        item_y = y + row * 16
+        key_text = compact_keys.get(key, key)
+        action_text = compact_actions.get(action, action)
         screen.blit(
-            small_font.render(f"{key:<10} {action}", True, color),
-            (x, y),
+            small_font.render(f"{key_text} {action_text}", True, color),
+            (item_x, item_y),
         )
-        y += 15
 
 
 def _draw_rmuc_panel(
@@ -1231,18 +1250,13 @@ def _draw_rmuc_panel(
     debug_geometry: bool,
 ) -> None:
     panel = pygame.Rect(*RMUC_PANEL_RECT)
-    pygame.draw.rect(screen, PANEL_BACKGROUND, panel, border_radius=9)
-    pygame.draw.rect(screen, PANEL_BORDER, panel, width=1, border_radius=9)
-
-    inner_x = panel.x + 9
-    inner_width = panel.width - 18
-    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 352)
-    team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 112)
-    controls_rect = pygame.Rect(
-        inner_x,
-        team_rect.bottom + 8,
-        inner_width,
-        panel.bottom - (team_rect.bottom + 17),
+    selected_count = sum(
+        robot.id in selected_robot_ids
+        for robot in match.robots
+    )
+    unit_rect, team_rect, controls_rect = _rmuc_panel_layout(
+        panel,
+        selected_count,
     )
     _draw_selected_unit_card(
         screen,
@@ -1267,6 +1281,33 @@ def _draw_rmuc_panel(
         debug_geometry=debug_geometry,
     )
 
+def _draw_hud_structure_metric(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    *,
+    rect: pygame.Rect,
+    label: str,
+    hp: int,
+    max_hp: int,
+    color: tuple[int, int, int],
+    align_right: bool = False,
+) -> None:
+    label_surface = small_font.render(f"{label} {hp}", True, TEXT_COLOR)
+    label_x = (
+        rect.right - label_surface.get_width()
+        if align_right
+        else rect.x
+    )
+    screen.blit(label_surface, (label_x, rect.y))
+    _draw_progress_bar(
+        screen,
+        rect=pygame.Rect(rect.x, rect.y + 18, rect.width, 5),
+        value=hp,
+        maximum=max_hp,
+        fill_color=color,
+    )
+
+
 def _draw_team_hud_card(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -1275,37 +1316,77 @@ def _draw_team_hud_card(
     rect: pygame.Rect,
     name: str,
     base_hp: int,
+    base_max_hp: int,
     outpost_hp: int,
+    outpost_max_hp: int,
     coins: int,
     color: tuple[int, int, int],
     align_right: bool = False,
 ) -> None:
-    pygame.draw.rect(screen, PANEL_BACKGROUND, rect, border_radius=8)
-    pygame.draw.rect(screen, color, rect, width=2, border_radius=8)
+    pygame.draw.rect(screen, PANEL_BACKGROUND, rect, border_radius=7)
+    pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
+    accent = pygame.Rect(rect.x, rect.y, rect.width, 3)
+    pygame.draw.rect(screen, color, accent, border_radius=2)
+
     name_surface = font.render(name, True, color)
-    stats_surface = small_font.render(
-        f"基地 {base_hp:>4}   前哨站 {outpost_hp:>4}",
-        True,
-        TEXT_COLOR,
-    )
     coins_surface = small_font.render(f"金币 {coins}", True, MUTED_COLOR)
     if align_right:
         screen.blit(
             name_surface,
-            (rect.right - 12 - name_surface.get_width(), rect.y + 7),
+            (rect.right - 10 - name_surface.get_width(), rect.y + 7),
         )
-        screen.blit(
-            stats_surface,
-            (rect.right - 12 - stats_surface.get_width(), rect.y + 34),
-        )
+        screen.blit(coins_surface, (rect.x + 10, rect.y + 12))
+    else:
+        screen.blit(name_surface, (rect.x + 10, rect.y + 7))
         screen.blit(
             coins_surface,
-            (rect.right - 12 - coins_surface.get_width(), rect.y + 50),
+            (rect.right - 10 - coins_surface.get_width(), rect.y + 12),
+        )
+
+    gap = 12
+    metric_width = (rect.width - 20 - gap) // 2
+    first_rect = pygame.Rect(rect.x + 10, rect.y + 35, metric_width, 24)
+    second_rect = pygame.Rect(first_rect.right + gap, rect.y + 35, metric_width, 24)
+    if align_right:
+        _draw_hud_structure_metric(
+            screen,
+            small_font,
+            rect=first_rect,
+            label="前哨站",
+            hp=outpost_hp,
+            max_hp=outpost_max_hp,
+            color=color,
+            align_right=False,
+        )
+        _draw_hud_structure_metric(
+            screen,
+            small_font,
+            rect=second_rect,
+            label="基地",
+            hp=base_hp,
+            max_hp=base_max_hp,
+            color=color,
+            align_right=True,
         )
     else:
-        screen.blit(name_surface, (rect.x + 12, rect.y + 7))
-        screen.blit(stats_surface, (rect.x + 12, rect.y + 34))
-        screen.blit(coins_surface, (rect.x + 12, rect.y + 50))
+        _draw_hud_structure_metric(
+            screen,
+            small_font,
+            rect=first_rect,
+            label="基地",
+            hp=base_hp,
+            max_hp=base_max_hp,
+            color=color,
+        )
+        _draw_hud_structure_metric(
+            screen,
+            small_font,
+            rect=second_rect,
+            label="前哨站",
+            hp=outpost_hp,
+            max_hp=outpost_max_hp,
+            color=color,
+        )
 
 
 def _draw_rmuc_hud(
@@ -1337,27 +1418,34 @@ def _draw_rmuc_hud(
         if opponent_team.startswith("opponent")
         else match.team_name(opponent_team)
     )
+    player_color = _rmuc_team_color(match, player_team)
+    opponent_color = _rmuc_team_color(match, opponent_team)
+    player_rect, timer_rect, opponent_rect = _rmuc_hud_rects(screen.get_width())
     _draw_team_hud_card(
         screen,
         font,
         small_font,
-        rect=pygame.Rect(20, 9, 316, 68),
+        rect=player_rect,
         name=player_name,
         base_hp=player_base.hp,
+        base_max_hp=player_base.max_hp,
         outpost_hp=player_outpost.hp,
+        outpost_max_hp=player_outpost.max_hp,
         coins=coins.get(player_team, 0),
-        color=PLAYER_COLOR,
+        color=player_color,
     )
     _draw_team_hud_card(
         screen,
         font,
         small_font,
-        rect=pygame.Rect(screen.get_width() - 336, 9, 316, 68),
+        rect=opponent_rect,
         name=opponent_name,
         base_hp=opponent_base.hp,
+        base_max_hp=opponent_base.max_hp,
         outpost_hp=opponent_outpost.hp,
+        outpost_max_hp=opponent_outpost.max_hp,
         coins=coins.get(opponent_team, 0),
-        color=OPPONENT_COLOR,
+        color=opponent_color,
         align_right=True,
     )
 
@@ -1370,15 +1458,17 @@ def _draw_rmuc_hud(
         )
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
+    pygame.draw.rect(screen, PANEL_SECTION_ALT, timer_rect, border_radius=8)
+    pygame.draw.rect(screen, PANEL_BORDER, timer_rect, width=1, border_radius=8)
     timer_surface = font.render(status, True, TEXT_COLOR)
     screen.blit(
         timer_surface,
-        timer_surface.get_rect(center=(screen.get_width() // 2, 31)),
+        timer_surface.get_rect(center=(timer_rect.centerx, timer_rect.y + 29)),
     )
-    match_label = small_font.render("比赛", True, MUTED_COLOR)
+    match_label = small_font.render("比赛时间", True, MUTED_COLOR)
     screen.blit(
         match_label,
-        match_label.get_rect(center=(screen.get_width() // 2, 57)),
+        match_label.get_rect(center=(timer_rect.centerx, timer_rect.y + 53)),
     )
 
 def _blend_color(
@@ -1402,12 +1492,12 @@ def _draw_rmuc_battlefield(
     half = field_rect.width // 2
     pygame.draw.rect(
         overlay,
-        (*PLAYER_COLOR, 13),
+        (*TEAM_RED_COLOR, 13),
         pygame.Rect(0, 0, half, field_rect.height),
     )
     pygame.draw.rect(
         overlay,
-        (*OPPONENT_COLOR, 13),
+        (*TEAM_BLUE_COLOR, 13),
         pygame.Rect(half, 0, field_rect.width - half, field_rect.height),
     )
     screen.blit(overlay, field_rect.topleft)
@@ -1558,9 +1648,9 @@ def _draw_rmuc_zone(
     emphasized = style.emphasized or occupied_by_selected
     family_color = _zone_family_color(style.family)
     team_color = (
-        RED_SUPPLY_COLOR
+        TEAM_RED_COLOR
         if zone_id.startswith("red-")
-        else BLUE_SUPPLY_COLOR
+        else TEAM_BLUE_COLOR
         if zone_id.startswith("blue-")
         else family_color
     )
@@ -1596,14 +1686,20 @@ def _draw_rmuc_zone(
         family=style.family,
         color=color,
     )
-    label_color = color if emphasized else _blend_color(color, MUTED_COLOR, 0.45)
-    label_surface = small_font.render(style.label, True, label_color)
-    screen.blit(
-        label_surface,
-        label_surface.get_rect(
-            center=(zone_rect.centerx, zone_rect.centery + 11)
-        ),
-    )
+    hovered = zone_rect.collidepoint(pygame.mouse.get_pos())
+    if _should_show_zone_label(
+        emphasized=style.emphasized,
+        occupied_by_selected=occupied_by_selected,
+        hovered=hovered,
+    ):
+        label_color = color if emphasized else _blend_color(color, TEXT_COLOR, 0.32)
+        label_surface = small_font.render(style.label, True, label_color)
+        screen.blit(
+            label_surface,
+            label_surface.get_rect(
+                center=(zone_rect.centerx, zone_rect.centery + 11)
+            ),
+        )
 
 
 def _draw_virtual_shield(
@@ -1614,6 +1710,7 @@ def _draw_virtual_shield(
     radius: int,
     shield: int,
     animation_time: float,
+    show_label: bool = False,
 ) -> None:
     if shield <= 0:
         return
@@ -1625,11 +1722,12 @@ def _draw_virtual_shield(
         radius + 7 + pulse,
         width=2,
     )
-    label = small_font.render(f"护盾 {shield}", True, SHIELD_COLOR)
-    screen.blit(
-        label,
-        label.get_rect(center=(center[0], center[1] - radius - 19)),
-    )
+    if show_label:
+        label = small_font.render(f"护盾 {shield}", True, SHIELD_COLOR)
+        screen.blit(
+            label,
+            label.get_rect(center=(center[0], center[1] - radius - 19)),
+        )
 
 
 def _draw_rmuc_structure(
@@ -1689,6 +1787,12 @@ def _draw_rmuc_structure(
             )
             pygame.draw.line(screen, draw_color, center, endpoint, width=2)
 
+    hovered = pygame.Rect(
+        center[0] - size - 8,
+        center[1] - size - 8,
+        (size + 8) * 2,
+        (size + 8) * 2,
+    ).collidepoint(pygame.mouse.get_pos())
     shield = parse_virtual_shield(status) if structure_type == "base" else 0
     _draw_virtual_shield(
         screen,
@@ -1697,6 +1801,7 @@ def _draw_rmuc_structure(
         radius=size,
         shield=shield,
         animation_time=animation_time,
+        show_label=hovered or debug_geometry,
     )
 
     bar_width = size * 2 + 14
@@ -1713,18 +1818,19 @@ def _draw_rmuc_structure(
         maximum=max_hp,
         fill_color=HP_COLOR if alive else MUTED_COLOR,
     )
-    label = "基地" if structure_type == "base" else "前哨站"
-    label_surface = small_font.render(
-        f"{label} {hp}/{max_hp}",
-        True,
-        TEXT_COLOR if alive else MUTED_COLOR,
-    )
-    screen.blit(
-        label_surface,
-        label_surface.get_rect(
-            center=(center[0], bar_rect.bottom + 10)
-        ),
-    )
+    if hovered or debug_geometry:
+        label = "基地" if structure_type == "base" else "前哨站"
+        label_surface = small_font.render(
+            f"{label} {hp}",
+            True,
+            TEXT_COLOR if alive else MUTED_COLOR,
+        )
+        screen.blit(
+            label_surface,
+            label_surface.get_rect(
+                center=(center[0], bar_rect.bottom + 10)
+            ),
+        )
     if debug_geometry and status:
         debug_surface = small_font.render(status, True, MUTED_COLOR)
         screen.blit(
@@ -2039,6 +2145,7 @@ def _draw_move_markers(
 
 def _draw_selected_paths(
     screen: pygame.Surface,
+    small_font: pygame.font.Font,
     match: Match,
     viewport: Viewport,
     selected_robot_ids: set[str],
@@ -2046,7 +2153,7 @@ def _draw_selected_paths(
     for robot in match.robots:
         if (
             robot.id not in selected_robot_ids
-            or not match.is_player_controlled(robot.id)
+            or not match.is_ai_controlled(robot.id)
             or not robot.path
         ):
             continue
@@ -2055,14 +2162,41 @@ def _draw_selected_paths(
             tuple(round(value) for value in viewport.world_to_screen(point))
             for point in world_points
         ]
-        if len(screen_points) >= 2:
-            pygame.draw.lines(
-                screen,
-                MUTED_COLOR,
-                False,
-                screen_points,
-                width=1,
+        if len(screen_points) < 2:
+            continue
+
+        team_color = _rmuc_team_color(match, robot.team)
+        path_color = _blend_color(team_color, TEXT_COLOR, 0.28)
+        pygame.draw.lines(
+            screen,
+            path_color,
+            False,
+            screen_points,
+            width=2,
+        )
+        start = screen_points[-2]
+        end = screen_points[-1]
+        angle = math.atan2(end[1] - start[1], end[0] - start[0])
+        arrow_length = 10
+        for offset in (-0.55, 0.55):
+            arrow_end = (
+                end[0] - round(math.cos(angle + offset) * arrow_length),
+                end[1] - round(math.sin(angle + offset) * arrow_length),
             )
+            pygame.draw.line(screen, path_color, end, arrow_end, width=2)
+        pygame.draw.circle(screen, team_color, end, 4, width=1)
+
+        intent = match.ai_intent(robot.id)
+        if intent:
+            label_surface = small_font.render(intent, True, TEXT_COLOR)
+            label_rect = label_surface.get_rect(
+                midbottom=(end[0], end[1] - 9)
+            )
+            label_rect.clamp_ip(screen.get_rect().inflate(-8, -8))
+            pill = label_rect.inflate(10, 6)
+            pygame.draw.rect(screen, PANEL_BACKGROUND, pill, border_radius=5)
+            pygame.draw.rect(screen, team_color, pill, width=1, border_radius=5)
+            screen.blit(label_surface, label_rect)
 
 
 def _draw(
@@ -2269,7 +2403,11 @@ def _draw(
             round(value)
             for value in viewport.world_to_screen(structure.position)
         )
-        color = PLAYER_COLOR if structure.team == player_team else OPPONENT_COLOR
+        color = (
+            _rmuc_team_color(match, structure.team)
+            if is_rmuc
+            else PLAYER_COLOR if structure.team == player_team else OPPONENT_COLOR
+        )
         hp, max_hp, structure_status = structure_statuses.get(
             structure.id,
             (structure.hp, structure.max_hp, ""),
@@ -2319,6 +2457,7 @@ def _draw(
     if is_rmuc and visual_state is not None:
         _draw_selected_paths(
             screen,
+            small_font,
             match,
             viewport,
             selected_robot_ids,
@@ -2330,7 +2469,11 @@ def _draw(
             round(value)
             for value in viewport.world_to_screen(robot.position)
         )
-        color = PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
+        color = (
+            _rmuc_team_color(match, robot.team)
+            if is_rmuc
+            else PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
+        )
         visual_robot = (
             visual_state.robots.get(robot.id)
             if is_rmuc and visual_state is not None
