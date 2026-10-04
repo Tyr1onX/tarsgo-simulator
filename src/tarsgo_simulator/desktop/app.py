@@ -167,7 +167,10 @@ def _ui_font(size: int) -> pygame.font.Font:
 
 
 def main(scenario_path: str | Path | None = None) -> None:
-    match = Match.from_scenario(scenario_path or default_scenario_path())
+    match = Match.from_scenario(
+        scenario_path or default_scenario_path(),
+        rmuc_spectator_ai=True,
+    )
     pygame.init()
     try:
         viewport = _viewport_for_match(match)
@@ -1997,6 +2000,7 @@ def _draw_visual_projectiles(
             end,
             profile.head_radius,
         )
+
     for impact in visual_state.impacts:
         point = viewport.world_to_screen(impact.position)
         profile = projectile_visual_profile(impact.caliber)
