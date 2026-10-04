@@ -43,15 +43,15 @@ _ZONE_FAMILIES = {
 }
 
 _ZONE_LABELS = {
-    "resource": "RESOURCE",
-    "assembly": "ASSEMBLY",
-    "supply-buff": "SUPPLY",
-    "base-buff": "BASE",
-    "outpost-buff": "OUTPOST",
-    "central-elevated-buff": "CENTRAL",
-    "trapezoid-buff": "TRAPEZOID",
-    "fortress-buff": "FORTRESS",
-    "outpost-rebuild": "REBUILD",
+    "resource": "资源区",
+    "assembly": "装配区",
+    "supply-buff": "补给区",
+    "base-buff": "基地区",
+    "outpost-buff": "前哨站区",
+    "central-elevated-buff": "中央区",
+    "trapezoid-buff": "梯形区",
+    "fortress-buff": "堡垒区",
+    "outpost-rebuild": "重建区",
 }
 
 _ROLE_ZONE_FAMILIES = {
@@ -109,50 +109,50 @@ def status_badges(
 ) -> tuple[BadgeSpec, ...]:
     badges: list[BadgeSpec] = []
     if invincible:
-        badges.append(BadgeSpec("INV", "shield"))
+        badges.append(BadgeSpec("无敌", "shield"))
 
     defense = re.search(r"(?:^|\s)DEF\s+(\d+)%", raw_status)
     if defense:
-        badges.append(BadgeSpec(f"DEF {defense.group(1)}", "defense"))
+        badges.append(BadgeSpec(f"防御 {defense.group(1)}%", "defense"))
 
     vulnerability = re.search(r"VULN(\d+)", raw_status)
     if vulnerability:
-        badges.append(BadgeSpec(f"VUL {vulnerability.group(1)}", "danger"))
+        badges.append(BadgeSpec(f"易伤 {vulnerability.group(1)}%", "danger"))
 
     if "FORT" in raw_status and "EFORT" not in raw_status:
-        badges.append(BadgeSpec("FORT", "fortress"))
+        badges.append(BadgeSpec("堡垒", "fortress"))
     if "TDEF" in raw_status or "TCool" in raw_status:
-        badges.append(BadgeSpec("TERRAIN", "terrain"))
+        badges.append(BadgeSpec("地形增益", "terrain"))
 
     if permanently_locked:
-        badges.append(BadgeSpec("PERM", "danger"))
+        badges.append(BadgeSpec("永久禁射", "danger"))
     elif heat_locked:
-        badges.append(BadgeSpec("LOCK", "warning"))
+        badges.append(BadgeSpec("禁射", "warning"))
     if power_off:
-        badges.append(BadgeSpec("PWR OFF", "warning"))
+        badges.append(BadgeSpec("底盘断电", "warning"))
     return tuple(badges)
 
 
 BASE_CONTROLS = (
-    ("LMB", "Select"),
-    ("Shift/LMB", "Multi-select"),
-    ("Drag", "Box select"),
-    ("RMB", "Move"),
-    ("D", "Debug"),
-    ("R", "Restart"),
-    ("Esc", "Quit"),
+    ("左键", "选择"),
+    ("Shift+左键", "多选"),
+    ("拖拽", "框选"),
+    ("右键", "移动"),
+    ("D", "调试几何"),
+    ("R", "重新开始"),
+    ("Esc", "退出"),
 )
 
 COMBAT_CONTROLS = (
-    ("E", "Local ammo"),
-    ("F", "Remote ammo"),
+    ("E", "本地兑换弹量"),
+    ("F", "远程兑换弹量"),
 )
 
 ENGINEER_CONTROLS = (
-    ("G", "Energy Unit"),
-    ("1-4", "Tech Core"),
-    ("Enter", "Confirm"),
-    ("Q / W", "D4 Core"),
+    ("G", "获取能量单元"),
+    ("1-4", "装配科技核心"),
+    ("回车", "确认"),
+    ("Q / W", "D4 核心选择"),
 )
 
 

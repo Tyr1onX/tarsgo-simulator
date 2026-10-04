@@ -108,27 +108,33 @@ ZONE_STYLE = {
     "blue-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
 }
 RMUC_ZONE_STYLE = {
-    "red-resource": (RED_SUPPLY_COLOR, "RESOURCE"),
-    "blue-resource": (BLUE_SUPPLY_COLOR, "RESOURCE"),
-    "red-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
-    "blue-assembly": (HIGH_GROUND_COLOR, "ASSEMBLY"),
-    "red-outpost-rebuild": (RED_SUPPLY_COLOR, "REBUILD"),
-    "blue-outpost-rebuild": (BLUE_SUPPLY_COLOR, "REBUILD"),
-    "red-supply-buff": (RED_SUPPLY_COLOR, "SUPPLY"),
-    "blue-supply-buff": (BLUE_SUPPLY_COLOR, "SUPPLY"),
-    "red-base-buff": (RED_SUPPLY_COLOR, "BASE"),
-    "blue-base-buff": (BLUE_SUPPLY_COLOR, "BASE"),
-    "red-outpost-buff": (RED_SUPPLY_COLOR, "OUTPOST"),
-    "blue-outpost-buff": (BLUE_SUPPLY_COLOR, "OUTPOST"),
-    "red-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL"),
-    "blue-central-elevated-buff": (HIGH_GROUND_COLOR, "CENTRAL"),
-    "red-trapezoid-buff": (RED_SUPPLY_COLOR, "TRAPEZOID"),
-    "blue-trapezoid-buff": (BLUE_SUPPLY_COLOR, "TRAPEZOID"),
-    "red-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
-    "blue-fortress-buff": (HIGH_GROUND_COLOR, "FORTRESS"),
+    "red-resource": (RED_SUPPLY_COLOR, "资源区"),
+    "blue-resource": (BLUE_SUPPLY_COLOR, "资源区"),
+    "red-assembly": (HIGH_GROUND_COLOR, "装配区"),
+    "blue-assembly": (HIGH_GROUND_COLOR, "装配区"),
+    "red-outpost-rebuild": (RED_SUPPLY_COLOR, "重建区"),
+    "blue-outpost-rebuild": (BLUE_SUPPLY_COLOR, "重建区"),
+    "red-supply-buff": (RED_SUPPLY_COLOR, "补给区"),
+    "blue-supply-buff": (BLUE_SUPPLY_COLOR, "补给区"),
+    "red-base-buff": (RED_SUPPLY_COLOR, "基地区"),
+    "blue-base-buff": (BLUE_SUPPLY_COLOR, "基地区"),
+    "red-outpost-buff": (RED_SUPPLY_COLOR, "前哨站区"),
+    "blue-outpost-buff": (BLUE_SUPPLY_COLOR, "前哨站区"),
+    "red-central-elevated-buff": (HIGH_GROUND_COLOR, "中央区"),
+    "blue-central-elevated-buff": (HIGH_GROUND_COLOR, "中央区"),
+    "red-trapezoid-buff": (RED_SUPPLY_COLOR, "梯形区"),
+    "blue-trapezoid-buff": (BLUE_SUPPLY_COLOR, "梯形区"),
+    "red-fortress-buff": (HIGH_GROUND_COLOR, "堡垒区"),
+    "blue-fortress-buff": (HIGH_GROUND_COLOR, "堡垒区"),
 }
 RMUC_DEFAULT_ZONE_IDS = frozenset(RMUC_ZONE_STYLE)
 RMUC_DEBUG_ZONE_PREFIXES = ("red-terrain-", "blue-terrain-")
+RMUC_ROBOT_NAMES = {
+    "hero": "英雄",
+    "engineer": "工程",
+    "infantry": "步兵",
+    "sentry": "哨兵",
+}
 CONTROLS = (
     ("LMB", "Select"),
     ("Shift/LMB", "Multi-select"),
@@ -146,6 +152,20 @@ CONTROLS = (
 )
 
 
+def _ui_font(size: int) -> pygame.font.Font:
+    for name in (
+        "PingFang SC",
+        "Microsoft YaHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Arial Unicode MS",
+    ):
+        path = pygame.font.match_font(name)
+        if path is not None:
+            return pygame.font.Font(path, size)
+    return pygame.font.Font(None, size)
+
+
 def main(scenario_path: str | Path | None = None) -> None:
     match = Match.from_scenario(scenario_path or default_scenario_path())
     pygame.init()
@@ -153,8 +173,8 @@ def main(scenario_path: str | Path | None = None) -> None:
         viewport = _viewport_for_match(match)
         screen = pygame.display.set_mode(WINDOW_SIZE)
         pygame.display.set_caption(_window_caption(match))
-        font = pygame.font.Font(None, 25)
-        small_font = pygame.font.Font(None, 18)
+        font = _ui_font(25)
+        small_font = _ui_font(18)
         clock = pygame.time.Clock()
         player_team = match.config.scenario.player_team
         opponent_team = next(
@@ -379,7 +399,7 @@ def cli() -> None:
 def _window_caption(match: Match) -> str:
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
-        return "TARS-Go RMUC 2026 Regional Rules Lab (Partial / Experimental)"
+        return "TARS-Go RMUC 2026 区域赛规则实验室（实验版）"
     if display_state is not None:
         return "TARS-Go RMUL 2026 Rules Lab (Partial / Experimental)"
     return "TARS-Go Infantry Training"
@@ -518,18 +538,18 @@ def _rmuc_robot_labels(match: Match) -> dict[str, str]:
         }
         for robot in team_robots:
             if robot.type == "hero":
-                label = "H"
+                label = "英"
             elif robot.type == "engineer":
-                label = "E"
+                label = "工"
             elif robot.type == "infantry":
-                label = f"I{infantry_index[robot.id]}"
+                label = f"步{infantry_index[robot.id]}"
             elif robot.type == "sentry":
-                label = "S"
+                label = "哨"
             else:
                 label = robot.type[:1].upper()
             level = progression.get(robot.id)
             if level is not None:
-                label = f"{label} L{level}"
+                label = f"{label} {level}级"
             labels[robot.id] = label
     return labels
 
@@ -575,7 +595,7 @@ def _selected_unit_lines(
     labels: dict[str, str],
 ) -> list[str]:
     if not selected_robot_ids:
-        return ["SELECTED UNIT", "Select a unit"]
+        return ["已选单位", "请选择一个单位"]
     robots_by_id = {robot.id: robot for robot in match.robots}
     selected = [
         robots_by_id[robot_id]
@@ -583,9 +603,9 @@ def _selected_unit_lines(
         if robot_id in robots_by_id
     ]
     if len(selected) != 1:
-        lines = [f"{len(selected)} units selected"]
+        lines = [f"已选择 {len(selected)} 个单位"]
         lines.extend(
-            f"{labels.get(robot.id, robot.id)}   {robot.hp}/{robot.max_hp} HP"
+            f"{labels.get(robot.id, robot.id)}   生命 {robot.hp}/{robot.max_hp}"
             for robot in selected
         )
         return lines
@@ -645,41 +665,41 @@ def _selected_unit_lines(
         else {}
     )
 
-    title = robot.type.upper()
+    title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
     progression_state = progression.get(robot.id)
     if progression_state is not None:
-        title = f"{title} · Lv {progression_state[0]}"
-    lines = [title, f"HP        {robot.hp} / {robot.max_hp}"]
+        title = f"{title} · {progression_state[0]}级"
+    lines = [title, f"生命      {robot.hp} / {robot.max_hp}"]
     if progression_state is not None:
         _level, experience, _level_cap = progression_state
-        lines.append(f"XP        {experience:g}")
+        lines.append(f"经验      {experience:g}")
     projectile_state = projectiles.get(robot.id)
     if projectile_state is not None:
         projectile, count = projectile_state
-        lines.append(f"Ammo      {projectile}: {count}")
+        lines.append(f"弹量      {projectile}: {count}")
     heat_state = heat.get(robot.id)
     if heat_state is not None:
         current, limit, locked, permanently_locked = heat_state
-        suffix = " PERM" if permanently_locked else " LOCK" if locked else ""
-        lines.append(f"Heat      {current:g} / {limit:g}{suffix}")
+        suffix = " 永久禁射" if permanently_locked else " 禁射" if locked else ""
+        lines.append(f"热量      {current:g} / {limit:g}{suffix}")
     chassis_state = chassis.get(robot.id)
     if chassis_state is not None:
         buffer, maximum, power, limit, power_off_remaining = chassis_state
-        lines.append(f"Buffer    {buffer:g} / {maximum:g}")
-        lines.append(f"Power     {power:g} / {limit:g} W")
+        lines.append(f"缓冲      {buffer:g} / {maximum:g}")
+        lines.append(f"功率      {power:g} / {limit:g} W")
         if power_off_remaining > 0:
-            lines.append(f"Power off {power_off_remaining:.1f}s")
+            lines.append(f"底盘断电  {power_off_remaining:.1f}s")
     if robot.id in engineer_units:
-        lines.append(f"Energy Units {engineer_units[robot.id]}")
+        lines.append(f"能量单元  {engineer_units[robot.id]}")
     if robot.id in reserves:
-        lines.append(f"Fortress Reserve {reserves[robot.id]}")
+        lines.append(f"堡垒储备  {reserves[robot.id]}")
 
     raw_status = statuses.get(robot.id, "")
     defense = _defense_from_status(raw_status)
     if defense is not None:
-        lines.append(f"Defense   {defense}")
+        lines.append(f"防御      {defense}")
     status = _status_without_defense(raw_status)
-    lines.append(f"Status    {status or '—'}")
+    lines.append(f"状态      {status or '—'}")
     return lines
 
 
@@ -698,17 +718,17 @@ def _rmuc_team_detail_lines(
     }
     gross, penalty, net = economy.get(player_team, (0, 0, 0))
     income = (
-        f"Income    {gross:+d}-{penalty}={net:+d} / 10s"
+        f"收入      {gross:+d}-{penalty}={net:+d} / 10s"
         if penalty
-        else f"Income    {net:+d} / 10s"
+        else f"收入      {net:+d} / 10s"
     )
     coins = dict(display_state.coins)
     lines = [
-        "TEAM SYSTEMS",
-        f"Coins     {coins.get(player_team, 0)}",
+        "队伍系统",
+        f"金币      {coins.get(player_team, 0)}",
         income,
-        f"Rebuild   {rebuild.get(player_team, 0)}",
-        f"Damage    {attack_damage.get(player_team, 0)}",
+        f"重建机会  {rebuild.get(player_team, 0)}",
+        f"累计伤害  {attack_damage.get(player_team, 0)}",
     ]
     tech_core = {
         team_id: (cap, d1, d2, d3, d4, active, outside)
@@ -717,11 +737,11 @@ def _rmuc_team_detail_lines(
     }.get(player_team)
     if tech_core is not None:
         cap, d1, d2, d3, d4, active, outside = tech_core
-        lines.append(f"Core      cap {cap} · {d1}/{d2}/{d3}/{d4}")
+        lines.append(f"科技核心  上限 {cap} · {d1}/{d2}/{d3}/{d4}")
         if active is not None:
-            detail = f"D{active} active"
+            detail = f"D{active} 已激活"
             if outside > 0:
-                detail += f" · out {outside:.1f}/15s"
+                detail += f" · 离区 {outside:.1f}/15s"
             lines.append(detail)
     d4 = {
         team_id: (
@@ -758,26 +778,26 @@ def _rmuc_team_detail_lines(
             penalty,
         ) = d4
         if phase == "pending":
-            lines.append(f"D4 wait   {max(0.0, 15.0 - pending_remaining):.1f}/15s")
+            lines.append(f"D4 等待   {max(0.0, 15.0 - pending_remaining):.1f}/15s")
         elif phase == "active":
             remaining = max(0.0, 45.0 - (match.elapsed_time - activated_at))
-            detail = f"D4 step {current_step} · {remaining:.1f}s"
+            detail = f"D4 步骤 {current_step} · {remaining:.1f}s"
             if first_core_at >= 0:
                 pair_remaining = max(
                     0.0,
                     5.0 - (match.elapsed_time - first_core_at),
                 )
-                detail += f" · pair {pair_remaining:.1f}s"
+                detail += f" · 配对 {pair_remaining:.1f}s"
             lines.append(detail)
         elif phase == "complete":
-            lines.append("D4 complete")
+            lines.append("D4 已完成")
         elif permanent:
-            detail = "D4 locked"
+            detail = "D4 已锁定"
             if penalty > 0:
                 detail += f" · -{penalty}/10s"
             lines.append(detail)
         elif retry_after > match.elapsed_time:
-            lines.append(f"D4 lock   {math.ceil(retry_after - match.elapsed_time)}s")
+            lines.append(f"D4 锁定   {math.ceil(retry_after - match.elapsed_time)}s")
     return lines
 
 
@@ -927,11 +947,11 @@ def _draw_selected_unit_card(
 
     if not selected:
         screen.blit(
-            small_font.render("SELECTED UNIT", True, SELECTION_COLOR),
+            small_font.render("已选单位", True, SELECTION_COLOR),
             (x, y),
         )
         screen.blit(
-            small_font.render("Select a unit", True, MUTED_COLOR),
+            small_font.render("请选择一个单位", True, MUTED_COLOR),
             (x, y + 26),
         )
         return
@@ -939,7 +959,7 @@ def _draw_selected_unit_card(
     if len(selected) != 1:
         screen.blit(
             small_font.render(
-                f"{len(selected)} UNITS SELECTED",
+                f"已选择 {len(selected)} 个单位",
                 True,
                 SELECTION_COLOR,
             ),
@@ -948,7 +968,7 @@ def _draw_selected_unit_card(
         y += 28
         for robot in selected[:7]:
             label = labels.get(robot.id, robot.id)
-            text = f"{label:<7} {robot.hp:>4}/{robot.max_hp:<4} HP"
+            text = f"{label:<7} 生命 {robot.hp:>4}/{robot.max_hp:<4}"
             color = TEXT_COLOR if robot.alive else MUTED_COLOR
             screen.blit(small_font.render(text, True, color), (x, y))
             y += 20
@@ -988,11 +1008,11 @@ def _draw_selected_unit_card(
     engineer_units = dict(display_state.engineer_energy_units)
 
     level_state = progression.get(robot.id)
-    title = robot.type.upper()
+    title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
     if level_state is not None:
-        title += f" · Lv {level_state[0]}"
+        title += f" · {level_state[0]}级"
     screen.blit(
-        small_font.render("IDENTITY", True, MUTED_COLOR),
+        small_font.render("单位", True, MUTED_COLOR),
         (x, y),
     )
     y += 18
@@ -1000,9 +1020,9 @@ def _draw_selected_unit_card(
     screen.blit(title_surface, (x, y))
     y += 27
 
-    y = _draw_section_title(screen, small_font, "HEALTH", x=x, y=y)
+    y = _draw_section_title(screen, small_font, "生命", x=x, y=y)
     hp_text = small_font.render(
-        f"HP        {robot.hp:>4} / {robot.max_hp:<4}",
+        f"生命      {robot.hp:>4} / {robot.max_hp:<4}",
         True,
         TEXT_COLOR,
     )
@@ -1020,7 +1040,7 @@ def _draw_selected_unit_card(
     if level_state is not None:
         _level, experience, _cap = level_state
         screen.blit(
-            small_font.render(f"XP        {experience:g}", True, TEXT_COLOR),
+            small_font.render(f"经验      {experience:g}", True, TEXT_COLOR),
             (x, y),
         )
         y += 21
@@ -1028,12 +1048,12 @@ def _draw_selected_unit_card(
     projectile_state = projectiles.get(robot.id)
     heat_state = heat.get(robot.id)
     if projectile_state is not None or heat_state is not None:
-        y = _draw_section_title(screen, small_font, "WEAPON", x=x, y=y)
+        y = _draw_section_title(screen, small_font, "武器", x=x, y=y)
     if projectile_state is not None:
         projectile, count = projectile_state
         screen.blit(
             small_font.render(
-                f"Ammo      {projectile}: {count}",
+                f"弹量      {projectile}: {count}",
                 True,
                 TEXT_COLOR,
             ),
@@ -1044,7 +1064,7 @@ def _draw_selected_unit_card(
         current, limit, _locked, _permanent = heat_state
         screen.blit(
             small_font.render(
-                f"Heat      {current:g} / {limit:g}",
+                f"热量      {current:g} / {limit:g}",
                 True,
                 TEXT_COLOR,
             ),
@@ -1063,10 +1083,10 @@ def _draw_selected_unit_card(
     chassis_state = chassis.get(robot.id)
     if chassis_state is not None:
         buffer, maximum, power, limit, power_off_remaining = chassis_state
-        y = _draw_section_title(screen, small_font, "CHASSIS", x=x, y=y)
+        y = _draw_section_title(screen, small_font, "底盘", x=x, y=y)
         screen.blit(
             small_font.render(
-                f"Buffer    {buffer:g} / {maximum:g}",
+                f"缓冲      {buffer:g} / {maximum:g}",
                 True,
                 TEXT_COLOR,
             ),
@@ -1083,7 +1103,7 @@ def _draw_selected_unit_card(
         y += 15
         screen.blit(
             small_font.render(
-                f"Power     {power:g} / {limit:g} W",
+                f"功率      {power:g} / {limit:g} W",
                 True,
                 TEXT_COLOR,
             ),
@@ -1096,7 +1116,7 @@ def _draw_selected_unit_card(
     if robot.id in engineer_units:
         screen.blit(
             small_font.render(
-                f"Energy Units   {engineer_units[robot.id]}",
+                f"能量单元      {engineer_units[robot.id]}",
                 True,
                 RESOURCE_COLOR,
             ),
@@ -1106,7 +1126,7 @@ def _draw_selected_unit_card(
     if robot.id in reserves:
         screen.blit(
             small_font.render(
-                f"Fortress Reserve   {reserves[robot.id]}",
+                f"堡垒储备      {reserves[robot.id]}",
                 True,
                 FORTRESS_COLOR,
             ),
@@ -1125,7 +1145,7 @@ def _draw_selected_unit_card(
         permanently_locked=permanently_locked,
         power_off=power_off_remaining > 0,
     )
-    y = _draw_section_title(screen, small_font, "STATUS", x=x, y=y)
+    y = _draw_section_title(screen, small_font, "状态", x=x, y=y)
     if badges:
         _draw_badges(
             screen,
@@ -1174,7 +1194,7 @@ def _draw_context_controls(
     pygame.draw.rect(screen, PANEL_BORDER, rect, width=1, border_radius=7)
     x = rect.x + 12
     y = rect.y + 9
-    title = "DEBUG GEOMETRY: ON" if debug_geometry else "CONTROLS"
+    title = "调试几何：开启" if debug_geometry else "操作"
     title_color = SELECTION_COLOR if debug_geometry else MUTED_COLOR
     screen.blit(small_font.render(title, True, title_color), (x, y))
     y += 22
@@ -1251,11 +1271,11 @@ def _draw_team_hud_card(
     pygame.draw.rect(screen, color, rect, width=2, border_radius=8)
     name_surface = font.render(name, True, color)
     stats_surface = small_font.render(
-        f"BASE {base_hp:>4}   OUT {outpost_hp:>4}",
+        f"基地 {base_hp:>4}   前哨站 {outpost_hp:>4}",
         True,
         TEXT_COLOR,
     )
-    coins_surface = small_font.render(f"COINS {coins}", True, MUTED_COLOR)
+    coins_surface = small_font.render(f"金币 {coins}", True, MUTED_COLOR)
     if align_right:
         screen.blit(
             name_surface,
@@ -1300,7 +1320,7 @@ def _draw_rmuc_hud(
         else match.team_name(player_team)
     )
     opponent_name = (
-        "Opponent"
+        "对手"
         if opponent_team.startswith("opponent")
         else match.team_name(opponent_team)
     )
@@ -1331,9 +1351,9 @@ def _draw_rmuc_hud(
     timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
     if match.finished:
         status = (
-            f"{match.team_name(match.winner)} WINS"
+            f"{match.team_name(match.winner)} 获胜"
             if match.winner
-            else "DRAW"
+            else "平局"
         )
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
@@ -1342,7 +1362,7 @@ def _draw_rmuc_hud(
         timer_surface,
         timer_surface.get_rect(center=(screen.get_width() // 2, 31)),
     )
-    match_label = small_font.render("MATCH", True, MUTED_COLOR)
+    match_label = small_font.render("比赛", True, MUTED_COLOR)
     screen.blit(
         match_label,
         match_label.get_rect(center=(screen.get_width() // 2, 57)),
@@ -1592,7 +1612,7 @@ def _draw_virtual_shield(
         radius + 7 + pulse,
         width=2,
     )
-    label = small_font.render(f"SHIELD {shield}", True, SHIELD_COLOR)
+    label = small_font.render(f"护盾 {shield}", True, SHIELD_COLOR)
     screen.blit(
         label,
         label.get_rect(center=(center[0], center[1] - radius - 19)),
@@ -1680,7 +1700,7 @@ def _draw_rmuc_structure(
         maximum=max_hp,
         fill_color=HP_COLOR if alive else MUTED_COLOR,
     )
-    label = "BASE" if structure_type == "base" else "OUTPOST"
+    label = "基地" if structure_type == "base" else "前哨站"
     label_surface = small_font.render(
         f"{label} {hp}/{max_hp}",
         True,
