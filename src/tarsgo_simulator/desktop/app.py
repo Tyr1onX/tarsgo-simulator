@@ -914,6 +914,15 @@ def _should_show_zone_label(
     return emphasized or occupied_by_selected or hovered
 
 
+def _screen_rect_is_hovered(rect: pygame.Rect) -> bool:
+    if not pygame.display.get_init() or pygame.display.get_surface() is None:
+        return False
+    try:
+        return rect.collidepoint(pygame.mouse.get_pos())
+    except pygame.error:
+        return False
+
+
 def _rmuc_hud_rects(
     screen_width: int,
 ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
@@ -1686,7 +1695,7 @@ def _draw_rmuc_zone(
         family=style.family,
         color=color,
     )
-    hovered = zone_rect.collidepoint(pygame.mouse.get_pos())
+    hovered = _screen_rect_is_hovered(zone_rect)
     if _should_show_zone_label(
         emphasized=style.emphasized,
         occupied_by_selected=occupied_by_selected,
@@ -1787,12 +1796,14 @@ def _draw_rmuc_structure(
             )
             pygame.draw.line(screen, draw_color, center, endpoint, width=2)
 
-    hovered = pygame.Rect(
-        center[0] - size - 8,
-        center[1] - size - 8,
-        (size + 8) * 2,
-        (size + 8) * 2,
-    ).collidepoint(pygame.mouse.get_pos())
+    hovered = _screen_rect_is_hovered(
+        pygame.Rect(
+            center[0] - size - 8,
+            center[1] - size - 8,
+            (size + 8) * 2,
+            (size + 8) * 2,
+        )
+    )
     shield = parse_virtual_shield(status) if structure_type == "base" else 0
     _draw_virtual_shield(
         screen,
