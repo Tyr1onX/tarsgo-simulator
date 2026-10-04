@@ -167,7 +167,10 @@ def _ui_font(size: int) -> pygame.font.Font:
 
 
 def main(scenario_path: str | Path | None = None) -> None:
-    match = Match.from_scenario(scenario_path or default_scenario_path())
+    match = Match.from_scenario(
+        scenario_path or default_scenario_path(),
+        rmuc_spectator_ai=True,
+    )
     pygame.init()
     try:
         viewport = _viewport_for_match(match)
@@ -208,7 +211,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_start = None
                         selection_current = None
                         selection_shift = False
-                    elif len(selected_robot_ids) == 1:
+                    elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
                             (
@@ -314,6 +317,8 @@ def main(scenario_path: str | Path | None = None) -> None:
                             modifiers = getattr(event, "mod", 0) | pygame.key.get_mods()
                             selection_shift = bool(modifiers & pygame.KMOD_SHIFT)
                     elif event.button == 3:
+                        if _is_rmuc_rules_lab(match):
+                            continue
                         world = _screen_to_world(event.pos, viewport)
                         if world is None:
                             continue
@@ -356,12 +361,16 @@ def main(scenario_path: str | Path | None = None) -> None:
             visual_state.begin_frame(match)
             match.update(dt)
             visual_state.after_match_update(match, dt)
-            live_player_ids = {
+            live_selectable_ids = {
                 robot.id
                 for robot in match.robots
-                if robot.alive and match.is_player_controlled(robot.id)
+                if robot.alive
+                and (
+                    _is_rmuc_rules_lab(match)
+                    or match.is_player_controlled(robot.id)
+                )
             }
-            selected_robot_ids.intersection_update(live_player_ids)
+            selected_robot_ids.intersection_update(live_selectable_ids)
             selection_rect = (
                 _selection_rectangle(selection_start, selection_current)
                 if selection_start is not None and selection_current is not None
@@ -430,7 +439,10 @@ def _select_player_robot(
     match: Match,
 ) -> str | None:
     for robot in match.robots:
-        if not robot.alive or not match.is_player_controlled(robot.id):
+        if not robot.alive or (
+            not _is_rmuc_rules_lab(match)
+            and not match.is_player_controlled(robot.id)
+        ):
             continue
         distance = math.hypot(robot.position[0] - point[0], robot.position[1] - point[1])
         if distance <= match.map.collision_radius + 9:
@@ -477,7 +489,10 @@ def _select_player_robots_in_rectangle(
 ) -> set[str]:
     selected = set()
     for robot in match.robots:
-        if not robot.alive or not match.is_player_controlled(robot.id):
+        if not robot.alive or (
+            not _is_rmuc_rules_lab(match)
+            and not match.is_player_controlled(robot.id)
+        ):
             continue
         center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
         if selection_rect.collidepoint(center):
@@ -669,7 +684,11 @@ def _selected_unit_lines(
     progression_state = progression.get(robot.id)
     if progression_state is not None:
         title = f"{title} · {progression_state[0]}级"
-    lines = [title, f"生命      {robot.hp} / {robot.max_hp}"]
+    lines = [title]
+    ai_intent = match.ai_intent(robot.id)
+    if ai_intent is not None:
+        lines.append(f"当前 AI 意图  {ai_intent}")
+    lines.append(f"生命      {robot.hp} / {robot.max_hp}")
     if progression_state is not None:
         _level, experience, _level_cap = progression_state
         lines.append(f"经验      {experience:g}")
@@ -1018,7 +1037,14 @@ def _draw_selected_unit_card(
     y += 18
     title_surface = small_font.render(title, True, SELECTION_COLOR)
     screen.blit(title_surface, (x, y))
-    y += 27
+    y += 22
+    ai_intent = match.ai_intent(robot.id)
+    if ai_intent is not None:
+        screen.blit(
+            small_font.render(f"当前 AI 意图  {ai_intent}", True, MUTED_COLOR),
+            (x, y),
+        )
+        y += 20
 
     y = _draw_section_title(screen, small_font, "生命", x=x, y=y)
     hp_text = small_font.render(
@@ -1198,7 +1224,7 @@ def _draw_context_controls(
     title_color = SELECTION_COLOR if debug_geometry else MUTED_COLOR
     screen.blit(small_font.render(title, True, title_color), (x, y))
     y += 22
-    for key, action, enabled in contextual_controls(selected_types):
+    for key, action, enabled in contextual_controls(selected_types, spectator=True):
         color = TEXT_COLOR if enabled else MUTED_COLOR
         screen.blit(
             small_font.render(f"{key:<10} {action}", True, color),
@@ -1223,7 +1249,7 @@ def _draw_rmuc_panel(
 
     inner_x = panel.x + 9
     inner_width = panel.width - 18
-    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 332)
+    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 352)
     team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 112)
     controls_rect = pygame.Rect(
         inner_x,
