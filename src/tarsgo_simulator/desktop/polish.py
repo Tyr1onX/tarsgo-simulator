@@ -155,10 +155,23 @@ ENGINEER_CONTROLS = (
     ("Q / W", "D4 核心选择"),
 )
 
+SPECTATOR_CONTROLS = (
+    ("左键", "查看单位"),
+    ("Shift+左键", "多选查看"),
+    ("拖拽", "框选查看"),
+    ("D", "调试几何"),
+    ("R", "重新开始"),
+    ("Esc", "退出"),
+)
+
 
 def contextual_controls(
     selected_robot_types: set[str] | frozenset[str],
+    *,
+    spectator: bool = False,
 ) -> tuple[tuple[str, str, bool], ...]:
+    if spectator:
+        return tuple((key, action, True) for key, action in SPECTATOR_CONTROLS)
     rows = [(key, action, True) for key, action in BASE_CONTROLS]
     if len(selected_robot_types) == 1:
         robot_type = next(iter(selected_robot_types))
