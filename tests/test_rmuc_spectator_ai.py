@@ -27,7 +27,7 @@ TRAINING_SCENARIO = (
 
 
 def _match() -> Match:
-    return Match.from_scenario(RMUC_SCENARIO)
+    return Match.from_scenario(RMUC_SCENARIO, rmuc_spectator_ai=True)
 
 
 def _robot(match: Match, robot_id: str):
