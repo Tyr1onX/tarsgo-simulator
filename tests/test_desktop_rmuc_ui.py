@@ -96,15 +96,15 @@ def test_rmuc_map_labels_are_minimal_and_number_infantry() -> None:
     match = _match()
     labels = app._rmuc_robot_labels(match)
 
-    assert labels["tarsgo-hero"] == "英 1级"
-    assert labels["tarsgo-engineer"] == "工"
-    assert labels["tarsgo-infantry-1"] == "步1 1级"
-    assert labels["tarsgo-infantry-2"] == "步2 1级"
-    assert labels["tarsgo-sentry"] == "哨"
+    assert labels["tarsgo-hero"] == "H"
+    assert labels["tarsgo-engineer"] == "E"
+    assert labels["tarsgo-infantry-1"] == "I1"
+    assert labels["tarsgo-infantry-2"] == "I2"
+    assert labels["tarsgo-sentry"] == "S"
 
-    assert labels["opponent-hero"] == "英 1级"
-    assert labels["opponent-infantry-1"] == "步1 1级"
-    assert labels["opponent-infantry-2"] == "步2 1级"
+    assert labels["opponent-hero"] == "H"
+    assert labels["opponent-infantry-1"] == "I1"
+    assert labels["opponent-infantry-2"] == "I2"
 
 
 def test_selected_unit_panel_moves_detailed_robot_state_off_map_label() -> None:
@@ -147,9 +147,9 @@ def test_selected_unit_panel_has_engineer_and_multi_select_views() -> None:
         labels,
     )
     assert multi_lines[0] == "已选择 3 个单位"
-    assert any(line.startswith("英 1级") for line in multi_lines)
-    assert any(line.startswith("步1 1级") for line in multi_lines)
-    assert any(line.startswith("步2 1级") for line in multi_lines)
+    assert any(line.startswith("H") for line in multi_lines)
+    assert any(line.startswith("I1") for line in multi_lines)
+    assert any(line.startswith("I2") for line in multi_lines)
 
 
 def test_rmuc_renderer_smoke_default_and_debug_modes() -> None:
