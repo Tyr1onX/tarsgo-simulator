@@ -8,9 +8,14 @@ import pytest
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
+    ImpactEffect,
+    MAX_SCREEN_SHAKE_AMPLITUDE,
+    MAX_SCREEN_SHAKE_DURATION,
     MoveMarker,
     VisualProjectile,
     VisualRobotState,
+    VisualStructureState,
+    low_hp_warning_strength,
     projectile_visual_profile,
     robot_visual_profile,
 )
@@ -140,6 +145,91 @@ def test_17mm_and_42mm_visual_profiles_are_obviously_different() -> None:
     assert large.lifetime > small.lifetime
 
 
+def test_destroy_and_respawn_visual_lifecycles_are_short_and_local() -> None:
+    visual = VisualRobotState(
+        position=(0.0, 0.0),
+        hp=100,
+        cooldown=0.0,
+        alive=True,
+    )
+
+    visual.register_lifecycle(False)
+    assert visual.destroy_remaining > 0
+    assert visual.respawn_remaining == 0
+    assert visual.destroy_progress == pytest.approx(0.0)
+
+    visual.advance_timers(visual.destroy_remaining / 2)
+    assert 0 < visual.destroy_progress < 1
+
+    visual.register_lifecycle(True)
+    assert visual.destroy_remaining == 0
+    assert visual.respawn_remaining > 0
+    assert visual.respawn_progress == pytest.approx(0.0)
+
+    visual.advance_timers(visual.respawn_remaining)
+    assert visual.respawn_remaining == 0
+    assert visual.respawn_progress == pytest.approx(1.0)
+
+
+def test_impact_and_shield_impact_lifecycles_expire() -> None:
+    impact = ImpactEffect(
+        position=(10.0, 20.0),
+        caliber="42mm",
+        remaining=0.20,
+        duration=0.20,
+        shielded=True,
+        target_kind="structure",
+    )
+    structure = VisualStructureState(
+        hp=5000,
+        shield=400,
+        shield_impact_remaining=0.20,
+    )
+
+    impact.advance(0.10)
+    structure.advance_timers(0.10)
+    assert 0 < impact.remaining < impact.duration
+    assert 0 < structure.shield_impact_remaining < 0.20
+
+    impact.advance(0.10)
+    structure.advance_timers(0.10)
+    assert impact.remaining == 0
+    assert structure.shield_impact_remaining == 0
+
+
+def test_low_hp_warning_is_bounded_and_only_active_below_threshold() -> None:
+    assert low_hp_warning_strength(0.50, 0.0) == 0
+    assert low_hp_warning_strength(0.0, 0.0) == 0
+
+    first = low_hp_warning_strength(0.20, 0.0)
+    second = low_hp_warning_strength(0.20, math.pi / 10)
+    assert 0 < first <= 1
+    assert 0 < second <= 1
+    assert first != second
+
+
+def test_screen_shake_is_capped_rate_limited_and_auto_decays() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+
+    visuals.trigger_screen_shake(99.0, 99.0)
+    assert visuals.shake_amplitude == MAX_SCREEN_SHAKE_AMPLITUDE
+    assert visuals.shake_duration == MAX_SCREEN_SHAKE_DURATION
+    first_amplitude = visuals.shake_amplitude
+    visuals.trigger_screen_shake(0.5, 0.05)
+    assert visuals.shake_amplitude == first_amplitude
+
+    offset = visuals.screen_shake_offset()
+    assert abs(offset[0]) <= math.ceil(MAX_SCREEN_SHAKE_AMPLITUDE)
+    assert abs(offset[1]) <= math.ceil(MAX_SCREEN_SHAKE_AMPLITUDE)
+
+    visuals.begin_frame(match)
+    visuals.after_match_update(match, MAX_SCREEN_SHAKE_DURATION + 0.01)
+    assert visuals.screen_shake_offset() == (0, 0)
+    assert visuals.shake_remaining == 0
+
+
 def test_move_marker_expires() -> None:
     marker = MoveMarker((10.0, 20.0))
     marker.advance(0.25)
@@ -202,6 +292,42 @@ def test_damaging_projectile_delays_impact_feedback_until_visual_arrival() -> No
     assert visuals.robots[target.id].impact_remaining > 0
 
 
+def test_shielded_structure_impact_is_visual_only() -> None:
+    match = _match()
+    base = next(
+        structure
+        for structure in match.structures
+        if structure.type == "base"
+        and structure.team != match.config.scenario.player_team
+    )
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    profile = projectile_visual_profile("42mm")
+    before_hp = base.hp
+
+    visuals.projectiles.append(
+        VisualProjectile(
+            start=base.position,
+            end=base.position,
+            caliber="42mm",
+            attacker_team_id=match.config.scenario.player_team,
+            target_id=base.id,
+            damaging=False,
+            shielded=True,
+            age=profile.lifetime - 0.01,
+        )
+    )
+    visuals.begin_frame(match)
+    visuals.after_match_update(match, 0.02)
+
+    assert base.hp == before_hp
+    assert visuals.impacts
+    assert visuals.impacts[-1].shielded
+    assert visuals.impacts[-1].target_kind == "structure"
+    assert visuals.structures[base.id].shield_impact_remaining > 0
+    assert visuals.shake_remaining > 0
+
+
 @pytest.mark.parametrize(
     ("scenario", "debug_geometry"),
     [
@@ -234,8 +360,19 @@ def test_renderer_smoke_with_combat_visual_state(
             None,
         )
         if hero is not None:
-            visuals.robots[hero.id].muzzle_remaining = 0.05
-            visuals.robots[hero.id].muzzle_caliber = "42mm"
+            hero_visual = visuals.robots[hero.id]
+            hero_visual.muzzle_remaining = 0.05
+            hero_visual.muzzle_caliber = "42mm"
+            hero_visual.impact_remaining = 0.08
+            hero_visual.impact_caliber = "42mm"
+            hero_visual.respawn_remaining = 0.30
+        base = next(
+            (structure for structure in match.structures if structure.type == "base"),
+            None,
+        )
+        if base is not None:
+            visuals.structures[base.id].shield_impact_remaining = 0.10
+        visuals.trigger_screen_shake(1.0, 0.08)
 
     pygame.font.init()
     screen = pygame.Surface(app.WINDOW_SIZE)
