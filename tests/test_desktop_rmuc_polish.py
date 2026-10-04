@@ -153,6 +153,60 @@ def test_rmuc_panel_and_battlefield_do_not_overlap() -> None:
     assert window.contains(panel)
 
 
+def test_battlefield_art_helpers_render_inside_1100x780() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    screen, _font, _small_font = _surface_and_fonts()
+    field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
+
+    app._draw_rmuc_battlefield(screen, field)
+    app._draw_rmuc_obstacle(
+        screen,
+        pygame.Rect(field.x + 20, field.y + 20, 60, 34),
+    )
+
+    assert screen.get_rect().contains(field)
+
+
+def test_zone_art_renders_default_selected_and_targeted_states() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    screen, _font, small_font = _surface_and_fonts()
+    rect = pygame.Rect(80, 80, 90, 56)
+
+    app._draw_rmuc_zone(
+        screen,
+        small_font,
+        rect,
+        zone_id="red-resource",
+        selected_types=set(),
+        occupied_by_selected=False,
+        targeted_by_selected=False,
+        animation_time=0.0,
+    )
+    app._draw_rmuc_zone(
+        screen,
+        small_font,
+        rect.move(110, 0),
+        zone_id="red-fortress-buff",
+        selected_types={"infantry"},
+        occupied_by_selected=True,
+        targeted_by_selected=True,
+        animation_time=0.5,
+    )
+
+
+def test_selected_ai_target_positions_use_existing_path_endpoint() -> None:
+    app = _app()
+    match = Match.from_scenario(RMUC_SCENARIO, rmuc_spectator_ai=True)
+    hero = next(robot for robot in match.robots if robot.id == "tarsgo-hero")
+    target = (match.map.width / 2, match.map.height / 2)
+    hero.path = [target]
+
+    assert app._selected_ai_target_positions(match, {hero.id}) == (target,)
+    assert app._selected_ai_target_positions(match, set()) == ()
+
+
 def test_structure_and_shield_rendering_helpers_do_not_crash() -> None:
     app = _app()
     screen, _font, small_font = _surface_and_fonts()
@@ -273,6 +327,12 @@ def test_zone_labels_are_contextual_in_observer_view() -> None:
         emphasized=False,
         occupied_by_selected=False,
         hovered=True,
+    )
+    assert app._should_show_zone_label(
+        emphasized=False,
+        occupied_by_selected=False,
+        hovered=False,
+        targeted_by_selected=True,
     )
 
 
