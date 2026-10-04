@@ -8,6 +8,7 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.fonts import ui_font
 from tarsgo_simulator.desktop.polish import (
     BadgeSpec,
     contextual_controls,
@@ -152,20 +153,6 @@ CONTROLS = (
 )
 
 
-def _ui_font(size: int) -> pygame.font.Font:
-    for name in (
-        "PingFang SC",
-        "Microsoft YaHei",
-        "Noto Sans CJK SC",
-        "Source Han Sans SC",
-        "Arial Unicode MS",
-    ):
-        path = pygame.font.match_font(name)
-        if path is not None:
-            return pygame.font.Font(path, size)
-    return pygame.font.Font(None, size)
-
-
 def main(scenario_path: str | Path | None = None) -> None:
     match = Match.from_scenario(
         scenario_path or default_scenario_path(),
@@ -176,8 +163,8 @@ def main(scenario_path: str | Path | None = None) -> None:
         viewport = _viewport_for_match(match)
         screen = pygame.display.set_mode(WINDOW_SIZE)
         pygame.display.set_caption(_window_caption(match))
-        font = _ui_font(25)
-        small_font = _ui_font(18)
+        font = ui_font(25)
+        small_font = ui_font(18)
         clock = pygame.time.Clock()
         player_team = match.config.scenario.player_team
         opponent_team = next(
