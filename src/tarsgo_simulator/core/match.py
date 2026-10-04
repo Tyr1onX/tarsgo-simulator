@@ -2,6 +2,7 @@
 
 import math
 from pathlib import Path
+import random
 
 from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import MatchConfig, load_match_config
@@ -15,6 +16,15 @@ from tarsgo_simulator.rules.registry import create_ruleset
 
 
 _AI_REPLAN_INTERVAL = 0.5
+_RMUC_AI_REPLAN_INTERVAL = 1.0
+_RMUC_AI_SEED = 2026
+_RMUC_RULE_ID = "rmuc-2026-region-v1.4.0"
+_RMUC_ROBOT_NAMES = {
+    "hero": "英雄",
+    "engineer": "工程",
+    "infantry": "步兵",
+    "sentry": "哨兵",
+}
 
 
 class Match:
@@ -83,11 +93,20 @@ class Match:
         self._events_from_last_update = 0
         self._active_update_dt: float | None = None
         self._active_update_start_time: float | None = None
+        self._rmuc_spectator_ai = (
+            self.config.rule_document.metadata.id == _RMUC_RULE_ID
+        )
         self._ai_replan_elapsed = {
             robot.id: 0.0
             for robot in self.robots
-            if not self.is_player_controlled(robot.id)
+            if self._ai_controls(robot)
         }
+        self._ai_intents = {
+            robot.id: "等待决策"
+            for robot in self.robots
+            if self._ai_controls(robot)
+        }
+        self._rmuc_ai_rng = self._build_rmuc_ai_rng()
         self.ruleset.reset(self)
 
     @property
@@ -96,6 +115,16 @@ class Match:
 
     def is_player_controlled(self, robot_id: str) -> bool:
         return robot_id in self.config.scenario.player_controlled
+
+    def is_ai_controlled(self, robot_id: str) -> bool:
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        return robot is not None and self._ai_controls(robot)
+
+    def ai_intent(self, robot_id: str) -> str | None:
+        return self._ai_intents.get(robot_id)
+
+    def _ai_controls(self, robot: Robot) -> bool:
+        return self._rmuc_spectator_ai or not self.is_player_controlled(robot.id)
 
     def order_move(self, robot_id: str, goal: tuple[float, float]) -> bool:
         if self.finished:
@@ -328,7 +357,317 @@ class Match:
             if movement_allowed[robot.id] and robot.id not in blocked:
                 robot.commit_movement(proposals[robot.id])
 
+    def _build_rmuc_ai_rng(self) -> dict[str, random.Random]:
+        if not self._rmuc_spectator_ai:
+            return {}
+        result: dict[str, random.Random] = {}
+        for team_id in sorted({robot.team for robot in self.robots}):
+            for robot_type in ("hero", "engineer", "infantry", "sentry"):
+                role_robots = sorted(
+                    (
+                        robot
+                        for robot in self.robots
+                        if robot.team == team_id and robot.type == robot_type
+                    ),
+                    key=lambda robot: robot.id,
+                )
+                for index, robot in enumerate(role_robots, start=1):
+                    result[robot.id] = random.Random(
+                        f"{_RMUC_AI_SEED}:{robot_type}:{index}"
+                    )
+        return result
+
+    def _team_side(self, team_id: str) -> str:
+        for side, team in self.config.scenario.teams.items():
+            if team.team_id == team_id:
+                return side
+        raise KeyError(team_id)
+
+    def _zone(self, zone_id: str):
+        return next((zone for zone in self.map.zones if zone.id == zone_id), None)
+
+    @staticmethod
+    def _zone_center(zone) -> tuple[float, float]:
+        return (zone.x + zone.width / 2, zone.y + zone.height / 2)
+
+    def _zone_goal(self, zone, robot: Robot) -> tuple[float, float]:
+        peers = sorted(
+            (
+                item
+                for item in self.robots
+                if item.team == robot.team and item.type == robot.type
+            ),
+            key=lambda item: item.id,
+        )
+        role_index = peers.index(robot) + 1
+        offsets = {
+            ("hero", 1): (-0.22, 0.00),
+            ("engineer", 1): (0.22, 0.00),
+            ("infantry", 1): (-0.12, -0.22),
+            ("infantry", 2): (0.12, 0.22),
+            ("sentry", 1): (0.00, 0.22),
+        }
+        dx, dy = offsets.get((robot.type, role_index), (0.0, 0.0))
+        if self._team_side(robot.team) == "blue":
+            dx, dy = -dx, -dy
+        return (
+            zone.x + zone.width * (0.5 + dx),
+            zone.y + zone.height * (0.5 + dy),
+        )
+
+    def _set_ai_goal(
+        self,
+        robot: Robot,
+        intent: str,
+        goal: tuple[float, float],
+    ) -> None:
+        self._ai_intents[robot.id] = intent
+        if math.dist(robot.position, goal) <= self.map.collision_radius:
+            robot.path.clear()
+            return
+        self._set_robot_destination(robot, goal)
+
+    def _weighted_ai_choice(
+        self,
+        robot: Robot,
+        candidates: list[tuple[str, tuple[float, float], float]],
+    ) -> tuple[str, tuple[float, float]] | None:
+        if not candidates:
+            return None
+        total = math.fsum(weight for _intent, _goal, weight in candidates)
+        pick = self._rmuc_ai_rng[robot.id].random() * total
+        running = 0.0
+        for intent, goal, weight in candidates:
+            running += weight
+            if pick <= running:
+                return intent, goal
+        intent, goal, _weight = candidates[-1]
+        return intent, goal
+
+    def _rmuc_engineer_step(self, robot: Robot, display_state) -> bool:
+        side = self._team_side(robot.team)
+        resource_zone = self._zone(f"{side}-resource")
+        assembly_zone = self._zone(f"{side}-assembly")
+        if resource_zone is None or assembly_zone is None:
+            return False
+
+        units = dict(display_state.engineer_energy_units).get(robot.id, 0)
+        tech = {
+            team_id: (d1, d2, d3, d4, active)
+            for team_id, _cap, d1, d2, d3, d4, active, _outside
+            in display_state.tech_core_status
+        }.get(robot.team)
+        d4_state = {
+            team_id: (phase, current_step)
+            for (
+                team_id,
+                phase,
+                current_step,
+                _activated_at,
+                _first_core_at,
+                _pending_remaining,
+                _retry_after,
+                _permanent,
+                _penalty,
+            ) in display_state.d4_status
+        }.get(robot.team, ("idle", 0))
+        if tech is None:
+            return False
+        d1, d2, d3, d4, active = tech
+        phase, current_step = d4_state
+
+        if phase in {"active", "pending"}:
+            self._set_ai_goal(
+                robot,
+                "装配科技核心",
+                self._zone_goal(assembly_zone, robot),
+            )
+            if phase == "active" and current_step > 0 and assembly_zone.contains(robot.position):
+                confirm = getattr(self.ruleset, "confirm_d4_step", None)
+                if callable(confirm):
+                    confirm(self, robot, "own", current_step)
+                    confirm(self, robot, "opponent", current_step)
+            return True
+
+        if active is not None:
+            self._set_ai_goal(
+                robot,
+                "装配科技核心",
+                self._zone_goal(assembly_zone, robot),
+            )
+            if assembly_zone.contains(robot.position):
+                confirm = getattr(self.ruleset, "confirm_tech_core_assembly", None)
+                if callable(confirm):
+                    confirm(self, robot)
+            return True
+
+        difficulty = 1 if d1 == 0 else 2 if d2 == 0 else 3 if d3 == 0 else 4 if d4 == 0 else None
+        if difficulty is None:
+            return False
+        required_units = 2 if difficulty == 4 else 1
+        if units < required_units:
+            self._set_ai_goal(
+                robot,
+                "获取能量单元",
+                self._zone_goal(resource_zone, robot),
+            )
+            if resource_zone.contains(robot.position):
+                pickup = getattr(self.ruleset, "pickup_energy_unit", None)
+                if callable(pickup):
+                    pickup(self, robot)
+            return True
+
+        self._set_ai_goal(
+            robot,
+            "装配科技核心",
+            self._zone_goal(assembly_zone, robot),
+        )
+        if assembly_zone.contains(robot.position):
+            start = getattr(self.ruleset, "start_tech_core_assembly", None)
+            if callable(start) and start(self, robot, difficulty) and difficulty < 4:
+                confirm = getattr(self.ruleset, "confirm_tech_core_assembly", None)
+                if callable(confirm):
+                    confirm(self, robot)
+        return True
+
+    def _rmuc_ai_step(self, robot: Robot, display_state) -> None:
+        if not robot.alive:
+            robot.path.clear()
+            self._ai_intents[robot.id] = "等待复活"
+            return
+
+        side = self._team_side(robot.team)
+        supply_zone = self._zone(f"{side}-supply-buff")
+        if supply_zone is None:
+            return
+        supply_goal = self._zone_goal(supply_zone, robot)
+
+        if robot.hp / robot.max_hp <= 0.30:
+            self._set_ai_goal(robot, "回撤", supply_goal)
+            return
+
+        if robot.type == "engineer" and self._rmuc_engineer_step(robot, display_state):
+            return
+
+        projectiles = {
+            robot_id: count
+            for robot_id, _projectile, count in display_state.robot_projectiles
+        }
+        ammo = projectiles.get(robot.id)
+        low_ammo = ammo is not None and ammo <= (1 if robot.type == "hero" else 8)
+        if robot.type in {"hero", "infantry", "sentry"} and low_ammo:
+            if supply_zone.contains(robot.position):
+                exchange = getattr(self.ruleset, "exchange_projectiles", None)
+                purchased = bool(callable(exchange) and exchange(self, robot))
+                robot.path.clear()
+                self._ai_intents[robot.id] = "补充弹量" if purchased else "等待补给"
+            else:
+                self._set_ai_goal(robot, "前往补给区", supply_goal)
+            return
+
+        candidates: list[tuple[str, tuple[float, float], float]] = []
+        enemy_robots = sorted(
+            (
+                target
+                for target in self.robots
+                if target.alive and target.team != robot.team
+            ),
+            key=lambda target: (target.type, target.id),
+        )
+        role_weight = {"hero": 1.35, "engineer": 1.0, "infantry": 1.2, "sentry": 0.9}
+        field_scale = max(self.map.width, self.map.height)
+        for target in enemy_robots:
+            distance = math.dist(robot.position, target.position)
+            distance_weight = max(0.45, 1.35 - distance / field_scale)
+            name = _RMUC_ROBOT_NAMES.get(target.type, target.type)
+            candidates.append(
+                (
+                    f"追击敌方{name}",
+                    target.position,
+                    role_weight.get(target.type, 1.0) * distance_weight,
+                )
+            )
+
+        enemy_structures = sorted(
+            (
+                structure
+                for structure in self.structures
+                if structure.alive
+                and structure.team != robot.team
+                and self.ruleset.can_target(structure)
+            ),
+            key=lambda structure: (structure.type, structure.id),
+        )
+        for structure in enemy_structures:
+            candidates.append(
+                (
+                    "进攻敌方前哨站" if structure.type == "outpost" else "进攻敌方基地",
+                    structure.position,
+                    0.95 if structure.type == "outpost" else 0.55,
+                )
+            )
+
+        central = self._zone(f"{side}-central-elevated-buff")
+        if central is not None:
+            candidates.append(("前往中央区域", self._zone_goal(central, robot), 1.1))
+        for suffix in ("trapezoid-buff", "outpost-buff"):
+            zone = self._zone(f"{side}-{suffix}")
+            if zone is not None:
+                candidates.append(("前往防御增益区", self._zone_goal(zone, robot), 0.55))
+
+        if robot.type in {"infantry", "sentry"}:
+            own_outpost = next(
+                (
+                    structure
+                    for structure in self.structures
+                    if structure.team == robot.team and structure.type == "outpost"
+                ),
+                None,
+            )
+            structure_status = dict(
+                (structure_id, status)
+                for structure_id, _hp, _max_hp, status
+                in display_state.structure_statuses
+            )
+            fortress_ready = own_outpost is not None and (
+                not own_outpost.alive or "REBUILT" in structure_status.get(own_outpost.id, "")
+            )
+            fortress = self._zone(f"{side}-fortress-buff")
+            if fortress_ready and fortress is not None:
+                candidates.append(("占领堡垒", self._zone_goal(fortress, robot), 1.7))
+
+        candidates.append(("前往补给区", supply_goal, 0.25))
+        choice = self._weighted_ai_choice(robot, candidates)
+        if choice is None:
+            robot.path.clear()
+            self._ai_intents[robot.id] = "待机"
+            return
+        intent, goal = choice
+        if intent.startswith("追击敌方"):
+            distance = math.dist(robot.position, goal)
+            if distance <= robot.attack_range and self.map.has_line_of_sight(robot.position, goal):
+                robot.path.clear()
+                self._ai_intents[robot.id] = intent
+                return
+        self._set_ai_goal(robot, intent, goal)
+
     def _update_ai(self, dt: float) -> None:
+        if self._rmuc_spectator_ai:
+            display_state = self.ruleset.display_state
+            if display_state is None:
+                return
+            for robot in sorted(self.robots, key=lambda item: item.id):
+                elapsed = self._ai_replan_elapsed[robot.id] + dt
+                if not robot.alive:
+                    self._rmuc_ai_step(robot, display_state)
+                    self._ai_replan_elapsed[robot.id] = 0.0
+                    continue
+                if elapsed >= _RMUC_AI_REPLAN_INTERVAL:
+                    elapsed %= _RMUC_AI_REPLAN_INTERVAL
+                    self._rmuc_ai_step(robot, display_state)
+                self._ai_replan_elapsed[robot.id] = elapsed
+            return
+
         for robot in self.robots:
             if self.is_player_controlled(robot.id):
                 continue
