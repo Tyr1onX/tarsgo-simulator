@@ -208,7 +208,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_start = None
                         selection_current = None
                         selection_shift = False
-                    elif len(selected_robot_ids) == 1:
+                    elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
                             (
@@ -314,6 +314,8 @@ def main(scenario_path: str | Path | None = None) -> None:
                             modifiers = getattr(event, "mod", 0) | pygame.key.get_mods()
                             selection_shift = bool(modifiers & pygame.KMOD_SHIFT)
                     elif event.button == 3:
+                        if _is_rmuc_rules_lab(match):
+                            continue
                         world = _screen_to_world(event.pos, viewport)
                         if world is None:
                             continue
@@ -356,12 +358,16 @@ def main(scenario_path: str | Path | None = None) -> None:
             visual_state.begin_frame(match)
             match.update(dt)
             visual_state.after_match_update(match, dt)
-            live_player_ids = {
+            live_selectable_ids = {
                 robot.id
                 for robot in match.robots
-                if robot.alive and match.is_player_controlled(robot.id)
+                if robot.alive
+                and (
+                    _is_rmuc_rules_lab(match)
+                    or match.is_player_controlled(robot.id)
+                )
             }
-            selected_robot_ids.intersection_update(live_player_ids)
+            selected_robot_ids.intersection_update(live_selectable_ids)
             selection_rect = (
                 _selection_rectangle(selection_start, selection_current)
                 if selection_start is not None and selection_current is not None
@@ -430,7 +436,10 @@ def _select_player_robot(
     match: Match,
 ) -> str | None:
     for robot in match.robots:
-        if not robot.alive or not match.is_player_controlled(robot.id):
+        if not robot.alive or (
+            not _is_rmuc_rules_lab(match)
+            and not match.is_player_controlled(robot.id)
+        ):
             continue
         distance = math.hypot(robot.position[0] - point[0], robot.position[1] - point[1])
         if distance <= match.map.collision_radius + 9:
@@ -477,7 +486,10 @@ def _select_player_robots_in_rectangle(
 ) -> set[str]:
     selected = set()
     for robot in match.robots:
-        if not robot.alive or not match.is_player_controlled(robot.id):
+        if not robot.alive or (
+            not _is_rmuc_rules_lab(match)
+            and not match.is_player_controlled(robot.id)
+        ):
             continue
         center = tuple(round(value) for value in viewport.world_to_screen(robot.position))
         if selection_rect.collidepoint(center):
@@ -669,7 +681,11 @@ def _selected_unit_lines(
     progression_state = progression.get(robot.id)
     if progression_state is not None:
         title = f"{title} · {progression_state[0]}级"
-    lines = [title, f"生命      {robot.hp} / {robot.max_hp}"]
+    lines = [title]
+    ai_intent = match.ai_intent(robot.id)
+    if ai_intent is not None:
+        lines.append(f"当前 AI 意图  {ai_intent}")
+    lines.append(f"生命      {robot.hp} / {robot.max_hp}")
     if progression_state is not None:
         _level, experience, _level_cap = progression_state
         lines.append(f"经验      {experience:g}")
@@ -1018,7 +1034,14 @@ def _draw_selected_unit_card(
     y += 18
     title_surface = small_font.render(title, True, SELECTION_COLOR)
     screen.blit(title_surface, (x, y))
-    y += 27
+    y += 22
+    ai_intent = match.ai_intent(robot.id)
+    if ai_intent is not None:
+        screen.blit(
+            small_font.render(f"当前 AI 意图  {ai_intent}", True, MUTED_COLOR),
+            (x, y),
+        )
+        y += 20
 
     y = _draw_section_title(screen, small_font, "生命", x=x, y=y)
     hp_text = small_font.render(
@@ -1198,7 +1221,7 @@ def _draw_context_controls(
     title_color = SELECTION_COLOR if debug_geometry else MUTED_COLOR
     screen.blit(small_font.render(title, True, title_color), (x, y))
     y += 22
-    for key, action, enabled in contextual_controls(selected_types):
+    for key, action, enabled in contextual_controls(selected_types, spectator=True):
         color = TEXT_COLOR if enabled else MUTED_COLOR
         screen.blit(
             small_font.render(f"{key:<10} {action}", True, color),
@@ -1223,7 +1246,7 @@ def _draw_rmuc_panel(
 
     inner_x = panel.x + 9
     inner_width = panel.width - 18
-    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 332)
+    unit_rect = pygame.Rect(inner_x, panel.y + 9, inner_width, 352)
     team_rect = pygame.Rect(inner_x, unit_rect.bottom + 8, inner_width, 112)
     controls_rect = pygame.Rect(
         inner_x,
@@ -1974,468 +1997,3 @@ def _draw_visual_projectiles(
             end,
             profile.head_radius,
         )
-
-    for impact in visual_state.impacts:
-        point = viewport.world_to_screen(impact.position)
-        profile = projectile_visual_profile(impact.caliber)
-        radius = round(
-            (5 if profile.caliber == "17mm" else 9)
-            + impact.progress * (7 if profile.caliber == "17mm" else 13)
-        )
-        pygame.draw.circle(
-            screen,
-            IMPACT_COLOR,
-            (round(point[0]), round(point[1])),
-            radius,
-            width=2 if profile.caliber == "17mm" else 3,
-        )
-
-
-def _draw_move_markers(
-    screen: pygame.Surface,
-    viewport: Viewport,
-    visual_state: CombatVisualState,
-) -> None:
-    for marker in visual_state.move_markers:
-        point = viewport.world_to_screen(marker.position)
-        center = (round(point[0]), round(point[1]))
-        radius = round(8 + marker.progress * 12)
-        pygame.draw.circle(
-            screen,
-            SELECTION_COLOR,
-            center,
-            radius,
-            width=2,
-        )
-        arm = 8
-        pygame.draw.line(
-            screen,
-            SELECTION_COLOR,
-            (center[0] - arm, center[1]),
-            (center[0] + arm, center[1]),
-            width=1,
-        )
-        pygame.draw.line(
-            screen,
-            SELECTION_COLOR,
-            (center[0], center[1] - arm),
-            (center[0], center[1] + arm),
-            width=1,
-        )
-
-
-def _draw_selected_paths(
-    screen: pygame.Surface,
-    match: Match,
-    viewport: Viewport,
-    selected_robot_ids: set[str],
-) -> None:
-    for robot in match.robots:
-        if (
-            robot.id not in selected_robot_ids
-            or not match.is_player_controlled(robot.id)
-            or not robot.path
-        ):
-            continue
-        world_points = [robot.position, *robot.path]
-        screen_points = [
-            tuple(round(value) for value in viewport.world_to_screen(point))
-            for point in world_points
-        ]
-        if len(screen_points) >= 2:
-            pygame.draw.lines(
-                screen,
-                MUTED_COLOR,
-                False,
-                screen_points,
-                width=1,
-            )
-
-
-def _draw(
-    screen: pygame.Surface,
-    font: pygame.font.Font,
-    small_font: pygame.font.Font,
-    match: Match,
-    player_team: str,
-    opponent_team: str,
-    selected_robot_ids: set[str],
-    selection_rect: pygame.Rect | None,
-    viewport: Viewport,
-    *,
-    debug_geometry: bool = False,
-    visual_state: CombatVisualState | None = None,
-) -> None:
-    screen.fill(BACKGROUND)
-    display_state = match.ruleset.display_state
-    is_rmuc = _is_rmuc_rules_lab(match)
-    robot_statuses = (
-        dict(display_state.robot_statuses)
-        if display_state is not None
-        else {}
-    )
-
-    if is_rmuc:
-        _draw_rmuc_hud(
-            screen,
-            font,
-            small_font,
-            match,
-            player_team,
-            opponent_team,
-        )
-    else:
-        player_robots = [
-            robot for robot in match.robots if robot.team == player_team
-        ]
-        opponent_robots = [
-            robot for robot in match.robots if robot.team == opponent_team
-        ]
-        player_alive = sum(robot.alive for robot in player_robots)
-        opponent_alive = sum(robot.alive for robot in opponent_robots)
-        player_hp = sum(robot.hp for robot in player_robots)
-        opponent_hp = sum(robot.hp for robot in opponent_robots)
-        player_max_hp = sum(robot.max_hp for robot in player_robots)
-        opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
-
-        if display_state is None:
-            left = (
-                f"{match.team_name(player_team)}  "
-                f"{player_alive}/{len(player_robots)} alive  "
-                f"HP {player_hp}/{player_max_hp}"
-            )
-            right = (
-                f"{match.team_name(opponent_team)}  "
-                f"{opponent_alive}/{len(opponent_robots)} alive  "
-                f"HP {opponent_hp}/{opponent_max_hp}"
-            )
-        else:
-            victory_points = dict(display_state.victory_points)
-            attack_damage = dict(display_state.attack_damage)
-            coins = dict(display_state.coins)
-            left = (
-                f"{match.team_name(player_team)} "
-                f"VP {victory_points[player_team]} "
-                f"C {coins.get(player_team, 0)} "
-                f"DMG {attack_damage.get(player_team, 0)}"
-            )
-            right = (
-                f"{match.team_name(opponent_team)} "
-                f"VP {victory_points[opponent_team]} "
-                f"C {coins.get(opponent_team, 0)} "
-                f"DMG {attack_damage.get(opponent_team, 0)}"
-            )
-        timer = max(0, math.ceil(match.time_limit - match.elapsed_time))
-        if match.finished:
-            status = (
-                f"{match.team_name(match.winner)} WINS"
-                if match.winner
-                else "DRAW"
-            )
-        else:
-            status = f"BATTLE  {timer // 60:02}:{timer % 60:02}"
-
-        screen.blit(font.render(left, True, PLAYER_COLOR), (WINDOW_MARGIN, 22))
-        status_surface = font.render(status, True, TEXT_COLOR)
-        screen.blit(
-            status_surface,
-            status_surface.get_rect(
-                center=(screen.get_width() // 2, 34)
-            ),
-        )
-        right_surface = font.render(right, True, OPPONENT_COLOR)
-        screen.blit(
-            right_surface,
-            (
-                screen.get_width() - WINDOW_MARGIN - right_surface.get_width(),
-                22,
-            ),
-        )
-        if display_state is not None:
-            control_owner = (
-                match.team_name(display_state.control_owner)
-                if display_state.control_owner is not None
-                else "Neutral"
-            )
-            detail = f"Control: {control_owner}"
-            detail_surface = small_font.render(detail, True, TEXT_COLOR)
-            screen.blit(
-                detail_surface,
-                detail_surface.get_rect(
-                    center=(screen.get_width() // 2, 54)
-                ),
-            )
-
-    field_left, field_top = viewport.origin
-    field_width, field_height = viewport.screen_size
-    field_rect = pygame.Rect(
-        round(field_left),
-        round(field_top),
-        round(field_width),
-        round(field_height),
-    )
-    animation_time = pygame.time.get_ticks() / 1000.0
-    if is_rmuc:
-        _draw_rmuc_battlefield(screen, field_rect)
-    else:
-        pygame.draw.rect(screen, FIELD_COLOR, field_rect)
-        pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
-
-    for obstacle in match.map.obstacles:
-        obstacle_rect = _world_rect_to_screen(
-            viewport,
-            obstacle.x,
-            obstacle.y,
-            obstacle.width,
-            obstacle.height,
-        )
-        pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
-
-    selected_types = _selected_robot_types(match, selected_robot_ids)
-    selected_positions = [
-        robot.position
-        for robot in match.robots
-        if robot.id in selected_robot_ids
-    ]
-    for zone in match.map.zones:
-        zone_rect = _world_rect_to_screen(
-            viewport,
-            zone.x,
-            zone.y,
-            zone.width,
-            zone.height,
-        )
-        if is_rmuc and not debug_geometry:
-            if zone_visual_style(
-                zone.id,
-                selected_robot_types=selected_types,
-            ) is None:
-                continue
-            _draw_rmuc_zone(
-                screen,
-                small_font,
-                zone_rect,
-                zone_id=zone.id,
-                selected_types=selected_types,
-                occupied_by_selected=any(
-                    zone.contains(position)
-                    for position in selected_positions
-                ),
-                animation_time=animation_time,
-            )
-            continue
-
-        if is_rmuc:
-            style = _rmuc_zone_style(zone.id, debug_geometry=True)
-            if style is None:
-                continue
-            zone_color, zone_label = style
-        else:
-            zone_color, zone_label = ZONE_STYLE.get(
-                zone.id,
-                (ZONE_COLOR, zone.id.upper()),
-            )
-        pygame.draw.rect(screen, zone_color, zone_rect, width=2)
-        label_surface = small_font.render(zone_label, True, zone_color)
-        screen.blit(
-            label_surface,
-            label_surface.get_rect(center=zone_rect.center),
-        )
-
-    structure_statuses = (
-        {
-            structure_id: (hp, max_hp, status)
-            for structure_id, hp, max_hp, status
-            in display_state.structure_statuses
-        }
-        if display_state is not None
-        else {}
-    )
-    for structure in match.structures:
-        center = tuple(
-            round(value)
-            for value in viewport.world_to_screen(structure.position)
-        )
-        color = PLAYER_COLOR if structure.team == player_team else OPPONENT_COLOR
-        hp, max_hp, structure_status = structure_statuses.get(
-            structure.id,
-            (structure.hp, structure.max_hp, ""),
-        )
-        if is_rmuc:
-            _draw_rmuc_structure(
-                screen,
-                small_font,
-                structure_type=structure.type,
-                center=center,
-                color=color,
-                alive=structure.alive,
-                hp=hp,
-                max_hp=max_hp,
-                status=structure_status,
-                animation_time=animation_time,
-                debug_geometry=debug_geometry,
-            )
-        else:
-            size = max(13, round(viewport.world_length_to_screen(34)))
-            rect = pygame.Rect(
-                center[0] - size,
-                center[1] - size,
-                size * 2,
-                size * 2,
-            )
-            pygame.draw.rect(
-                screen,
-                color if structure.alive else MUTED_COLOR,
-                rect,
-                width=3,
-            )
-            label = f"{'B' if structure.type == 'base' else 'O'} {hp}/{max_hp}"
-            label_surface = small_font.render(label, True, TEXT_COLOR)
-            screen.blit(
-                label_surface,
-                label_surface.get_rect(
-                    center=(center[0], center[1] + size + 12)
-                ),
-            )
-
-    labels = (
-        _rmuc_robot_labels(match)
-        if is_rmuc
-        else _default_robot_labels(match, player_team, opponent_team)
-    )
-    if is_rmuc and visual_state is not None:
-        _draw_selected_paths(
-            screen,
-            match,
-            viewport,
-            selected_robot_ids,
-        )
-        _draw_move_markers(screen, viewport, visual_state)
-
-    for robot in match.robots:
-        center = tuple(
-            round(value)
-            for value in viewport.world_to_screen(robot.position)
-        )
-        color = PLAYER_COLOR if robot.team == player_team else OPPONENT_COLOR
-        visual_robot = (
-            visual_state.robots.get(robot.id)
-            if is_rmuc and visual_state is not None
-            else None
-        )
-        if visual_robot is not None:
-            radius = _draw_rmuc_robot_shape(
-                screen,
-                center=center,
-                robot_type=robot.type,
-                color=color,
-                body_angle=visual_robot.body_angle,
-                turret_angle=visual_robot.turret_angle,
-                alive=robot.alive,
-                selected=robot.id in selected_robot_ids,
-                animation_time=animation_time,
-                muzzle_remaining=visual_robot.muzzle_remaining,
-                muzzle_caliber=visual_robot.muzzle_caliber,
-                impact_remaining=visual_robot.impact_remaining,
-                raw_status=robot_statuses.get(robot.id, ""),
-                invincible=(
-                    robot.alive
-                    and not match.ruleset.can_receive_damage(robot)
-                ),
-                hp_ratio=(robot.hp / robot.max_hp if robot.max_hp else 0.0),
-            )
-        else:
-            radius = max(
-                9,
-                round(viewport.world_length_to_screen(match.map.collision_radius)),
-            )
-            if robot.id in selected_robot_ids:
-                pygame.draw.circle(
-                    screen,
-                    SELECTION_COLOR,
-                    center,
-                    radius + 6,
-                    width=2,
-                )
-            pygame.draw.circle(
-                screen,
-                color if robot.alive else MUTED_COLOR,
-                center,
-                radius,
-            )
-
-        bar_width, bar_height = 44 if is_rmuc else 48, 6
-        bar_x = center[0] - bar_width // 2
-        bar_y = center[1] - radius - 15
-        pygame.draw.rect(
-            screen,
-            HP_BACKGROUND,
-            (bar_x, bar_y, bar_width, bar_height),
-        )
-        if visual_robot is not None:
-            ghost_hp = min(
-                float(robot.max_hp),
-                visual_robot.ghost_hp(robot.hp),
-            )
-            ghost_width = round(bar_width * ghost_hp / robot.max_hp)
-            if ghost_width:
-                pygame.draw.rect(
-                    screen,
-                    DAMAGE_GHOST_COLOR,
-                    (bar_x, bar_y, ghost_width, bar_height),
-                )
-        hp_width = round(bar_width * robot.hp / robot.max_hp)
-        if hp_width:
-            pygame.draw.rect(
-                screen,
-                HP_COLOR,
-                (bar_x, bar_y, hp_width, bar_height),
-            )
-
-        robot_label = labels[robot.id]
-        label_surface = small_font.render(
-            robot_label,
-            True,
-            TEXT_COLOR if robot.alive else MUTED_COLOR,
-        )
-        screen.blit(
-            label_surface,
-            label_surface.get_rect(
-                center=(center[0], center[1] + radius + 11)
-            ),
-        )
-        if debug_geometry:
-            robot_status = robot_statuses.get(robot.id)
-            if robot_status:
-                status_surface = small_font.render(
-                    robot_status,
-                    True,
-                    MUTED_COLOR,
-                )
-                screen.blit(
-                    status_surface,
-                    status_surface.get_rect(
-                        center=(center[0], center[1] + radius + 27)
-                    ),
-                )
-
-    if is_rmuc and visual_state is not None:
-        _draw_visual_projectiles(screen, viewport, visual_state)
-
-    if selection_rect is not None:
-        pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)
-
-    if is_rmuc:
-        _draw_rmuc_panel(
-            screen,
-            small_font,
-            match,
-            player_team,
-            selected_robot_ids,
-            labels,
-            debug_geometry=debug_geometry,
-        )
-
-
-if __name__ == "__main__":
-    cli()
