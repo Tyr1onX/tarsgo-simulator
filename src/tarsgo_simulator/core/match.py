@@ -28,14 +28,28 @@ _RMUC_ROBOT_NAMES = {
 
 
 class Match:
-    def __init__(self, config: MatchConfig) -> None:
+    def __init__(
+        self,
+        config: MatchConfig,
+        *,
+        rmuc_spectator_ai: bool = False,
+    ) -> None:
         self.config = config
         self.ruleset: RuleSet = create_ruleset(config.rule_document)
+        self._rmuc_spectator_ai_requested = rmuc_spectator_ai
         self.reset()
 
     @classmethod
-    def from_scenario(cls, scenario_path: str | Path) -> "Match":
-        return cls(load_match_config(scenario_path))
+    def from_scenario(
+        cls,
+        scenario_path: str | Path,
+        *,
+        rmuc_spectator_ai: bool = False,
+    ) -> "Match":
+        return cls(
+            load_match_config(scenario_path),
+            rmuc_spectator_ai=rmuc_spectator_ai,
+        )
 
     def reset(self) -> None:
         scenario = self.config.scenario
@@ -94,7 +108,8 @@ class Match:
         self._active_update_dt: float | None = None
         self._active_update_start_time: float | None = None
         self._rmuc_spectator_ai = (
-            self.config.rule_document.metadata.id == _RMUC_RULE_ID
+            self._rmuc_spectator_ai_requested
+            and self.config.rule_document.metadata.id == _RMUC_RULE_ID
         )
         self._ai_replan_elapsed = {
             robot.id: 0.0
@@ -554,7 +569,7 @@ class Match:
             for robot_id, _projectile, count in display_state.robot_projectiles
         }
         ammo = projectiles.get(robot.id)
-        low_ammo = ammo is not None and ammo <= (1 if robot.type == "hero" else 8)
+        low_ammo = ammo is not None and ammo <= (0 if robot.type == "hero" else 8)
         if robot.type in {"hero", "infantry", "sentry"} and low_ammo:
             if supply_zone.contains(robot.position):
                 exchange = getattr(self.ruleset, "exchange_projectiles", None)
