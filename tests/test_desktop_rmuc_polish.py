@@ -206,6 +206,114 @@ def test_badge_rendering_helper_stays_inside_width() -> None:
     assert end_y < 80
 
 
+def test_observer_hud_layout_is_mirrored_and_clear_of_battlefield() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    left, timer, right = app._rmuc_hud_rects(app.WINDOW_SIZE[0])
+    window = pygame.Rect((0, 0), app.WINDOW_SIZE)
+    field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
+
+    assert window.contains(left)
+    assert window.contains(timer)
+    assert window.contains(right)
+    assert not left.colliderect(timer)
+    assert not timer.colliderect(right)
+    assert left.width == right.width
+    assert left.x == app.WINDOW_SIZE[0] - right.right
+    assert max(left.bottom, timer.bottom, right.bottom) < field.top
+
+
+def test_observer_panel_cards_are_compact_and_non_overlapping() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    panel = pygame.Rect(*app.RMUC_PANEL_RECT)
+
+    empty = app._rmuc_panel_layout(panel, 0)
+    single = app._rmuc_panel_layout(panel, 1)
+    multi = app._rmuc_panel_layout(panel, 4)
+
+    assert empty[0].height < single[0].height
+    assert multi[0].height < single[0].height
+    for layout in (empty, single, multi):
+        unit, team, controls = layout
+        assert panel.contains(unit)
+        assert panel.contains(team)
+        assert panel.contains(controls)
+        assert unit.bottom < team.top
+        assert team.bottom < controls.top
+
+
+def test_hover_helper_is_safe_without_video_system() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.display.quit()
+
+    assert not app._screen_rect_is_hovered(pygame.Rect(0, 0, 20, 20))
+
+
+def test_zone_labels_are_contextual_in_observer_view() -> None:
+    app = _app()
+
+    assert not app._should_show_zone_label(
+        emphasized=False,
+        occupied_by_selected=False,
+        hovered=False,
+    )
+    assert app._should_show_zone_label(
+        emphasized=True,
+        occupied_by_selected=False,
+        hovered=False,
+    )
+    assert app._should_show_zone_label(
+        emphasized=False,
+        occupied_by_selected=True,
+        hovered=False,
+    )
+    assert app._should_show_zone_label(
+        emphasized=False,
+        occupied_by_selected=False,
+        hovered=True,
+    )
+
+
+def test_rmuc_team_colors_follow_red_blue_sides() -> None:
+    app = _app()
+    match = _match()
+    red = match.config.scenario.teams["red"].team_id
+    blue = match.config.scenario.teams["blue"].team_id
+
+    assert app._rmuc_team_color(match, red) == app.TEAM_RED_COLOR
+    assert app._rmuc_team_color(match, blue) == app.TEAM_BLUE_COLOR
+
+
+def test_selected_ai_path_overlay_supports_opponent_units(monkeypatch) -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = Match.from_scenario(RMUC_SCENARIO, rmuc_spectator_ai=True)
+    opponent = next(robot for robot in match.robots if robot.id == "opponent-hero")
+    opponent.path = [(match.map.width / 2, match.map.height / 2)]
+    viewport = app._viewport_for_match(match)
+    screen, _font, small_font = _surface_and_fonts()
+    calls = []
+    original_lines = pygame.draw.lines
+
+    def capture_lines(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_lines(*args, **kwargs)
+
+    monkeypatch.setattr(pygame.draw, "lines", capture_lines)
+    app._draw_selected_paths(
+        screen,
+        small_font,
+        match,
+        viewport,
+        {opponent.id},
+    )
+
+    assert match.is_ai_controlled(opponent.id)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     ("robot_type", "expected_action"),
     [
