@@ -21,3 +21,4 @@ class MatchEvent:
     attacker_id: str | None = None
     attacker_team_id: str | None = None
     damage: int = 0
+    award_experience: bool = True

@@ -73,9 +73,11 @@ class TrainingV0Rules:
         target: DamageableTarget,
         amount: int,
         source_team_id: str | None,
+        *,
+        bypass_attack_defense: bool = False,
     ) -> int:
         """Training V0 applies damage without Defense or Shield modifiers."""
-        del target, source_team_id
+        del target, source_team_id, bypass_attack_defense
         return amount
 
     def prepare_movement(self, match: "Match", dt: float) -> None:

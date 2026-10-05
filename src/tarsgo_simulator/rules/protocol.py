@@ -67,6 +67,10 @@ class RuleSetDisplayState:
         tuple[str, str, float, float, float, int, int, bool], ...
     ] = ()
     energy_mechanism_effect_timers: tuple[tuple[str, str, float], ...] = ()
+    dart_system_statuses: tuple[
+        tuple[str, int, int, str, float, str, str], ...
+    ] = ()
+    dart_effect_statuses: tuple[tuple[str, float, float], ...] = ()
 
 
 class RuleSet(Protocol):
@@ -94,6 +98,8 @@ class RuleSet(Protocol):
         target: DamageableTarget,
         amount: int,
         source_team_id: str | None,
+        *,
+        bypass_attack_defense: bool = False,
     ) -> int: ...
 
     def prepare_movement(self, match: "Match", dt: float) -> None: ...
