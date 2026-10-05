@@ -189,10 +189,10 @@ def test_team_system_text_is_fitted_to_panel_width() -> None:
     pygame.font.init()
     font = app.ui_font(12)
 
-    fitted = app._fit_text_to_width(font, "科技核心 上限 10 · 1/1/1/1", 100)
+    fitted = app._fit_text_to_width(font, "科技核心 上限 10 · 1/1/1/1", 40)
 
     assert fitted.endswith("…")
-    assert font.size(fitted)[0] <= 100
+    assert font.size(fitted)[0] <= 40
 
 
 def test_selected_drone_timer_lines_fit_without_truncation() -> None:
