@@ -49,6 +49,7 @@ def _cleanup_desktop_imports():
     if pygame is not None:
         pygame.quit()
     sys.modules.pop("tarsgo_simulator.desktop.app", None)
+    sys.modules.pop("tarsgo_simulator.desktop.icon", None)
     for module_name in list(sys.modules):
         if module_name == "pygame" or module_name.startswith("pygame."):
             sys.modules.pop(module_name, None)
@@ -73,6 +74,35 @@ def test_robot_types_have_distinct_visual_profiles() -> None:
     assert profiles["engineer"].barrel_length == 0
     assert profiles["engineer"].tool_arm_length > 0
     assert profiles["sentry"].body_width > profiles["infantry"].body_width
+    assert profiles["drone"].barrel_length == 0
+
+
+def test_rmuc_robot_silhouettes_are_distinct_without_labels() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.init()
+    renderings = []
+
+    for robot_type in ("hero", "engineer", "infantry", "sentry", "drone"):
+        surface = pygame.Surface((128, 128))
+        surface.fill((18, 24, 32))
+        app._draw_rmuc_robot_shape(
+            surface,
+            center=(64, 64),
+            robot_type=robot_type,
+            color=app.TEAM_RED_COLOR,
+            body_angle=0.23,
+            turret_angle=-0.35,
+            alive=True,
+            selected=False,
+            animation_time=0.0,
+            muzzle_remaining=0.0,
+            muzzle_caliber="42mm" if robot_type == "hero" else "17mm",
+            impact_remaining=0.0,
+        )
+        renderings.append(pygame.image.tostring(surface, "RGB"))
+
+    assert len(set(renderings)) == 5
 
 
 def test_visual_orientation_update_does_not_mutate_gameplay_position() -> None:

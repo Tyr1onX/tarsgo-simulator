@@ -9,6 +9,7 @@ import pygame
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.desktop.fonts import ui_font
+from tarsgo_simulator.desktop.icon import render_app_icon
 from tarsgo_simulator.desktop.polish import (
     BadgeSpec,
     contextual_controls,
@@ -174,6 +175,7 @@ def main(scenario_path: str | Path | None = None) -> None:
     try:
         viewport = _viewport_for_match(match)
         screen = pygame.display.set_mode(WINDOW_SIZE)
+        pygame.display.set_icon(render_app_icon(128))
         pygame.display.set_caption(_window_caption(match))
         font = ui_font(25)
         small_font = ui_font(18)
@@ -2817,107 +2819,247 @@ def _draw_rmuc_robot_shape(
         draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     if alive and respawn_remaining > 0:
         draw_color = _blend_color(draw_color, SHIELD_COLOR, 0.28)
-    half_w = profile.body_width / 2
-    half_h = profile.body_height / 2
     if robot_type == "drone":
         hover = round(2 * math.sin(animation_time * 3.2))
         center = (center[0], center[1] + hover)
-        shadow = pygame.Surface((50, 26), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow, (*ARENA_SHADOW, 105), shadow.get_rect())
-        screen.blit(shadow, (center[0] - 25, center[1] + 10))
-        arm = 18
-        rotor_radius = 6
-        for dx, dy in ((-arm, -10), (arm, -10), (-arm, 10), (arm, 10)):
-            rotor = _rotate_point(center, (dx, dy), body_angle)
-            pygame.draw.line(screen, ROBOT_OUTLINE, center, rotor, width=2)
-            pygame.draw.circle(screen, ROBOT_OUTLINE, rotor, rotor_radius, width=2)
-            pygame.draw.circle(screen, draw_color, rotor, 2)
-        body_points = [
-            _rotate_point(center, (-10, 0), body_angle),
-            _rotate_point(center, (0, -8), body_angle),
-            _rotate_point(center, (12, 0), body_angle),
-            _rotate_point(center, (0, 8), body_angle),
-        ]
-        pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
-        pygame.draw.polygon(
-            screen,
+
+    light_color = _blend_color(draw_color, TEXT_COLOR, 0.58)
+    armor_color = _blend_color(draw_color, ROBOT_OUTLINE, 0.25)
+
+    def body_point(local: tuple[float, float]) -> tuple[int, int]:
+        return _rotate_point(center, local, body_angle)
+
+    def body_polygon(
+        points: tuple[tuple[float, float], ...],
+        fill: tuple[int, int, int],
+        *,
+        outline: tuple[int, int, int] = ROBOT_OUTLINE,
+        width: int = 2,
+    ) -> None:
+        transformed = [body_point(point) for point in points]
+        pygame.draw.polygon(screen, fill, transformed)
+        pygame.draw.polygon(screen, outline, transformed, width=width)
+
+    def body_line(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        color: tuple[int, int, int],
+        width: int,
+    ) -> None:
+        pygame.draw.line(screen, color, body_point(start), body_point(end), width)
+
+    shadow_extent = max(
+        profile.body_width,
+        profile.body_height,
+        profile.tool_arm_length + 14,
+        46 if robot_type == "drone" else 0,
+    )
+    shadow = pygame.Surface(
+        (shadow_extent + 14, max(28, round(shadow_extent * 0.56))),
+        pygame.SRCALPHA,
+    )
+    pygame.draw.ellipse(shadow, (*ARENA_SHADOW, 105), shadow.get_rect())
+    screen.blit(
+        shadow,
+        (center[0] - shadow.get_width() // 2 + 3, center[1] + 8),
+    )
+
+    if robot_type == "hero":
+        body_polygon(
+            (
+                (-22, -10), (-17, -14), (14, -14), (23, -8),
+                (23, 8), (14, 14), (-17, 14), (-22, 10),
+            ),
+            armor_color,
+            width=3,
+        )
+        body_polygon(
+            ((-16, -9), (11, -9), (18, -5), (18, 5), (11, 9), (-16, 9)),
             draw_color,
-            [
-                _rotate_point(center, (-7, 0), body_angle),
-                _rotate_point(center, (0, -5), body_angle),
-                _rotate_point(center, (9, 0), body_angle),
-                _rotate_point(center, (0, 5), body_angle),
-            ],
+            outline=light_color,
+            width=1,
         )
-    else:
-        body_points = [
-            _rotate_point(center, (-half_w, -half_h), body_angle),
-            _rotate_point(center, (half_w, -half_h), body_angle),
-            _rotate_point(center, (half_w, half_h), body_angle),
-            _rotate_point(center, (-half_w, half_h), body_angle),
-        ]
-        pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
-        inner_points = [
-            _rotate_point(center, (-half_w + 2, -half_h + 2), body_angle),
-            _rotate_point(center, (half_w - 2, -half_h + 2), body_angle),
-            _rotate_point(center, (half_w - 2, half_h - 2), body_angle),
-            _rotate_point(center, (-half_w + 2, half_h - 2), body_angle),
-        ]
-        pygame.draw.polygon(screen, draw_color, inner_points)
-
-    if robot_type == "sentry":
-        for side in (-1, 1):
-            pod = _rotate_point(
-                center,
-                (0, side * (half_h + 3)),
-                body_angle,
-            )
-            pygame.draw.rect(
-                screen,
-                ROBOT_OUTLINE,
-                pygame.Rect(pod[0] - 7, pod[1] - 3, 14, 6),
-                border_radius=2,
-            )
+        body_polygon(
+            ((13, -5), (20, -4), (20, 4), (13, 5)),
+            light_color,
+            width=1,
+        )
+        body_line((-14, -11), (9, -11), light_color, 2)
+        body_line((-14, 11), (9, 11), armor_color, 2)
+        body_line((-9, 0), (8, 0), light_color, 3)
     elif robot_type == "engineer":
-        shoulder = _rotate_point(center, (3, 0), body_angle)
-        elbow = _rotate_point(
-            center,
-            (profile.tool_arm_length * 0.55, -8),
-            body_angle,
+        body_polygon(
+            (
+                (-18, -10), (-13, -14), (11, -14), (18, -9),
+                (18, 9), (11, 14), (-13, 14), (-18, 10),
+            ),
+            armor_color,
+            width=3,
         )
-        tool = _rotate_point(
-            center,
-            (profile.tool_arm_length, -2),
-            body_angle,
+        body_polygon(
+            ((-12, -8), (8, -8), (13, -5), (13, 5), (8, 8), (-12, 8)),
+            draw_color,
+            outline=light_color,
+            width=1,
         )
-        pygame.draw.line(screen, TEXT_COLOR, shoulder, elbow, width=3)
-        pygame.draw.line(screen, TEXT_COLOR, elbow, tool, width=3)
-        pygame.draw.circle(screen, draw_color, tool, 4, width=2)
+        for side in (-1, 1):
+            body_polygon(
+                ((-11, side * 11), (9, side * 11), (11, side * 14), (-13, side * 14)),
+                ROBOT_OUTLINE,
+                outline=armor_color,
+                width=1,
+            )
+            body_line((-7, side * 12), (5, side * 12), light_color, 2)
+        body_line((-9, 0), (7, 0), light_color, 3)
+        shoulder = body_point((12, 0))
+        elbow = body_point((profile.tool_arm_length * 0.68, -7))
+        tool = body_point((profile.tool_arm_length, -3))
+        pygame.draw.line(screen, ROBOT_OUTLINE, shoulder, elbow, width=7)
+        pygame.draw.line(screen, ASSEMBLY_COLOR, shoulder, elbow, width=4)
+        pygame.draw.circle(screen, ROBOT_OUTLINE, elbow, 5)
+        pygame.draw.circle(screen, light_color, elbow, 2)
+        pygame.draw.line(screen, ROBOT_OUTLINE, elbow, tool, width=6)
+        pygame.draw.line(screen, ASSEMBLY_COLOR, elbow, tool, width=3)
+        pygame.draw.line(
+            screen,
+            ASSEMBLY_COLOR,
+            body_point((profile.tool_arm_length - 1, -8)),
+            body_point((profile.tool_arm_length + 5, -11)),
+            width=3,
+        )
+        pygame.draw.line(
+            screen,
+            ASSEMBLY_COLOR,
+            body_point((profile.tool_arm_length - 1, 2)),
+            body_point((profile.tool_arm_length + 5, 5)),
+            width=3,
+        )
+    elif robot_type == "sentry":
+        body_polygon(
+            (
+                (-26, -9), (-21, -14), (19, -14), (26, -9),
+                (26, 9), (19, 14), (-21, 14), (-26, 9),
+            ),
+            armor_color,
+            width=3,
+        )
+        body_polygon(
+            ((-19, -9), (15, -9), (22, -5), (22, 5), (15, 9), (-19, 9)),
+            draw_color,
+            outline=light_color,
+            width=1,
+        )
+        for side in (-1, 1):
+            body_polygon(
+                ((-17, side * 10), (17, side * 10), (20, side * 13), (-20, side * 13)),
+                ROBOT_OUTLINE,
+                outline=armor_color,
+                width=1,
+            )
+            body_line((-12, side * 11), (13, side * 11), light_color, 2)
+        body_polygon(
+            ((16, -5), (23, -4), (23, 4), (16, 5)),
+            light_color,
+            width=1,
+        )
+        body_line((-9, 0), (10, 0), light_color, 3)
+    elif robot_type == "drone":
+        rotors = ((-18, -9), (18, -9), (-18, 9), (18, 9))
+        for local_rotor in rotors:
+            rotor = body_point(local_rotor)
+            pygame.draw.line(screen, ROBOT_OUTLINE, center, rotor, width=6)
+            pygame.draw.line(screen, armor_color, center, rotor, width=3)
+            pygame.draw.circle(screen, ROBOT_OUTLINE, rotor, 7)
+            pygame.draw.circle(screen, armor_color, rotor, 5)
+            pygame.draw.circle(screen, light_color, rotor, 2)
+            blade = body_point((local_rotor[0] + 4, local_rotor[1] - 1))
+            pygame.draw.line(screen, TEXT_COLOR, rotor, blade, width=2)
+        body_polygon(
+            ((-13, -7), (-8, -12), (8, -12), (13, -7),
+             (13, 7), (8, 12), (-8, 12), (-13, 7)),
+            armor_color,
+            width=3,
+        )
+        body_polygon(
+            ((-9, -5), (-5, -8), (7, -8), (10, -5),
+             (10, 5), (5, 8), (-9, 6)),
+            draw_color,
+            outline=light_color,
+            width=1,
+        )
+        pygame.draw.circle(screen, TEXT_COLOR, center, 3)
+    else:
+        body_polygon(
+            (
+                (-14, -7), (-10, -10), (10, -10), (14, -6),
+                (14, 6), (10, 10), (-10, 10), (-14, 7),
+            ),
+            armor_color,
+            width=3,
+        )
+        body_polygon(
+            ((-9, -6), (7, -6), (11, -4), (11, 4), (7, 6), (-9, 6)),
+            draw_color,
+            outline=light_color,
+            width=1,
+        )
+        for x in (-8, 9):
+            for y in (-9, 9):
+                wheel = body_point((x, y))
+                pygame.draw.circle(screen, ROBOT_OUTLINE, wheel, 4)
+                pygame.draw.circle(screen, armor_color, wheel, 2)
+        body_polygon(
+            ((9, -3), (13, -2), (13, 2), (9, 3)),
+            light_color,
+            width=1,
+        )
+        body_line((-6, 0), (6, 0), light_color, 2)
 
+    turret_center = body_point((4, 0))
     muzzle_point = center
     if profile.turret_radius > 0:
         pygame.draw.circle(
             screen,
             ROBOT_OUTLINE,
-            center,
-            profile.turret_radius + 2,
+            turret_center,
+            profile.turret_radius + 3,
         )
         pygame.draw.circle(
             screen,
-            draw_color,
-            center,
+            armor_color,
+            turret_center,
             profile.turret_radius,
         )
+        pygame.draw.circle(
+            screen,
+            light_color,
+            _rotate_point(turret_center, (-3, -3), turret_angle),
+            max(2, profile.turret_radius // 3),
+        )
         muzzle_point = _rotate_point(
-            center,
+            turret_center,
             (profile.barrel_length, 0),
             turret_angle,
         )
         barrel_start = _rotate_point(
-            center,
+            turret_center,
             (profile.turret_radius - 1, 0),
             turret_angle,
         )
+        if robot_type == "sentry":
+            for side in (-1, 1):
+                rail_start = _rotate_point(
+                    turret_center,
+                    (profile.turret_radius, side * 4),
+                    turret_angle,
+                )
+                rail_end = _rotate_point(
+                    turret_center,
+                    (profile.barrel_length - 3, side * 4),
+                    turret_angle,
+                )
+                pygame.draw.line(screen, ROBOT_OUTLINE, rail_start, rail_end, width=4)
+                pygame.draw.line(screen, light_color, rail_start, rail_end, width=2)
         pygame.draw.line(
             screen,
             ROBOT_OUTLINE,
@@ -2927,7 +3069,7 @@ def _draw_rmuc_robot_shape(
         )
         pygame.draw.line(
             screen,
-            TEXT_COLOR if alive else MUTED_COLOR,
+            light_color if alive else MUTED_COLOR,
             barrel_start,
             muzzle_point,
             width=profile.barrel_width,
@@ -3547,9 +3689,13 @@ def _draw(
     if is_rmuc:
         for robot in match.robots:
             profile = robot_visual_profile(robot.type)
-            body_extent = max(profile.body_width, profile.body_height)
-            if robot.type == "drone":
-                body_extent = max(body_extent, 50)
+            body_extent = max(
+                profile.body_width,
+                profile.body_height,
+                profile.barrel_length + profile.body_width // 2,
+                profile.tool_arm_length + profile.body_width // 2,
+                50 if robot.type == "drone" else 0,
+            )
             radius = max(9, body_extent // 2 + 7)
             body_rect = pygame.Rect(0, 0, radius * 2, radius * 2)
             body_rect.center = map_centers[robot.id]
@@ -3657,7 +3803,7 @@ def _draw(
                 )
 
         robot_label = labels[robot.id]
-        if is_rmuc:
+        if is_rmuc and debug_geometry:
             map_label = robot_label
             if not robot.alive:
                 map_label = f"{robot_label} · 亡"
@@ -3690,7 +3836,7 @@ def _draw(
                 border_radius=4,
             )
             screen.blit(label_surface, label_surface.get_rect(center=label_rect.center))
-        else:
+        elif not is_rmuc:
             label_surface = small_font.render(
                 robot_label,
                 True,
