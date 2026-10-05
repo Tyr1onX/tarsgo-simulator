@@ -7,3 +7,4 @@ robots:
   - {id: tarsgo-infantry-1, type: infantry}
   - {id: tarsgo-infantry-2, type: infantry}
   - {id: tarsgo-sentry, type: sentry}
+  - {id: tarsgo-drone, type: drone}

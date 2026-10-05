@@ -82,8 +82,12 @@ setup:
     tarsgo-infantry-1: [360, 750]
     tarsgo-infantry-2: [360, 850]
     tarsgo-sentry: [360, 960]
+    # Synthetic helipad anchor for the aerial Drone; not an official field coordinate.
+    tarsgo-drone: [500, 260]
     opponent-hero: [2440, 960]
     opponent-engineer: [2440, 850]
     opponent-infantry-1: [2440, 750]
     opponent-infantry-2: [2440, 650]
     opponent-sentry: [2440, 540]
+    # Mirrored synthetic helipad anchor; not an official field coordinate.
+    opponent-drone: [2300, 1240]

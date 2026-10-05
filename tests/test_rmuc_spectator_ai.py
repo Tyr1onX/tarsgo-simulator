@@ -64,6 +64,7 @@ def test_rmuc_spectator_ai_controls_all_robots_symmetrically() -> None:
         ("tarsgo-infantry-1", "opponent-infantry-1"),
         ("tarsgo-infantry-2", "opponent-infantry-2"),
         ("tarsgo-sentry", "opponent-sentry"),
+        ("tarsgo-drone", "opponent-drone"),
     )
     for red_id, blue_id in mirrored_pairs:
         assert match.ai_intent(red_id) == match.ai_intent(blue_id)

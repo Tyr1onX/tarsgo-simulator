@@ -6,7 +6,7 @@ stage: regional
 status: official-partial
 official_version: "1.4.0"
 source_url: https://bbs.robomaster.com/wiki/20204847/809871?source=7
-last_verified: "2026-09-29"
+last_verified: "2026-10-05"
 match_duration: 420
 
 economy:
@@ -51,6 +51,20 @@ robot_lifecycle:
     immediate_power_multiplier: 2.0
     immediate_power_cap: 200
     immediate_power_duration: 4
+
+# Official V1.4.0 aerial foundations. The Rules Lab does not model real
+# flight speed or altitude; 25 m/s is the 17mm launcher muzzle-velocity limit.
+# Drone takes no attack/collision damage and has no recovery/respawn or
+# capturable ground-buff semantics.
+drone_foundation:
+  projectile_muzzle_velocity_limit_mps: 25
+  initial_free_air_support_seconds: 30
+  periodic_free_grant_interval_seconds: 60
+  periodic_free_grant_seconds: 20
+  damage_applicable: false
+  recovery_and_respawn: false
+  chassis_power_overlimit: false
+  capturable_buff_points: false
 
 remote_healing:
   eligible_types: [hero, infantry, sentry]
@@ -266,6 +280,7 @@ experience:
   shot:
     hero: 10
     infantry: 1
+    drone: 1
   damage:
     robot_per_hp: 4
     outpost_per_hp: 2
@@ -305,6 +320,18 @@ performance:
       - {level: 8, max_hp: 255, chassis_power_limit: 85, heat_limit: 120, cooling_per_second: 41}
       - {level: 9, max_hp: 270, chassis_power_limit: 90, heat_limit: 125, cooling_per_second: 44}
       - {level: 10, max_hp: 300, chassis_power_limit: 100, heat_limit: 130, cooling_per_second: 50}
+
+  drone:
+    - {level: 1, heat_limit: 100, cooling_per_second: 20}
+    - {level: 2, heat_limit: 110, cooling_per_second: 30}
+    - {level: 3, heat_limit: 120, cooling_per_second: 40}
+    - {level: 4, heat_limit: 130, cooling_per_second: 50}
+    - {level: 5, heat_limit: 140, cooling_per_second: 60}
+    - {level: 6, heat_limit: 150, cooling_per_second: 70}
+    - {level: 7, heat_limit: 160, cooling_per_second: 80}
+    - {level: 8, heat_limit: 170, cooling_per_second: 90}
+    - {level: 9, heat_limit: 180, cooling_per_second: 100}
+    - {level: 10, heat_limit: 200, cooling_per_second: 120}
 
   infantry:
     chassis:
@@ -378,3 +405,9 @@ lab_robot_parameters:
     damage: 20
     projectile: 17mm
     chassis_power_limit: 100
+  # Synthetic direct-damage timing only. Drone has no official HP/chassis
+  # fields here because V1.4.0 marks attack/collision damage and chassis-power
+  # overlimit as not applicable.
+  drone:
+    damage: 20
+    projectile: 17mm

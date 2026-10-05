@@ -66,7 +66,8 @@ def test_initial_allowances_and_drone_metadata() -> None:
     assert states["tarsgo-infantry-2"].allowed == 0
     assert states["tarsgo-sentry"].allowed == 300
     assert match.ruleset._projectile_initial["drone"] == ("17mm", 750)
-    assert all(robot.type != "drone" for robot in match.robots)
+    assert states["tarsgo-drone"].allowed == 750
+    assert states["opponent-drone"].allowed == 750
     assert "tarsgo-engineer" not in states
 
 

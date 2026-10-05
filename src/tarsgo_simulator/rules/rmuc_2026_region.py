@@ -18,15 +18,25 @@ from tarsgo_simulator.rules.protocol import (
 )
 
 
-_RMUC_ROBOT_TYPES = ("hero", "engineer", "infantry", "sentry")
-_REBUILD_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
-_EXPERIENCE_ROBOT_TYPES = {"hero", "infantry"}
+_RMUC_ROBOT_TYPES = ("hero", "engineer", "infantry", "sentry", "drone")
+_GROUND_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
+_REBUILD_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
+_EXPERIENCE_ROBOT_TYPES = {"hero", "infantry", "drone"}
+_HP_PERFORMANCE_ROBOT_TYPES = {"hero", "infantry"}
+_RADAR_VULNERABILITY_ROBOT_TYPES = set(_RMUC_ROBOT_TYPES)
 
 
 @dataclass
 class _RobotProgressionState:
     experience: float = 0.0
     level: int = 1
+
+
+@dataclass
+class _DroneAirSupportState:
+    free_seconds: float
+    active: bool = False
+    next_grant_at: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -287,6 +297,58 @@ class RMUC2026RegionalRules:
         self._time_limit = _number(
             document.data, "match_duration", document, "match_duration"
         )
+
+        drone = _mapping(document.data, "drone_foundation", document)
+        if set(drone) != {
+            "projectile_muzzle_velocity_limit_mps",
+            "initial_free_air_support_seconds",
+            "periodic_free_grant_interval_seconds",
+            "periodic_free_grant_seconds",
+            "damage_applicable",
+            "recovery_and_respawn",
+            "chassis_power_overlimit",
+            "capturable_buff_points",
+        }:
+            raise ConfigError(
+                f"{document.path}: drone_foundation 字段不完整或包含未知字段"
+            )
+        self._drone_projectile_muzzle_velocity_limit_mps = _number(
+            drone,
+            "projectile_muzzle_velocity_limit_mps",
+            document,
+            "drone_foundation.projectile_muzzle_velocity_limit_mps",
+        )
+        self._drone_initial_free_air_support = _number(
+            drone,
+            "initial_free_air_support_seconds",
+            document,
+            "drone_foundation.initial_free_air_support_seconds",
+        )
+        self._drone_periodic_grant_interval = _number(
+            drone,
+            "periodic_free_grant_interval_seconds",
+            document,
+            "drone_foundation.periodic_free_grant_interval_seconds",
+        )
+        self._drone_periodic_grant = _number(
+            drone,
+            "periodic_free_grant_seconds",
+            document,
+            "drone_foundation.periodic_free_grant_seconds",
+        )
+        if (
+            self._drone_projectile_muzzle_velocity_limit_mps != 25
+            or self._drone_initial_free_air_support != 30
+            or self._drone_periodic_grant_interval != 60
+            or self._drone_periodic_grant != 20
+            or drone.get("damage_applicable") is not False
+            or drone.get("recovery_and_respawn") is not False
+            or drone.get("chassis_power_overlimit") is not False
+            or drone.get("capturable_buff_points") is not False
+        ):
+            raise ConfigError(
+                f"{document.path}: drone_foundation 必须匹配 RMUC 2026 Regional V1.4.0"
+            )
 
         economy = _mapping(document.data, "economy", document)
         if set(economy) != {
@@ -735,8 +797,7 @@ class RMUC2026RegionalRules:
         )
 
         if self._tech_core_difficulties[2].first_level_cap != 7:
-            raise ConfigError(
-                f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
+            raise ConfigError(                f"{document.path}: Tech Core Difficulty 2 first level_cap 必须为 7"
             )
         if self._tech_core_difficulties[3].first_level_cap != 10:
             raise ConfigError(
@@ -868,9 +929,9 @@ class RMUC2026RegionalRules:
             )
 
         shot = _mapping(experience, "shot", document)
-        if set(shot) != {"hero", "infantry"}:
+        if set(shot) != {"hero", "infantry", "drone"}:
             raise ConfigError(
-                f"{document.path}: `experience.shot` 必须只包含 hero、infantry"
+                f"{document.path}: `experience.shot` 必须只包含 hero、infantry、drone"
             )
         self._shot_experience = {
             robot_type: float(
@@ -881,7 +942,7 @@ class RMUC2026RegionalRules:
                     f"experience.shot.{robot_type}",
                 )
             )
-            for robot_type in ("hero", "infantry")
+            for robot_type in ("hero", "infantry", "drone")
         }
 
         damage = _mapping(experience, "damage", document)
@@ -937,10 +998,16 @@ class RMUC2026RegionalRules:
         )
 
         performance = _mapping(document.data, "performance", document)
-        if set(performance) != {"lab_selection", "hero", "infantry"}:
+        if set(performance) != {"lab_selection", "hero", "infantry", "drone"}:
             raise ConfigError(
-                f"{document.path}: `performance` 必须只包含 lab_selection、hero、infantry"
+                f"{document.path}: `performance` 必须只包含 lab_selection、hero、infantry、drone"
             )
+        self._drone_performance = _parse_performance_rows(
+            performance.get("drone"),
+            ("heat_limit", "cooling_per_second"),
+            document,
+            "performance.drone",
+        )
         hero_performance = _mapping(performance, "hero", document)
         expected_hero_profiles = {"close-range-priority", "long-range-priority"}
         if set(hero_performance) != expected_hero_profiles:
@@ -1076,7 +1143,7 @@ class RMUC2026RegionalRules:
         if set(lab_parameters) != {"common", *_RMUC_ROBOT_TYPES}:
             raise ConfigError(
                 f"{document.path}: `lab_robot_parameters` 必须只包含 "
-                "common、hero、engineer、infantry、sentry"
+                "common、hero、engineer、infantry、sentry、drone"
             )
         self._lab_parameters: dict[str, RobotParameters] = {}
         self._projectile_by_type: dict[str, str | None] = {}
@@ -1496,7 +1563,7 @@ class RMUC2026RegionalRules:
                 )
             self._projectile_initial[robot_type] = (projectile, allowance)
 
-        for robot_type in ("hero", "infantry", "sentry"):
+        for robot_type in ("hero", "infantry", "sentry", "drone"):
             configured_projectile = self._projectile_by_type[robot_type]
             if configured_projectile != self._projectile_initial[robot_type][0]:
                 raise ConfigError(
@@ -1529,8 +1596,7 @@ class RMUC2026RegionalRules:
             if set(nonremote) != {"coins", "allowance"} or set(remote) != {
                 "coins",
                 "allowance",
-            }:
-                raise ConfigError(
+            }:                raise ConfigError(
                     f"{document.path}: {projectile} purchase unit 字段必须为 coins、allowance"
                 )
             parsed = (
@@ -2223,6 +2289,8 @@ class RMUC2026RegionalRules:
         self._rebuild_zone_by_team: dict[str, Zone] = {}
         self._robot_types_by_id: dict[str, str] = {}
         self._robots_by_id: dict[str, Robot] = {}
+        self._drone_helipad_by_robot: dict[str, tuple[float, float]] = {}
+        self._drone_air_support_by_robot: dict[str, _DroneAirSupportState] = {}
         self._progression_by_robot: dict[str, _RobotProgressionState] = {}
         self._level_cap_by_team: dict[str, int] = {}
         self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
@@ -2327,7 +2395,6 @@ class RMUC2026RegionalRules:
                     " ".join(outpost_status_parts),
                 )
             )
-
         rebuild_progress = []
         for team_id, state in sorted(self._team_states.items()):
             for robot_id, progress in sorted(state.rebuild_progress_by_robot.items()):
@@ -2431,6 +2498,8 @@ class RMUC2026RegionalRules:
                         self._effective_performance(robot_id),
                     )
                     for robot_id in sorted(self._progression_by_robot)
+                    if self._robots_by_id[robot_id].type
+                    in _HP_PERFORMANCE_ROBOT_TYPES
                 )
             ),
             tech_core_status=tuple(
@@ -2496,6 +2565,16 @@ class RMUC2026RegionalRules:
                 )
                 for team_id, state in sorted(self._tech_core_by_team.items())
             ),
+            drone_air_support=tuple(
+                (
+                    robot_id,
+                    state.active,
+                    state.free_seconds,
+                )
+                for robot_id, state in sorted(
+                    self._drone_air_support_by_robot.items()
+                )
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -2516,7 +2595,52 @@ class RMUC2026RegionalRules:
                 f"不支持结构类型 `{structure_type}`"
             ) from exc
 
+    def drone_air_support_active(self, robot_id: str) -> bool:
+        state = self._drone_air_support_by_robot.get(robot_id)
+        return state is not None and state.active
+
+    def drone_air_support_available(self, robot_id: str) -> float:
+        state = self._drone_air_support_by_robot.get(robot_id)
+        return state.free_seconds if state is not None else 0.0
+
+    def start_drone_air_support(self, match: "Match", drone: Robot) -> bool:
+        state = self._drone_air_support_by_robot.get(drone.id)
+        if (
+            match.finished
+            or drone.type != "drone"
+            or self._robots_by_id.get(drone.id) is not drone
+            or state is None
+            or state.active
+            or state.free_seconds <= 1e-9
+        ):
+            return False
+        state.active = True
+        drone.alive = True
+        drone.hp = drone.max_hp
+        return True
+
+    def pause_drone_air_support(self, drone: Robot) -> bool:
+        state = self._drone_air_support_by_robot.get(drone.id)
+        if state is None or not state.active:
+            return False
+        state.active = False
+        drone.alive = False
+        drone.path.clear()
+        helipad = self._drone_helipad_by_robot.get(drone.id)
+        if helipad is not None:
+            drone.position = helipad
+        return True
+
+    def _drone_on_helipad(self, drone: Robot) -> bool:
+        helipad = self._drone_helipad_by_robot.get(drone.id)
+        return (
+            helipad is not None
+            and math.dist(drone.position, helipad) <= 1e-6
+        )
+
     def can_move(self, robot: Robot) -> bool:
+        if robot.type == "drone":
+            return robot.alive and self.drone_air_support_active(robot.id)
         state = self._chassis_power_by_robot.get(robot.id)
         return (
             robot.alive
@@ -2533,11 +2657,18 @@ class RMUC2026RegionalRules:
         lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
-        usable_fortress_reserved = self._usable_fortress_reserved(robot)
+        usable_fortress_reserved = (
+            0 if robot.type == "drone" else self._usable_fortress_reserved(robot)
+        )
+        lifecycle_ready = (
+            self.drone_air_support_active(robot.id)
+            and not self._drone_on_helipad(robot)
+            if robot.type == "drone"
+            else lifecycle is not None and not lifecycle.weak
+        )
         return (
             robot.alive
-            and lifecycle is not None
-            and not lifecycle.weak
+            and lifecycle_ready
             and robot.damage > 0
             and allowance is not None
             and (allowance.allowed > 0 or usable_fortress_reserved > 0)
@@ -2551,6 +2682,8 @@ class RMUC2026RegionalRules:
             # Unlike RMUL robot invincibility, an invincible RMUC Base must not
             # consume target selection while its Outpost is alive.
             return self.can_receive_damage(target)
+        if isinstance(target, Robot) and target.type == "drone":
+            return False
         return target.alive
 
     def on_attack_committed(self, robot: Robot) -> None:
@@ -2558,10 +2691,17 @@ class RMUC2026RegionalRules:
         lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
         allowance = self._projectile_allowance_by_robot.get(robot.id)
         shooting_heat = self._shooting_heat_by_robot.get(robot.id)
-        usable_fortress_reserved = self._usable_fortress_reserved(robot)
+        usable_fortress_reserved = (
+            0 if robot.type == "drone" else self._usable_fortress_reserved(robot)
+        )
+        lifecycle_ready = (
+            self.drone_air_support_active(robot.id)
+            and not self._drone_on_helipad(robot)
+            if robot.type == "drone"
+            else lifecycle is not None and not lifecycle.weak
+        )
         if (
-            lifecycle is None
-            or lifecycle.weak
+            not lifecycle_ready
             or allowance is None
             or (
                 allowance.allowed <= 0
@@ -2579,8 +2719,9 @@ class RMUC2026RegionalRules:
         else:
             allowance.allowed -= 1
 
-        lifecycle.disengaged_elapsed = 0.0
-        lifecycle.combat_activity_this_frame = True
+        if lifecycle is not None:
+            lifecycle.disengaged_elapsed = 0.0
+            lifecycle.combat_activity_this_frame = True
 
         heat_parameters = self._effective_heat_parameters(robot.id)
         shooting_heat.heat += self._shooting_heat_per_shot[
@@ -2617,6 +2758,7 @@ class RMUC2026RegionalRules:
         purchase_state = self._projectile_purchase_by_team.get(robot.team)
         if (
             match.finished
+            or robot.type == "drone"
             or not robot.alive
             or self._robots_by_id.get(robot.id) is not robot
             or lifecycle_state is None
@@ -3052,8 +3194,7 @@ class RMUC2026RegionalRules:
             )
             > 0
             and self._assembly_invincibility_elapsed_by_engineer.get(
-                robot.id, 0.0
-            )
+                robot.id, 0.0            )
             < self._assembly_invincibility_limit - 1e-9
         )
 
@@ -3061,6 +3202,8 @@ class RMUC2026RegionalRules:
         if not target.alive:
             return False
         if isinstance(target, Robot):
+            if target.type == "drone":
+                return False
             lifecycle = self._robot_lifecycle_by_robot.get(target.id)
             if lifecycle is not None and lifecycle.invincible_remaining > 0:
                 return False
@@ -3222,7 +3365,7 @@ class RMUC2026RegionalRules:
         """
         if (
             self._robots_by_id.get(target.id) is not target
-            or target.type not in _RMUC_ROBOT_TYPES
+            or target.type not in _RADAR_VULNERABILITY_ROBOT_TYPES
             or source_team_id not in self.attack_damage_by_team
             or source_team_id == target.team
             or vulnerability not in {0.0, 0.15, 0.20}
@@ -3331,6 +3474,8 @@ class RMUC2026RegionalRules:
         return max(vulnerabilities, default=0.0)
 
     def _effective_defense(self, target: DamageableTarget) -> float:
+        if isinstance(target, Robot) and target.type == "drone":
+            return self._current_large_energy_mechanism_defense(target.team)
         state = self._team_states.get(target.team)
         if state is None:
             return 0.0
@@ -3813,7 +3958,9 @@ class RMUC2026RegionalRules:
     ) -> None:
         del match
         for robot in self._robots_by_id.values():
-            state = self._terrain_crossing_by_robot[robot.id]
+            state = self._terrain_crossing_by_robot.get(robot.id)
+            if state is None:
+                continue
             if not robot.alive or self._is_weak(robot):
                 state.occupied_rfid_zone_ids.clear()
                 self._reset_terrain_sequence(state)
@@ -3846,8 +3993,7 @@ class RMUC2026RegionalRules:
 
     def _process_terrain_rfid_entry(
         self,
-        robot: Robot,
-        state: _TerrainCrossingState,
+        robot: Robot,        state: _TerrainCrossingState,
         zone_id: str,
         event_time: float,
     ) -> None:
@@ -3898,9 +4044,9 @@ class RMUC2026RegionalRules:
         robot: Robot,
         terrain_type: str,
     ) -> bool:
-        if not robot.alive:
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if not robot.alive or state is None:
             return False
-        state = self._terrain_crossing_by_robot[robot.id]
         rule = self._terrain_rules[terrain_type]
 
         if terrain_type == "road" and state.road_reacquire_remaining > 0:
@@ -4002,7 +4148,7 @@ class RMUC2026RegionalRules:
                 point_state.release_remaining = self._field_occupy_release_delay
 
         for robot in self._robots_by_id.values():
-            if not robot.alive or self._is_weak(robot):
+            if robot.type == "drone" or not robot.alive or self._is_weak(robot):
                 for key in [
                     key
                     for key in self._field_occupy_remaining
@@ -4205,6 +4351,7 @@ class RMUC2026RegionalRules:
             "engineer": 1,
             "infantry": 2,
             "sentry": 1,
+            "drone": 1,
         }
         for team in match.config.scenario.teams.values():
             actual_roster = {
@@ -4214,7 +4361,7 @@ class RMUC2026RegionalRules:
             if actual_roster != expected_roster:
                 raise ConfigError(
                     f"{self._document.path}: 队伍 `{team.team_id}` 必须恰好包含 "
-                    "1 hero、1 engineer、2 infantry、1 sentry"
+                    "1 hero、1 engineer、2 infantry、1 sentry、1 drone"
                 )
 
         player_team = match.config.scenario.player_team
@@ -4224,12 +4371,14 @@ class RMUC2026RegionalRules:
             if team.team_id == player_team
         )
         expected_player_controlled = {
-            robot.id for robot in player_definitions if robot.type != "sentry"
+            robot.id
+            for robot in player_definitions
+            if robot.type not in {"sentry", "drone"}
         }
         if match.config.scenario.player_controlled != expected_player_controlled:
             raise ConfigError(
                 f"{self._document.path}: player_controlled 必须包含 player_team 的 "
-                "hero、engineer、两台 infantry；sentry 由 AI 控制"
+                "hero、engineer、两台 infantry；sentry、drone 由 AI 控制"
             )
 
         team_by_side = {
@@ -4284,7 +4433,25 @@ class RMUC2026RegionalRules:
                 disengaged_elapsed=self._disengaged_after
             )
             for robot in match.robots
+            if robot.type != "drone"
         }
+        self._drone_helipad_by_robot = {
+            robot.id: robot.position
+            for robot in match.robots
+            if robot.type == "drone"
+        }
+        self._drone_air_support_by_robot = {
+            robot.id: _DroneAirSupportState(
+                free_seconds=self._drone_initial_free_air_support,
+                next_grant_at=self._drone_periodic_grant_interval,
+            )
+            for robot in match.robots
+            if robot.type == "drone"
+        }
+        for robot in match.robots:
+            if robot.type == "drone":
+                robot.alive = False
+                robot.path.clear()
         self._projectile_allowance_by_robot = {}
         for robot in match.robots:
             initial_rule = self._projectile_initial.get(robot.type)
@@ -4311,11 +4478,13 @@ class RMUC2026RegionalRules:
                 buffer_energy=self._effective_buffer_energy_max(robot.id)
             )
             for robot in match.robots
+            if robot.type != "drone"
         }
         self._chassis_power_accumulator = 0.0
         self._current_synthetic_power_by_robot = {
             robot.id: self._chassis_stationary_power_demand
             for robot in match.robots
+            if robot.type != "drone"
         }
         self._next_sentry_supply_grant = self._sentry_supply_interval
         self._progression_by_robot = {
@@ -4325,9 +4494,10 @@ class RMUC2026RegionalRules:
         }
         for robot_id in self._progression_by_robot:
             robot = self._robots_by_id[robot_id]
-            performance = self._effective_performance(robot_id)
-            robot.max_hp = performance.max_hp
-            robot.hp = performance.max_hp
+            if robot.type in _HP_PERFORMANCE_ROBOT_TYPES:
+                performance = self._effective_performance(robot_id)
+                robot.max_hp = performance.max_hp
+                robot.hp = performance.max_hp
 
         self._base_by_team = {}
         self._outpost_by_team = {}
@@ -4506,7 +4676,30 @@ class RMUC2026RegionalRules:
         self._terrain_crossing_by_robot = {
             robot.id: _TerrainCrossingState()
             for robot in match.robots
+            if robot.type != "drone"
         }
+
+    def _advance_drone_air_support(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+        for robot_id, state in self._drone_air_support_by_robot.items():
+            while (
+                state.next_grant_at <= settlement_end + 1e-9
+                and state.next_grant_at < self._time_limit - 1e-9
+            ):
+                state.free_seconds += self._drone_periodic_grant
+                state.next_grant_at += self._drone_periodic_grant_interval
+
+            if not state.active or dt <= 0:
+                continue
+            state.free_seconds = max(0.0, state.free_seconds - dt)
+            if state.free_seconds <= 1e-9:
+                state.free_seconds = 0.0
+                drone = self._robots_by_id[robot_id]
+                self.pause_drone_air_support(drone)
 
     def update(self, match: "Match", dt: float) -> None:
         newly_destroyed = self._consume_events(match)
@@ -4514,6 +4707,7 @@ class RMUC2026RegionalRules:
         active_dt = max(
             0.0, min(dt, self._time_limit - frame_start)
         )
+        self._advance_drone_air_support(match, active_dt)
         newly_respawned = self._advance_robot_lifecycles(
             match, active_dt, newly_destroyed
         )
@@ -4598,8 +4792,7 @@ class RMUC2026RegionalRules:
     def purchase_immediate_respawn(self, match: "Match", robot: Robot) -> bool:
         state = self._robot_lifecycle_by_robot.get(robot.id)
         economy = self._economy_by_team.get(robot.team)
-        if (
-            match.finished
+        if (            match.finished
             or robot.alive
             or self._robots_by_id.get(robot.id) is not robot
             or state is None
@@ -4664,7 +4857,9 @@ class RMUC2026RegionalRules:
     ) -> set[str]:
         newly_respawned: set[str] = set()
         for robot in match.robots:
-            state = self._robot_lifecycle_by_robot[robot.id]
+            state = self._robot_lifecycle_by_robot.get(robot.id)
+            if state is None:
+                continue
             if not robot.alive:
                 state.disengaged_elapsed = 0.0
                 state.healing_rounding_residual = 0.0
@@ -4728,7 +4923,9 @@ class RMUC2026RegionalRules:
             return
 
         for robot in match.robots:
-            state = self._robot_lifecycle_by_robot[robot.id]
+            state = self._robot_lifecycle_by_robot.get(robot.id)
+            if state is None:
+                continue
             supply_zone = self._supply_buff_zone_by_team[robot.team]
             if (
                 robot.id in newly_respawned
@@ -5057,6 +5254,16 @@ class RMUC2026RegionalRules:
                 heat_limit=launcher["heat_limit"],
                 cooling_per_second=launcher["cooling_per_second"],
             )
+        if robot_type == "drone":
+            row = self._drone_performance[level]
+            # HP/chassis power are not applicable to Drone in V1.4.0.
+            # The values stay internal sentinels and are never exposed as rules.
+            return _EffectivePerformance(
+                max_hp=1,
+                chassis_power_limit=0,
+                heat_limit=row["heat_limit"],
+                cooling_per_second=row["cooling_per_second"],
+            )
         raise KeyError(robot_type)
 
     def _effective_performance(self, robot_id: str) -> _EffectivePerformance:
@@ -5093,13 +5300,14 @@ class RMUC2026RegionalRules:
             return
 
         performance = self._effective_performance(robot_id)
-        previous_max_hp = robot.max_hp
-        hp_increase = max(0, performance.max_hp - previous_max_hp)
-        robot.max_hp = performance.max_hp
-        if robot.alive:
-            robot.hp = min(robot.max_hp, robot.hp + hp_increase)
-        else:
-            robot.hp = 0
+        if robot.type in _HP_PERFORMANCE_ROBOT_TYPES:
+            previous_max_hp = robot.max_hp
+            hp_increase = max(0, performance.max_hp - previous_max_hp)
+            robot.max_hp = performance.max_hp
+            if robot.alive:
+                robot.hp = min(robot.max_hp, robot.hp + hp_increase)
+            else:
+                robot.hp = 0
 
     def _robot_level(self, robot_id: str | None) -> int:
         if robot_id is None:
@@ -5383,8 +5591,7 @@ class RMUC2026RegionalRules:
         else:
             outside_before = attempt.outside_zone_elapsed
             attempt.outside_zone_elapsed += max(0.0, dt)
-            if (
-                attempt.outside_zone_elapsed + 1e-9
+            if (                attempt.outside_zone_elapsed + 1e-9
                 >= self._tech_core_leave_zone_fail_after
             ):
                 time_to_failure = max(
@@ -5498,7 +5705,9 @@ class RMUC2026RegionalRules:
 
         remaining_hp = {
             team_id: sum(
-                robot.hp for robot in match.robots if robot.team == team_id
+                robot.hp
+                for robot in match.robots
+                if robot.team == team_id and robot.type != "drone"
             )
             for team_id in team_ids
         }

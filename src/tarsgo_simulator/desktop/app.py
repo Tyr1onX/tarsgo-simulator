@@ -145,6 +145,7 @@ RMUC_ROBOT_NAMES = {
     "engineer": "工程",
     "infantry": "步兵",
     "sentry": "哨兵",
+    "drone": "空中机器人",
 }
 CONTROLS = (
     ("LMB", "Select"),
@@ -547,6 +548,8 @@ def _rmuc_robot_labels(match: Match) -> dict[str, str]:
                 label = f"I{infantry_index[robot.id]}"
             elif robot.type == "sentry":
                 label = "S"
+            elif robot.type == "drone":
+                label = "D"
             else:
                 label = robot.type[:1].upper()
             labels[robot.id] = label
@@ -566,7 +569,13 @@ def _default_robot_labels(
             ):
                 labels[robot.id] = f"{prefix}{index + 1}"
         return labels
-    type_labels = {"hero": "H", "engineer": "E", "infantry": "I", "sentry": "S"}
+    type_labels = {
+        "hero": "H",
+        "engineer": "E",
+        "infantry": "I",
+        "sentry": "S",
+        "drone": "D",
+    }
     return {
         robot.id: type_labels.get(robot.type, robot.type[:1].upper())
         for robot in match.robots
@@ -604,7 +613,11 @@ def _selected_unit_lines(
     if len(selected) != 1:
         lines = [f"已选择 {len(selected)} 个单位"]
         lines.extend(
-            f"{labels.get(robot.id, robot.id)}   生命 {robot.hp}/{robot.max_hp}"
+            (
+                f"{labels.get(robot.id, robot.id)}   空中单位"
+                if robot.type == "drone"
+                else f"{labels.get(robot.id, robot.id)}   生命 {robot.hp}/{robot.max_hp}"
+            )
             for robot in selected
         )
         return lines
@@ -663,6 +676,14 @@ def _selected_unit_lines(
         if display_state is not None
         else {}
     )
+    drone_support = (
+        {
+            robot_id: (active, remaining)
+            for robot_id, active, remaining in display_state.drone_air_support
+        }
+        if display_state is not None
+        else {}
+    )
 
     title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
     progression_state = progression.get(robot.id)
@@ -672,7 +693,15 @@ def _selected_unit_lines(
     ai_intent = match.ai_intent(robot.id)
     if ai_intent is not None:
         lines.append(f"当前 AI 意图  {ai_intent}")
-    lines.append(f"生命      {robot.hp} / {robot.max_hp}")
+    if robot.type == "drone":
+        support = drone_support.get(robot.id)
+        if support is not None:
+            active, remaining = support
+            lines.append(
+                f"空中支援  {'执行中' if active else '停机坪'} · {remaining:.1f}s"
+            )
+    else:
+        lines.append(f"生命      {robot.hp} / {robot.max_hp}")
     if progression_state is not None:
         _level, experience, _level_cap = progression_state
         lines.append(f"经验      {experience:g}")
@@ -968,8 +997,7 @@ def _selected_robot_types(
     match: Match,
     selected_robot_ids: set[str],
 ) -> set[str]:
-    return {
-        robot.type
+    return {        robot.type
         for robot in match.robots
         if robot.id in selected_robot_ids
     }
@@ -1036,13 +1064,19 @@ def _draw_selected_unit_card(
                 small_font.render(label, True, TEXT_COLOR if robot.alive else MUTED_COLOR),
                 (x + 14, y),
             )
-            _draw_progress_bar(
-                screen,
-                rect=pygame.Rect(x + 46, y + 4, content_width - 48, 7),
-                value=robot.hp,
-                maximum=robot.max_hp,
-                fill_color=HP_COLOR if robot.alive else MUTED_COLOR,
-            )
+            if robot.type == "drone":
+                screen.blit(
+                    small_font.render("AIR", True, team_color),
+                    (x + 46, y),
+                )
+            else:
+                _draw_progress_bar(
+                    screen,
+                    rect=pygame.Rect(x + 46, y + 4, content_width - 48, 7),
+                    value=robot.hp,
+                    maximum=robot.max_hp,
+                    fill_color=HP_COLOR if robot.alive else MUTED_COLOR,
+                )
             y += 20
         return
 
@@ -1078,6 +1112,10 @@ def _draw_selected_unit_card(
         ) in display_state.robot_chassis_power
     }
     engineer_units = dict(display_state.engineer_energy_units)
+    drone_support = {
+        robot_id: (active, remaining)
+        for robot_id, active, remaining in display_state.drone_air_support
+    }
 
     team_color = _rmuc_team_color(match, robot.team)
     pygame.draw.rect(
@@ -1113,21 +1151,32 @@ def _draw_selected_unit_card(
         )
         y = intent_rect.bottom + 10
 
-    hp_label = small_font.render(
-        f"HP  {robot.hp} / {robot.max_hp}",
-        True,
-        TEXT_COLOR,
-    )
-    screen.blit(hp_label, (x, y))
-    y += 18
-    _draw_progress_bar(
-        screen,
-        rect=pygame.Rect(x, y, content_width, 8),
-        value=robot.hp,
-        maximum=robot.max_hp,
-        fill_color=HP_COLOR,
-    )
-    y += 17
+    if robot.type == "drone":
+        active, remaining = drone_support.get(robot.id, (False, 0.0))
+        support_text = (
+            f"空中支援 · {'执行中' if active else '停机坪'} · {remaining:.1f}s"
+        )
+        screen.blit(
+            small_font.render(support_text, True, SHIELD_COLOR if active else MUTED_COLOR),
+            (x, y),
+        )
+        y += 25
+    else:
+        hp_label = small_font.render(
+            f"HP  {robot.hp} / {robot.max_hp}",
+            True,
+            TEXT_COLOR,
+        )
+        screen.blit(hp_label, (x, y))
+        y += 18
+        _draw_progress_bar(
+            screen,
+            rect=pygame.Rect(x, y, content_width, 8),
+            value=robot.hp,
+            maximum=robot.max_hp,
+            fill_color=HP_COLOR,
+        )
+        y += 17
 
     projectile_state = projectiles.get(robot.id)
     heat_state = heat.get(robot.id)
@@ -1193,7 +1242,11 @@ def _draw_selected_unit_card(
     raw_status = statuses.get(robot.id, "")
     heat_locked = bool(heat_state and heat_state[2])
     permanently_locked = bool(heat_state and heat_state[3])
-    invincible = robot.alive and not match.ruleset.can_receive_damage(robot)
+    invincible = (
+        robot.type != "drone"
+        and robot.alive
+        and not match.ruleset.can_receive_damage(robot)
+    )
     badges = status_badges(
         raw_status,
         invincible=invincible,
@@ -1943,8 +1996,7 @@ def _draw_virtual_shield(
         glow_radius,
         width=2,
     )
-    screen.blit(
-        glow,
+    screen.blit(        glow,
         (
             center[0] - glow_center[0],
             center[1] - glow_center[1],
@@ -2342,20 +2394,51 @@ def _draw_rmuc_robot_shape(
         draw_color = _blend_color(draw_color, SHIELD_COLOR, 0.28)
     half_w = profile.body_width / 2
     half_h = profile.body_height / 2
-    body_points = [
-        _rotate_point(center, (-half_w, -half_h), body_angle),
-        _rotate_point(center, (half_w, -half_h), body_angle),
-        _rotate_point(center, (half_w, half_h), body_angle),
-        _rotate_point(center, (-half_w, half_h), body_angle),
-    ]
-    pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
-    inner_points = [
-        _rotate_point(center, (-half_w + 2, -half_h + 2), body_angle),
-        _rotate_point(center, (half_w - 2, -half_h + 2), body_angle),
-        _rotate_point(center, (half_w - 2, half_h - 2), body_angle),
-        _rotate_point(center, (-half_w + 2, half_h - 2), body_angle),
-    ]
-    pygame.draw.polygon(screen, draw_color, inner_points)
+    if robot_type == "drone":
+        hover = round(2 * math.sin(animation_time * 3.2))
+        center = (center[0], center[1] + hover)
+        shadow = pygame.Surface((50, 26), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow, (*ARENA_SHADOW, 105), shadow.get_rect())
+        screen.blit(shadow, (center[0] - 25, center[1] + 10))
+        arm = 18
+        rotor_radius = 6
+        for dx, dy in ((-arm, -10), (arm, -10), (-arm, 10), (arm, 10)):
+            rotor = _rotate_point(center, (dx, dy), body_angle)
+            pygame.draw.line(screen, ROBOT_OUTLINE, center, rotor, width=2)
+            pygame.draw.circle(screen, ROBOT_OUTLINE, rotor, rotor_radius, width=2)
+            pygame.draw.circle(screen, draw_color, rotor, 2)
+        body_points = [
+            _rotate_point(center, (-10, 0), body_angle),
+            _rotate_point(center, (0, -8), body_angle),
+            _rotate_point(center, (12, 0), body_angle),
+            _rotate_point(center, (0, 8), body_angle),
+        ]
+        pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
+        pygame.draw.polygon(
+            screen,
+            draw_color,
+            [
+                _rotate_point(center, (-7, 0), body_angle),
+                _rotate_point(center, (0, -5), body_angle),
+                _rotate_point(center, (9, 0), body_angle),
+                _rotate_point(center, (0, 5), body_angle),
+            ],
+        )
+    else:
+        body_points = [
+            _rotate_point(center, (-half_w, -half_h), body_angle),
+            _rotate_point(center, (half_w, -half_h), body_angle),
+            _rotate_point(center, (half_w, half_h), body_angle),
+            _rotate_point(center, (-half_w, half_h), body_angle),
+        ]
+        pygame.draw.polygon(screen, ROBOT_OUTLINE, body_points)
+        inner_points = [
+            _rotate_point(center, (-half_w + 2, -half_h + 2), body_angle),
+            _rotate_point(center, (half_w - 2, -half_h + 2), body_angle),
+            _rotate_point(center, (half_w - 2, half_h - 2), body_angle),
+            _rotate_point(center, (-half_w + 2, half_h - 2), body_angle),
+        ]
+        pygame.draw.polygon(screen, draw_color, inner_points)
 
     if robot_type == "sentry":
         for side in (-1, 1):
@@ -2488,7 +2571,11 @@ def _draw_rmuc_robot_shape(
             radius + 7,
             width=2,
         )
-    warning_strength = low_hp_warning_strength(hp_ratio, animation_time)
+    warning_strength = (
+        0.0
+        if robot_type == "drone"
+        else low_hp_warning_strength(hp_ratio, animation_time)
+    )
     if warning_strength > 0 and alive:
         warning_radius = radius + 9 + round(3 * warning_strength)
         warning_color = _blend_color(WARNING_COLOR, DANGER_COLOR, warning_strength * 0.45)
@@ -2508,17 +2595,18 @@ def _draw_rmuc_robot_shape(
             impact_radius,
             width=3 if impact_caliber == "42mm" else 2,
         )
-    _draw_robot_lifecycle_effects(
-        screen,
-        center=center,
-        radius=radius,
-        color=color,
-        alive=alive,
-        destroy_remaining=destroy_remaining,
-        destroy_progress=destroy_progress,
-        respawn_remaining=respawn_remaining,
-        respawn_progress=respawn_progress,
-    )
+    if robot_type != "drone":
+        _draw_robot_lifecycle_effects(
+            screen,
+            center=center,
+            radius=radius,
+            color=color,
+            alive=alive,
+            destroy_remaining=destroy_remaining,
+            destroy_progress=destroy_progress,
+            respawn_remaining=respawn_remaining,
+            respawn_progress=respawn_progress,
+        )
     if selected:
         _draw_selection_feedback(
             screen,
@@ -2907,8 +2995,7 @@ def _draw(
                 zone_id=zone.id,
                 selected_types=selected_types,
                 occupied_by_selected=any(
-                    zone.contains(position)
-                    for position in selected_positions
+                    zone.contains(position)                    for position in selected_positions
                 ),
                 targeted_by_selected=any(
                     zone.contains(position)
@@ -3056,7 +3143,8 @@ def _draw(
                 respawn_progress=visual_robot.respawn_progress,
                 raw_status=robot_statuses.get(robot.id, ""),
                 invincible=(
-                    robot.alive
+                    robot.type != "drone"
+                    and robot.alive
                     and not match.ruleset.can_receive_damage(robot)
                 ),
                 hp_ratio=(robot.hp / robot.max_hp if robot.max_hp else 0.0),
@@ -3081,45 +3169,46 @@ def _draw(
                 radius,
             )
 
-        bar_width, bar_height = 44 if is_rmuc else 48, 6
-        bar_x = center[0] - bar_width // 2
-        bar_y = center[1] - radius - 15
-        pygame.draw.rect(
-            screen,
-            HP_BACKGROUND,
-            (bar_x, bar_y, bar_width, bar_height),
-        )
-        if visual_robot is not None:
-            ghost_hp = min(
-                float(robot.max_hp),
-                visual_robot.ghost_hp(robot.hp),
-            )
-            ghost_width = round(bar_width * ghost_hp / robot.max_hp)
-            if ghost_width:
-                pygame.draw.rect(
-                    screen,
-                    DAMAGE_GHOST_COLOR,
-                    (bar_x, bar_y, ghost_width, bar_height),
-                )
-        hp_width = round(bar_width * robot.hp / robot.max_hp)
-        if hp_width:
-            hp_fill = HP_COLOR
-            if is_rmuc and robot.alive and robot.max_hp:
-                warning = low_hp_warning_strength(
-                    robot.hp / robot.max_hp,
-                    animation_time,
-                )
-                if warning > 0:
-                    hp_fill = _blend_color(
-                        HP_COLOR,
-                        DANGER_COLOR,
-                        min(0.72, warning * 0.72),
-                    )
+        if robot.type != "drone":
+            bar_width, bar_height = 44 if is_rmuc else 48, 6
+            bar_x = center[0] - bar_width // 2
+            bar_y = center[1] - radius - 15
             pygame.draw.rect(
                 screen,
-                hp_fill,
-                (bar_x, bar_y, hp_width, bar_height),
+                HP_BACKGROUND,
+                (bar_x, bar_y, bar_width, bar_height),
             )
+            if visual_robot is not None:
+                ghost_hp = min(
+                    float(robot.max_hp),
+                    visual_robot.ghost_hp(robot.hp),
+                )
+                ghost_width = round(bar_width * ghost_hp / robot.max_hp)
+                if ghost_width:
+                    pygame.draw.rect(
+                        screen,
+                        DAMAGE_GHOST_COLOR,
+                        (bar_x, bar_y, ghost_width, bar_height),
+                    )
+            hp_width = round(bar_width * robot.hp / robot.max_hp)
+            if hp_width:
+                hp_fill = HP_COLOR
+                if is_rmuc and robot.alive and robot.max_hp:
+                    warning = low_hp_warning_strength(
+                        robot.hp / robot.max_hp,
+                        animation_time,
+                    )
+                    if warning > 0:
+                        hp_fill = _blend_color(
+                            HP_COLOR,
+                            DANGER_COLOR,
+                            min(0.72, warning * 0.72),
+                        )
+                pygame.draw.rect(
+                    screen,
+                    hp_fill,
+                    (bar_x, bar_y, hp_width, bar_height),
+                )
 
         robot_label = labels[robot.id]
         label_surface = small_font.render(

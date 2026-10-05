@@ -27,6 +27,7 @@ _RMUC_ROBOT_NAMES = {
     "engineer": "工程",
     "infantry": "步兵",
     "sentry": "哨兵",
+    "drone": "空中机器人",
 }
 
 
@@ -73,7 +74,13 @@ class Match:
         for team, definition in definitions:
             parameters = self.ruleset.robot_parameters(definition.type)
             position = scenario.spawns[definition.id]
-            if not self.map.is_passable(position):
+            aerial = definition.type == "drone"
+            spawn_valid = (
+                self.map.contains(position)
+                if aerial
+                else self.map.is_passable(position)
+            )
+            if not spawn_valid:
                 raise ValueError(f"机器人出生点不可通行：{definition.id} at {position}")
             self.robots.append(
                 Robot(
@@ -87,6 +94,7 @@ class Match:
                     attack_interval=parameters.attack_interval,
                     damage=parameters.damage,
                     type=definition.type,
+                    aerial=aerial,
                 )
             )
         self.structures: list[Structure] = []
@@ -287,6 +295,11 @@ class Match:
         return True
 
     def _set_robot_destination(self, robot: Robot, goal: tuple[float, float]) -> bool:
+        if robot.aerial:
+            if not self.map.contains(goal):
+                return False
+            robot.set_path([goal])
+            return True
         path = find_path(self.map, robot.position, goal)
         if path is None:
             return False
@@ -336,6 +349,8 @@ class Match:
         minimum_distance = self.map.collision_radius * 2
         for index, first in enumerate(self.robots):
             for second in self.robots[index + 1 :]:
+                if first.aerial or second.aerial:
+                    continue
                 if math.dist(first.position, second.position) < minimum_distance:
                     raise ValueError(
                         f"机器人出生点冲突：{first.id} 与 {second.id} 的距离小于 "
@@ -367,6 +382,8 @@ class Match:
             conflicts: set[str] = set()
             for index, first in enumerate(self.robots):
                 for second in self.robots[index + 1 :]:
+                    if first.aerial or second.aerial:
+                        continue
                     if _movement_conflicts(
                         first.position,
                         final_positions[first.id],
@@ -390,7 +407,7 @@ class Match:
             return {}
         result: dict[str, random.Random] = {}
         for team_id in sorted({robot.team for robot in self.robots}):
-            for robot_type in ("hero", "engineer", "infantry", "sentry"):
+            for robot_type in ("hero", "engineer", "infantry", "sentry", "drone"):
                 role_robots = sorted(
                     (
                         robot
@@ -434,6 +451,7 @@ class Match:
             ("infantry", 1): (-0.12, -0.22),
             ("infantry", 2): (0.12, 0.22),
             ("sentry", 1): (0.00, 0.22),
+            ("drone", 1): (0.00, -0.30),
         }
         dx, dy = offsets.get((robot.type, role_index), (0.0, 0.0))
         if self._team_side(robot.team) == "blue":
@@ -479,8 +497,7 @@ class Match:
         return sum(
             1
             for teammate in self.robots
-            if (
-                teammate.id != robot.id
+            if (                teammate.id != robot.id
                 and teammate.team == robot.team
                 and teammate.alive
                 and self._ai_target_keys.get(teammate.id) == target_key
@@ -716,7 +733,11 @@ class Match:
             (
                 target
                 for target in self.robots
-                if target.alive and target.team != robot.team
+                if (
+                    target.alive
+                    and target.team != robot.team
+                    and target.type != "drone"
+                )
             ),
             key=lambda target: (target.type, target.id),
         )
@@ -947,7 +968,134 @@ class Match:
 
         return candidates
 
+    def _rmuc_drone_ai_step(self, robot: Robot, display_state) -> None:
+        allowance = {
+            robot_id: count
+            for robot_id, _projectile, count in display_state.robot_projectiles
+        }.get(robot.id, 0)
+        active = bool(
+            getattr(self.ruleset, "drone_air_support_active", lambda _id: False)(
+                robot.id
+            )
+        )
+        available = float(
+            getattr(self.ruleset, "drone_air_support_available", lambda _id: 0.0)(
+                robot.id
+            )
+        )
+
+        if not active:
+            robot.path.clear()
+            if allowance <= 0:
+                self._ai_intents[robot.id] = "空中弹量耗尽"
+                self._remember_ai_decision(robot, None, sticky=False)
+                return
+            if available <= 1e-9:
+                self._ai_intents[robot.id] = "等待空中支援"
+                self._remember_ai_decision(robot, None, sticky=False)
+                return
+            start = getattr(self.ruleset, "start_drone_air_support", None)
+            started = bool(callable(start) and start(self, robot))
+            self._ai_intents[robot.id] = (                "发起空中支援" if started else "等待空中支援"
+            )
+            self._remember_ai_decision(robot, None, sticky=False)
+            return
+
+        field_scale = max(self.map.width, self.map.height)
+        candidates: list[tuple[str, str, tuple[float, float], float]] = []
+        for target in sorted(
+            (
+                item
+                for item in self.robots
+                if (
+                    item.alive
+                    and item.team != robot.team
+                    and item.type != "drone"
+                    and self.ruleset.can_target(item)
+                )
+            ),
+            key=lambda item: (item.type, item.id),
+        ):
+            distance = math.dist(robot.position, target.position)
+            hp_ratio = target.hp / target.max_hp if target.max_hp else 1.0
+            role_value = {
+                "engineer": 1.95,
+                "hero": 1.55,
+                "sentry": 1.35,
+                "infantry": 1.25,
+            }.get(target.type, 1.0)
+            finish = (
+                1.15 + max(0.0, 0.30 - hp_ratio) * 2.0
+                if hp_ratio <= 0.30
+                else 0.0
+            )
+            distance_score = max(0.0, 0.75 * (1.0 - distance / field_scale))
+            intent = (
+                "空中压制残血目标"
+                if hp_ratio <= 0.30
+                else f"空中压制敌方{_RMUC_ROBOT_NAMES.get(target.type, target.type)}"
+            )
+            candidates.append(
+                (
+                    f"robot:{target.id}",
+                    intent,
+                    target.position,
+                    role_value + finish + distance_score,
+                )
+            )
+
+        for structure in sorted(
+            (
+                item
+                for item in self.structures
+                if (
+                    item.alive
+                    and item.team != robot.team
+                    and self.ruleset.can_target(item)
+                )
+            ),
+            key=lambda item: (item.type, item.id),
+        ):
+            candidates.append(
+                (
+                    f"structure:{structure.id}",
+                    (
+                        "空中压制前哨站"
+                        if structure.type == "outpost"
+                        else "空中压制基地"
+                    ),
+                    structure.position,
+                    1.75 if structure.type == "outpost" else 1.90,
+                )
+            )
+
+        choice = self._choose_utility_candidate(robot, candidates)
+        if choice is None:
+            robot.path.clear()
+            self._ai_intents[robot.id] = "空中巡弋待命"
+            self._remember_ai_decision(robot, None, sticky=False)
+            return
+
+        target_key, intent, goal, _score = choice
+        if (
+            math.dist(robot.position, goal) <= robot.attack_range
+            and self.map.has_line_of_sight(robot.position, goal)
+        ):
+            robot.path.clear()
+            self._ai_intents[robot.id] = intent
+            self._remember_ai_decision(robot, target_key)
+            return
+        self._set_ai_goal(
+            robot,
+            intent,
+            goal,
+            target_key=target_key,
+        )
+
     def _rmuc_ai_step(self, robot: Robot, display_state) -> None:
+        if robot.type == "drone":
+            self._rmuc_drone_ai_step(robot, display_state)
+            return
         if not robot.alive:
             robot.path.clear()
             self._ai_intents[robot.id] = "等待复活"

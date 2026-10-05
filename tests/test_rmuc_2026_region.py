@@ -85,12 +85,12 @@ def test_rmuc_ruleset_identity_roster_and_structures() -> None:
     assert metadata.official_version == "1.4.0"
     assert metadata.status == "official-partial"
     assert match.time_limit == 420
-    assert len(match.robots) == 10
+    assert len(match.robots) == 12
     assert len(match.structures) == 4
 
     for team_id in (RED, BLUE):
         types = sorted(robot.type for robot in match.robots if robot.team == team_id)
-        assert types == ["engineer", "hero", "infantry", "infantry", "sentry"]
+        assert types == ["drone", "engineer", "hero", "infantry", "infantry", "sentry"]
         base = _structure(match, team_id, "base")
         outpost = _structure(match, team_id, "outpost")
         assert (base.hp, base.max_hp) == (5000, 5000)
