@@ -38,6 +38,14 @@ def _center(zone) -> tuple[float, float]:
     return (zone.x + zone.width / 2, zone.y + zone.height / 2)
 
 
+def _team_experience(match: Match, team_id: str) -> dict[str, float]:
+    return {
+        robot_id: state.experience
+        for robot_id, state in match.ruleset._progression_by_robot.items()
+        if match.ruleset._robots_by_id[robot_id].team == team_id
+    }
+
+
 def _destroy_outpost(match: Match, team_id: str = RED) -> None:
     outpost = _structure(match, team_id, "outpost")
     attacker = BLUE if team_id == RED else RED
@@ -193,18 +201,42 @@ def test_energy_attack_and_existing_attack_buff_use_same_class_max() -> None:
 
 def test_same_team_large_energy_mechanism_cannot_reactivate_until_window_ends() -> None:
     match = _match()
-    assert match.ruleset.activate_large_energy_mechanism_buff(RED, 5.0, 5)
+    rules = match.ruleset
+    drone = _robot(match, "tarsgo-drone")
+    assert rules.start_drone_air_support(match, drone)
+    assert rules.activate_large_energy_mechanism_buff(RED, 5.0, 5)
+    first_activation_experience = _team_experience(match, RED)
+    assert sum(first_activation_experience.values()) == pytest.approx(750.0)
 
-    attack_count = len(match.ruleset._attack_buffs_by_team[RED])
-    assert not match.ruleset.activate_large_energy_mechanism_buff(RED, 9.5, 10)
-    assert len(match.ruleset._attack_buffs_by_team[RED]) == attack_count
-    assert len(match.ruleset._large_energy_mechanism_buffs_by_team[RED]) == 1
+    attack_count = len(rules._attack_buffs_by_team[RED])
+    assert not rules.activate_large_energy_mechanism_buff(RED, 9.5, 10)
+    assert len(rules._attack_buffs_by_team[RED]) == attack_count
+    assert len(rules._large_energy_mechanism_buffs_by_team[RED]) == 1
+    assert _team_experience(match, RED) == first_activation_experience
 
     match.update(30.0)
 
-    assert match.ruleset._large_energy_mechanism_buffs_by_team[RED] == []
-    assert match.ruleset.activate_large_energy_mechanism_buff(RED, 9.5, 10)
-    assert match.ruleset._effective_attack_multiplier(RED) == pytest.approx(3.0)
+    assert rules._large_energy_mechanism_buffs_by_team[RED] == []
+    if not rules.drone_air_support_active(drone.id):
+        assert rules.start_drone_air_support(match, drone)
+    assert rules.activate_large_energy_mechanism_buff(RED, 9.5, 10)
+    assert rules._effective_attack_multiplier(RED) == pytest.approx(3.0)
+    second_activation_experience = _team_experience(match, RED)
+    assert sum(second_activation_experience.values()) == pytest.approx(1500.0)
+    newly_awarded = {
+        robot.id
+        for robot in match.robots
+        if robot.team == RED
+        and robot.type in {"hero", "infantry", "drone"}
+        and robot.alive
+    }
+    assert all(
+        second_activation_experience[robot_id]
+        == pytest.approx(
+            first_activation_experience[robot_id] + 750.0 / len(newly_awarded)
+        )
+        for robot_id in newly_awarded
+    )
 
 
 def test_both_teams_can_hold_independent_large_energy_mechanism_windows() -> None:
@@ -422,6 +454,7 @@ def test_large_dt_expires_attack_defense_and_cooling_together() -> None:
 def test_match_reset_clears_large_energy_mechanism_and_attack_state() -> None:
     match = _match()
     assert match.ruleset.activate_large_energy_mechanism_buff(RED, 9.5, 10)
+    assert sum(_team_experience(match, RED).values()) == pytest.approx(750.0)
 
     match.reset()
 
@@ -432,21 +465,118 @@ def test_match_reset_clears_large_energy_mechanism_and_attack_state() -> None:
     assert match.ruleset._effective_attack_multiplier(RED) == 1.0
     assert match.ruleset._current_large_energy_mechanism_defense(RED) == 0.0
     assert match.ruleset._current_large_energy_mechanism_cooling_multiplier(RED) == 1.0
-
-
-def test_large_energy_mechanism_experience_distribution_remains_deferred() -> None:
-    match = _match()
-    before = {
-        robot_id: state.experience
-        for robot_id, state in match.ruleset._progression_by_robot.items()
-        if match.ruleset._robots_by_id[robot_id].team == RED
-    }
-
+    assert all(
+        state.experience == 0.0 and state.level == 1
+        for state in match.ruleset._progression_by_robot.values()
+    )
     assert match.ruleset.activate_large_energy_mechanism_buff(RED, 9.5, 5)
+    assert sum(_team_experience(match, RED).values()) == pytest.approx(750.0)
 
-    after = {
-        robot_id: state.experience
-        for robot_id, state in match.ruleset._progression_by_robot.items()
-        if match.ruleset._robots_by_id[robot_id].team == RED
+
+def test_large_energy_mechanism_splits_750_experience_across_eligible_robots() -> None:
+    match = _match()
+    rules = match.ruleset
+    before = _team_experience(match, RED)
+    blue_before = _team_experience(match, BLUE)
+    assert rules.start_drone_air_support(match, _robot(match, "tarsgo-drone"))
+    recipients = {
+        robot.id
+        for robot in match.robots
+        if robot.team == RED
+        and robot.type in {"hero", "infantry", "drone"}
+        and robot.alive
     }
-    assert after == before
+    assert recipients == {
+        "tarsgo-hero",
+        "tarsgo-infantry-1",
+        "tarsgo-infantry-2",
+        "tarsgo-drone",
+    }
+
+    assert rules.activate_large_energy_mechanism_buff(RED, 9.5, 5)
+
+    after = _team_experience(match, RED)
+    experience_delta = {
+        robot_id: after[robot_id] - experience
+        for robot_id, experience in before.items()
+    }
+    assert all(
+        experience_delta[robot_id] == pytest.approx(187.5)
+        for robot_id in recipients
+    )
+    assert sum(experience_delta.values()) == pytest.approx(750.0)
+    assert _team_experience(match, BLUE) == blue_before
+    assert "tarsgo-engineer" not in match.ruleset._progression_by_robot
+    assert "tarsgo-sentry" not in match.ruleset._progression_by_robot
+
+
+def test_large_energy_experience_ignores_dead_eligible_teammates() -> None:
+    match = _match()
+    drone = _robot(match, "tarsgo-drone")
+    assert match.ruleset.start_drone_air_support(match, drone)
+    dead_hero = _robot(match, "tarsgo-hero")
+    dead_hero.alive = False
+
+    assert match.ruleset.activate_large_energy_mechanism_buff(RED, 5.0, 5)
+
+    alive_recipients = [
+        robot
+        for robot in match.robots
+        if robot.team == RED
+        and robot.type in {"hero", "infantry", "drone"}
+        and robot.alive
+    ]
+    assert len(alive_recipients) == 3
+    assert all(
+        match.ruleset._progression_by_robot[robot.id].experience
+        == pytest.approx(250.0)
+        for robot in alive_recipients
+    )
+    assert match.ruleset._progression_by_robot[dead_hero.id].experience == 0.0
+    assert all(value == 0.0 for value in _team_experience(match, BLUE).values())
+
+
+def test_large_energy_experience_uses_existing_drone_level_and_performance() -> None:
+    match = _match()
+    drone = _robot(match, "tarsgo-drone")
+    rules = match.ruleset
+    assert rules.start_drone_air_support(match, drone)
+    rules._grant_experience(drone.id, 362.5)
+    initial_hp = (drone.hp, drone.max_hp)
+    assert rules._effective_heat_parameters(drone.id).heat_limit == 100
+
+    assert rules.activate_large_energy_mechanism_buff(RED, 2.0, 5)
+
+    progression = rules._progression_by_robot[drone.id]
+    assert (progression.level, progression.experience) == (2, 550.0)
+    performance = rules._effective_heat_parameters(drone.id)
+    assert (performance.heat_limit, performance.cooling_per_second) == (110, 30)
+    assert (drone.hp, drone.max_hp) == initial_hp
+    displayed = next(
+        item
+        for item in rules.display_state.robot_progression
+        if item[0] == drone.id
+    )
+    assert (displayed[1], displayed[2]) == (2, 550.0)
+
+
+def test_rmuc_large_energy_three_activations_smoke_through_full_match() -> None:
+    match = _match()
+    rules = match.ruleset
+    drone = _robot(match, "tarsgo-drone")
+
+    for activation_time in (180.0, 255.0, 330.0):
+        match.update(activation_time - match.elapsed_time)
+        if not rules.drone_air_support_active(drone.id):
+            assert rules.start_drone_air_support(match, drone)
+        before = _team_experience(match, RED)
+        assert rules.activate_large_energy_mechanism_buff(RED, 5.0, 5)
+        after = _team_experience(match, RED)
+        assert sum(after.values()) - sum(before.values()) == pytest.approx(750.0)
+
+    match.update(match.time_limit - match.elapsed_time)
+
+    assert match.elapsed_time == pytest.approx(420.0)
+    assert sum(_team_experience(match, RED).values()) == pytest.approx(2250.0)
+    assert rules._progression_by_robot["tarsgo-drone"].level == 2
+    assert rules._progression_by_robot["tarsgo-drone"].experience == pytest.approx(562.5)

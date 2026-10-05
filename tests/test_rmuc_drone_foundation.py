@@ -217,6 +217,56 @@ def test_large_energy_mechanism_applies_team_attack_defense_and_cooling_to_drone
     assert match.apply_damage(drone, 20, source_team_id=BLUE) == 0
 
 
+def test_large_energy_experience_does_not_change_air_support_radar_or_allowance() -> None:
+    match = _match()
+    rules = match.ruleset
+    drone = _robot(match, "tarsgo-drone")
+    radar_state = rules._radar_anti_drone_by_robot[drone.id]
+
+    assert rules.start_drone_air_support(match, drone)
+    assert rules.set_radar_anti_drone_laser(BLUE, drone, True)
+    rules._advance_radar_anti_drone(0.1)
+    support_before = (
+        rules.drone_air_support_active(drone.id),
+        rules.drone_air_support_available(drone.id),
+    )
+    radar_before = (
+        radar_state.progress,
+        radar_state.continuous_elapsed,
+        radar_state.consecutive_ticks,
+        radar_state.illuminated_by_team_id,
+        radar_state.lock_remaining,
+        radar_state.activations,
+    )
+    heat_before = (
+        rules._shooting_heat_by_robot[drone.id].heat,
+        rules._effective_heat_parameters(drone.id).heat_limit,
+        rules._effective_heat_parameters(drone.id).cooling_per_second,
+    )
+    allowance_before = rules._projectile_allowance_by_robot[drone.id].allowed
+
+    assert rules.activate_large_energy_mechanism_buff(RED, 2.0, 5)
+
+    assert (
+        rules.drone_air_support_active(drone.id),
+        rules.drone_air_support_available(drone.id),
+    ) == support_before
+    assert (
+        radar_state.progress,
+        radar_state.continuous_elapsed,
+        radar_state.consecutive_ticks,
+        radar_state.illuminated_by_team_id,
+        radar_state.lock_remaining,
+        radar_state.activations,
+    ) == radar_before
+    assert (
+        rules._shooting_heat_by_robot[drone.id].heat,
+        rules._effective_heat_parameters(drone.id).heat_limit,
+        rules._effective_heat_parameters(drone.id).cooling_per_second,
+    ) == heat_before
+    assert rules._projectile_allowance_by_robot[drone.id].allowed == allowance_before
+
+
 def test_radar_vulnerability_effect_is_ground_only_for_drone() -> None:
     match = _match()
     rules = match.ruleset
