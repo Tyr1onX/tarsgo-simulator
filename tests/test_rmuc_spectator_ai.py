@@ -67,7 +67,57 @@ def test_rmuc_spectator_ai_controls_all_robots_symmetrically() -> None:
         ("tarsgo-drone", "opponent-drone"),
     )
     for red_id, blue_id in mirrored_pairs:
-        assert match.ai_intent(red_id) == match.ai_intent(blue_id)
+        red_robot = _robot(match, red_id)
+        blue_robot = _robot(match, blue_id)
+        assert red_robot.type == blue_robot.type
+        assert red_robot.max_hp == blue_robot.max_hp
+        assert match.ai_intent(red_id) is not None
+        assert match.ai_intent(blue_id) is not None
+
+    red_team = _robot(match, "tarsgo-hero").team
+    blue_team = _robot(match, "opponent-hero").team
+    assert match.ai_team_strategy(red_team) != match.ai_team_strategy(blue_team)
+
+
+def test_team_strategy_switches_for_structure_crisis_and_finish_opportunity() -> None:
+    match = _match()
+    red_team = _robot(match, "tarsgo-hero").team
+    base = next(
+        structure for structure in match.structures
+        if structure.team == red_team and structure.type == "base"
+    )
+    outpost = next(
+        structure for structure in match.structures
+        if structure.team == red_team and structure.type == "outpost"
+    )
+    low_enemy = _robot(match, "opponent-hero")
+
+    assert match._desired_rmuc_team_strategy(red_team) == "tech"
+    match.elapsed_time = 4.0
+    match._refresh_rmuc_team_strategies()
+    assert match.ai_team_strategy(red_team) == "科技推进 · 主攻"
+
+    outpost.hp = round(outpost.max_hp * 0.40)
+    assert match._desired_rmuc_team_strategy(red_team) == "defend"
+    match.elapsed_time = 8.0
+    match._refresh_rmuc_team_strategies()
+    assert match.ai_team_strategy(red_team) == "防守 · 主攻"
+
+    outpost.hp = outpost.max_hp
+    low_enemy.hp = round(low_enemy.max_hp * 0.20)
+    assert match._desired_rmuc_team_strategy(red_team) == "focus"
+    match.elapsed_time = 12.0
+    match._refresh_rmuc_team_strategies()
+    assert match.ai_team_strategy(red_team) == "集火 · 主攻"
+
+    low_enemy.hp = low_enemy.max_hp
+    base.hp = round(base.max_hp * 0.25)
+    assert match._desired_rmuc_team_strategy(red_team) == "return"
+
+    match._refresh_rmuc_team_strategies()
+    assert match.ai_team_strategy(red_team) == "紧急回防"
+    match.reset()
+    assert match.ai_team_strategy(red_team) == "快速主攻"
 
 
 def test_rmuc_ai_fixed_seed_is_repeatable() -> None:
@@ -334,6 +384,38 @@ def test_team_target_occupancy_penalty_spreads_identical_role_choices() -> None:
     assert spread_choice[0] == "robot:opponent-hero"
 
 
+def test_infantry_assignments_split_attack_and_control_objectives() -> None:
+    match = _match()
+    infantry_one = _robot(match, "tarsgo-infantry-1")
+    infantry_two = _robot(match, "tarsgo-infantry-2")
+    for robot in (infantry_one, infantry_two):
+        match._rmuc_ai_rng[robot.id] = _FixedRandom(0.5)
+
+    candidates = [
+        ("robot:opponent-hero", "追击敌方英雄", (1800.0, 750.0), 2.0),
+        ("zone:central:red", "前往中央区域", (1310.0, 640.0), 1.5),
+    ]
+    attack = match._choose_utility_candidate(infantry_one, candidates)
+    assert attack is not None and attack[0] == "robot:opponent-hero"
+    match._remember_ai_decision(infantry_one, attack[0])
+
+    control = match._choose_utility_candidate(infantry_two, candidates)
+    assert control is not None and control[0] == "zone:central:red"
+
+
+def test_team_style_weights_are_distinct_but_use_the_same_candidate_layer() -> None:
+    match = _match()
+    red_hero = _robot(match, "tarsgo-hero")
+    blue_hero = _robot(match, "opponent-hero")
+
+    assert match._rmuc_candidate_bonus(red_hero, "structure:blue-base") > (
+        match._rmuc_candidate_bonus(blue_hero, "structure:red-base")
+    )
+    assert match._rmuc_candidate_bonus(blue_hero, "zone:central:blue") > (
+        match._rmuc_candidate_bonus(red_hero, "zone:central:red")
+    )
+
+
 def test_role_scores_make_hero_structural_and_sentry_defensive_biases_visible() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
@@ -394,9 +476,12 @@ def test_rmuc_ai_intent_is_exposed_in_chinese_ui_and_opponents_are_selectable() 
 
 def test_rmuc_long_smoke_does_not_crash() -> None:
     match = _match()
-    for _ in range(900):
+    for _ in range(4200):
+        if match.finished:
+            break
         match.update(0.1)
-    assert match.elapsed_time > 0
+    assert match.elapsed_time > 90 or match.finished
+    assert all(match.ai_team_strategy(robot.team) for robot in match.robots)
 
 
 @pytest.mark.parametrize("scenario", [TRAINING_SCENARIO, RMUL_SCENARIO])

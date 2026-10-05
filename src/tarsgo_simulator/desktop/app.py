@@ -1797,8 +1797,20 @@ def _draw_team_hud_card(
     pygame.draw.rect(screen, color, accent, border_radius=2)
 
     name_surface = font.render(name, True, color)
-    resources = " · ".join((f"金币 {coins}", *_rmuc_energy_timer_labels(match, team_id)))
-    resources_surface = micro_font.render(resources, True, MUTED_COLOR)
+    resource_items = [f"金币 {coins}", *_rmuc_energy_timer_labels(match, team_id)]
+    strategy = match.ai_team_strategy(team_id)
+    if strategy is not None:
+        resource_items.append(f"策略 {strategy}")
+    resources = " · ".join(resource_items)
+    resources_surface = micro_font.render(
+        _fit_text_to_width(
+            micro_font,
+            resources,
+            max(40, rect.width - name_surface.get_width() - 30),
+        ),
+        True,
+        MUTED_COLOR,
+    )
     if align_right:
         screen.blit(
             name_surface,
