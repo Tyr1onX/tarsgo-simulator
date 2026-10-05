@@ -103,7 +103,10 @@ Regional V1.4.0 manual.
 - conservative whole-frame movement blocking with path preservation;
 - death Buffer reset to current effective maximum;
 - initial Hero 42mm=0, Infantry 17mm=0, Sentry 17mm=300 allowance;
-- Drone 17mm=750 initial allowance recorded as metadata only;
+- Drone aerial entity with 17mm=750 initial allowance and no additional-acquisition path;
+- Drone Air Support: 30s initial time, +20s every minute, explicit call/pause,
+  active-alive state, helipad launcher gate, and 1 Gold Coin/s unlimited paid continuation;
+- Drone Experience progression and official level-dependent Heat/Cooling Performance;
 - committed-shot allowance deduction and allowance-zero attack gate;
 - team-wide purchased allowance caps: 17mm=1000, 42mm=100;
 - non-remote 17mm / 42mm Gold-Coin exchange at synthetic own supply/base/outpost buff zones;
@@ -206,7 +209,8 @@ Regional V1.4.0 manual.
 
 ## Intentionally not implemented
 
-- Drone entity and Drone Experience progression;
+- Drone Radar-laser countermeasure targeting-progress state, 45-second launcher
+  lock, and three-lock per-match limit;
 - Radar entity, coordinate detection, vision, marking accuracy, x/P progression,
   missing-data decay, map marking, and interference-wave gameplay;
 - Dart System and Dart Experience;
@@ -218,9 +222,9 @@ Regional V1.4.0 manual.
 - physical Large Energy Mechanism gameplay: rotating entity, activation
   opportunities, operator/Sentry trigger commands, random lit-module selection,
   projectile-hit timing, armor/ring hit detection, and ring-score recognition;
-- Large Energy Mechanism 750-point Experience distribution, because the official
-  divisor includes all living Hero/Infantry/Drone robots and the current Rules
-  Lab has no Drone entity/alive state;
+- Large Energy Mechanism 750-point Experience distribution remains deferred
+  with the mechanism's activation event; Drone alive state now exists, but the
+  current effect-only entry point is not treated as a synthetic activation;
 - Small Energy Mechanism gameplay and its Defense/Experience effects;
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
@@ -251,13 +255,12 @@ Regional V1.4.0 manual.
   setter may only be used after that official condition has already been
   resolved externally;
 - aerial targets may carry Radar marking P but Table 5-22 limits Vulnerability
-  to ground robots; Drone remains uninstantiated and receives no modeled Radar
+  to ground robots; the instantiated Drone therefore rejects the modeled Radar
   Vulnerability effect;
 - V1.4.0 does not explicitly state whether Engineer death resets the already
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
   active Buff expire and gives no budget-reset rule;
-- Drone air-support spending;
 - V1.4.0 says remote-healing exchanges are unlimited but does not explicitly
   define whether one robot may hold multiple simultaneous six-second pending
   remote-healing transactions; the current Rules Lab permits one pending request
@@ -279,7 +282,6 @@ Regional V1.4.0 manual.
   remote-healing and immediate-respawn actions, plus the semi-automatic-Sentry
   free operator-action distinction from §5.6.4 remain deferred because action
   origin/control mode is not modeled;
-- Drone shooting-heat gameplay and Drone Heat/Performance progression;
 - semi-automatic Sentry Heat profile and special mode switching;
 - Sentry posture-dependent cooling modifiers;
 - remaining non-Fortress / non-Tunnel / non-Large-Energy-Mechanism Cooling
