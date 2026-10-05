@@ -1797,7 +1797,8 @@ class RMUC2026RegionalRules:
             "chassis_power.detection_hz",
         )
         if detection_hz != 10:
-            raise ConfigError(                f"{document.path}: RMUC chassis power detection_hz 必须为 10"
+            raise ConfigError(
+                f"{document.path}: RMUC chassis power detection_hz 必须为 10"
             )
         self._chassis_power_detection_hz = float(detection_hz)
 
@@ -3596,7 +3597,8 @@ class RMUC2026RegionalRules:
         if limit > state.last_limit:
             state.reserved += limit - state.last_limit
         elif limit < state.last_limit:
-            state.reserved = min(state.reserved, limit)        state.last_limit = limit
+            state.reserved = min(state.reserved, limit)
+        state.last_limit = limit
         return state
 
     def _sync_initialized_fortress_reserves(
@@ -5395,6 +5397,7 @@ class RMUC2026RegionalRules:
             * (1 + self._kill_level_difference_factor * level_difference)
         )
         self._grant_experience(event.attacker_id, amount)
+
     def _consume_events(self, match: "Match") -> set[str]:
         newly_destroyed: set[str] = set()
         self._enemy_fortress_death_retention_started.clear()
