@@ -48,7 +48,7 @@ def test_initial_chassis_state_is_full_for_all_ground_robots() -> None:
     match = _match()
 
     assert set(match.ruleset._chassis_power_by_robot) == {
-        robot.id for robot in match.robots
+        robot.id for robot in match.robots if not robot.aerial
     }
     for state in match.ruleset._chassis_power_by_robot.values():
         assert state.buffer_energy == 60
@@ -523,7 +523,9 @@ def test_display_state_reuses_robot_chassis_power_with_dynamic_limit() -> None:
 
     assert display[hero.id] == (42, 60, 55, 50, 0)
     assert display["tarsgo-engineer"] == (60, 60, 0, 120, 0)
-    assert len(display) == len(match.robots)
+    assert len(display) == len(match.robots) - 2
+    assert "tarsgo-drone" not in display
+    assert "opponent-drone" not in display
 
 
 def test_reset_restores_chassis_state_and_accumulator() -> None:

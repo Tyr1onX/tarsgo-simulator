@@ -7,3 +7,4 @@ robots:
   - {id: opponent-infantry-1, type: infantry}
   - {id: opponent-infantry-2, type: infantry}
   - {id: opponent-sentry, type: sentry}
+  - {id: opponent-drone, type: drone}

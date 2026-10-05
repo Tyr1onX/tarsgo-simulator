@@ -38,6 +38,7 @@ ROBOT_VISUAL_PROFILES = {
     "engineer": RobotVisualProfile(30, 30, 0, 0, 0, tool_arm_length=20),
     "infantry": RobotVisualProfile(27, 20, 7, 23, 3),
     "sentry": RobotVisualProfile(42, 24, 9, 26, 4),
+    "drone": RobotVisualProfile(32, 22, 7, 24, 3),
 }
 
 PROJECTILE_VISUAL_PROFILES = {
@@ -417,8 +418,14 @@ class CombatVisualState:
             )
             previous_hp = state.hp
             state.advance_motion(robot.position, dt)
-            state.register_damage(previous_hp, robot.hp)
-            state.register_lifecycle(robot.alive)
+            if robot.aerial:
+                state.hp = robot.hp
+                state.alive = robot.alive
+                state.destroy_remaining = 0.0
+                state.respawn_remaining = 0.0
+            else:
+                state.register_damage(previous_hp, robot.hp)
+                state.register_lifecycle(robot.alive)
 
         for structure in match.structures:
             state = self.structures.setdefault(

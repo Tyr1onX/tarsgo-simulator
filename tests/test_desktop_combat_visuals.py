@@ -65,10 +65,10 @@ def _match(path: Path = RMUC_SCENARIO) -> Match:
 def test_robot_types_have_distinct_visual_profiles() -> None:
     profiles = {
         robot_type: robot_visual_profile(robot_type)
-        for robot_type in ("hero", "engineer", "infantry", "sentry")
+        for robot_type in ("hero", "engineer", "infantry", "sentry", "drone")
     }
 
-    assert len(set(profiles.values())) == 4
+    assert len(set(profiles.values())) == 5
     assert profiles["hero"].barrel_width > profiles["infantry"].barrel_width
     assert profiles["engineer"].barrel_length == 0
     assert profiles["engineer"].tool_arm_length > 0

@@ -74,12 +74,12 @@ def _mutated_rules(tmp_path: Path, mutate) -> Path:
     return path
 
 
-def test_progression_state_exists_only_for_hero_and_infantry_and_uses_float() -> None:
+def test_progression_state_exists_for_hero_infantry_and_drone_and_uses_float() -> None:
     match = _match()
 
-    assert len(match.ruleset._progression_by_robot) == 6
+    assert len(match.ruleset._progression_by_robot) == 8
     for robot in match.robots:
-        if robot.type in {"hero", "infantry"}:
+        if robot.type in {"hero", "infantry", "drone"}:
             state = _progress(match, robot.id)
             assert state.level == 1
             assert state.experience == 0.0
@@ -157,7 +157,16 @@ def test_all_level_one_to_ten_tables_are_loaded_including_cooling_lv9_114() -> N
         assert set(table) == expected_levels
     for table in rules._infantry_launcher_performance.values():
         assert set(table) == expected_levels
+    assert set(rules._drone_performance) == expected_levels
 
+    assert rules._drone_performance[1] == {
+        "heat_limit": 100,
+        "cooling_per_second": 20,
+    }
+    assert rules._drone_performance[10] == {
+        "heat_limit": 200,
+        "cooling_per_second": 120,
+    }
     assert rules._infantry_launcher_performance["cooling-priority"][9][
         "heat_limit"
     ] == 114
@@ -474,6 +483,8 @@ def test_reset_clears_progression_and_reapplies_level_one_performance() -> None:
         "opponent-hero",
         "opponent-infantry-1",
         "opponent-infantry-2",
+        "tarsgo-drone",
+        "opponent-drone",
     ):
         state = _progress(match, robot_id)
         assert (state.level, state.experience) == (1, 0.0)
@@ -508,4 +519,6 @@ def test_display_state_exposes_progression_and_effective_parameters() -> None:
     }
 
     assert progression[hero.id] == (2, 550, 5)
+    assert progression["tarsgo-drone"] == (1, 0.0, 5)
     assert performance[hero.id] == (165, 55, 102, 23)
+    assert "tarsgo-drone" not in performance

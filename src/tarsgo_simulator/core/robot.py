@@ -21,6 +21,7 @@ class Robot:
     attack_interval: float
     damage: int
     type: str = "infantry"
+    aerial: bool = False
     path: list[tuple[float, float]] = field(default_factory=list)
     attack_cooldown: float = 0.0
     alive: bool = True
@@ -50,7 +51,10 @@ class Robot:
                 position = waypoint
                 path.pop(0)
                 continue
-            if not game_map.can_traverse(position, waypoint):
+            if self.aerial:
+                if not game_map.contains(waypoint):
+                    return position, []
+            elif not game_map.can_traverse(position, waypoint):
                 return position, []
             if distance <= remaining:
                 position = waypoint
@@ -63,7 +67,10 @@ class Robot:
                 position[0] + (waypoint[0] - position[0]) * ratio,
                 position[1] + (waypoint[1] - position[1]) * ratio,
             )
-            if not game_map.can_traverse(position, next_position):
+            if self.aerial:
+                if not game_map.contains(next_position):
+                    return position, []
+            elif not game_map.can_traverse(position, next_position):
                 return position, []
             position = next_position
             remaining = 0
