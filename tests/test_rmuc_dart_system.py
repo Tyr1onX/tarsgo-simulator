@@ -371,10 +371,16 @@ def test_spectator_ai_uses_both_teams_with_fixed_seed_and_long_match_smoke() -> 
 
     assert first.finished and second.finished
     assert first.elapsed_time == pytest.approx(second.elapsed_time)
+    status_by_team = {
+        team_id: (ammo, phase)
+        for team_id, ammo, _openings, phase, _remaining, _target, _result
+        in first.ruleset.display_state.dart_system_statuses
+    }
     for team_id in (RED, BLUE):
         left = first.ruleset._dart_system_by_team[team_id]
         right = second.ruleset._dart_system_by_team[team_id]
         assert (left.openings_used, left.darts_fired) == (2, 2)
+        assert status_by_team[team_id] == (2, "closed")
         assert (left.openings_used, left.darts_fired) == (
             right.openings_used,
             right.darts_fired,
