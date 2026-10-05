@@ -3435,7 +3435,7 @@ class RMUC2026RegionalRules:
         average_ring_score: float,
         lit_arm_count: int,
     ) -> bool:
-        """Apply one already-confirmed V1.4.0 large-mechanism activation result.
+        """Apply one confirmed activation result and its V1.4.0 Experience.
 
         Rotation, hit detection, ring recognition, activation opportunities, and
         the 20-second activation procedure remain outside this rule-level API.
@@ -3465,7 +3465,25 @@ class RMUC2026RegionalRules:
                 remaining=duration,
             )
         )
+        self._grant_large_energy_mechanism_experience(team_id)
         return True
+
+    def _grant_large_energy_mechanism_experience(self, team_id: str) -> None:
+        """Split the activation's 750 XP pool across living eligible teammates."""
+        recipients = [
+            robot_id
+            for robot_id in sorted(self._progression_by_robot)
+            if (
+                self._robots_by_id[robot_id].team == team_id
+                and self._robots_by_id[robot_id].alive
+            )
+        ]
+        if not recipients:
+            return
+
+        experience_each = 750.0 / len(recipients)
+        for robot_id in recipients:
+            self._grant_experience(robot_id, experience_each)
 
     def _current_large_energy_mechanism_defense(self, team_id: str) -> float:
         return max(

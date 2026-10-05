@@ -15,7 +15,7 @@ Regional V1.4.0 manual.
 - Outpost destruction/rebuild, 300 s cutoff, and Base-damage rebuild
   opportunities;
 - V1.4.0 match-result chain;
-- Hero and Infantry private Experience state;
+- Hero, Infantry, and Drone private Experience state;
 - complete Lv1-Lv10 Experience thresholds;
 - initial per-team level cap of 5, with D2/D3 unlocks to 7/10;
 - deterministic Hero/Infantry committed-shot Experience;
@@ -73,6 +73,9 @@ Regional V1.4.0 manual.
   through the existing max-based effective Defense path;
 - Large Energy Mechanism Shooting-Heat Cooling ×1/×2/×3/×5 consumed as a
   complete Cooling candidate alongside Tunnel and Fortress Cooling;
+- successful Large Energy Mechanism activation awards one 750-point Experience
+  pool, split evenly among living Hero, Infantry, and Drone teammates through
+  the existing progression state;
 - same-class Attack/Defense/Cooling max semantics and same-team no-reactivation
   while the Large Energy Mechanism remains in its activated Buff window;
 - Attack Buff resolution for current direct-projectile Robot/Base/Outpost
@@ -227,9 +230,6 @@ Regional V1.4.0 manual.
 - physical Large Energy Mechanism gameplay: rotating entity, activation
   opportunities, operator/Sentry trigger commands, random lit-module selection,
   projectile-hit timing, armor/ring hit detection, and ring-score recognition;
-- Large Energy Mechanism 750-point Experience distribution remains deferred
-  with the mechanism's activation event; Drone alive state now exists, but the
-  current effect-only entry point is not treated as a synthetic activation;
 - Small Energy Mechanism gameplay and its Defense/Experience effects;
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
