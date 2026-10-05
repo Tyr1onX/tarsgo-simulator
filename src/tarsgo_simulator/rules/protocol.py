@@ -63,6 +63,9 @@ class RuleSetDisplayState:
         tuple[str, str, int, float, float, float, float, bool, int], ...
     ] = ()
     drone_air_support: tuple[tuple[str, bool, float], ...] = ()
+    radar_anti_drone: tuple[
+        tuple[str, str, float, float, float, int, int, bool], ...
+    ] = ()
 
 
 class RuleSet(Protocol):
