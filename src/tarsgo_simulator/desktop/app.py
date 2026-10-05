@@ -1997,7 +1997,8 @@ def _draw_virtual_shield(
         (*SHIELD_COLOR, 86),
         glow_center,
         glow_radius,
-        width=2,    )
+        width=2,
+    )
     screen.blit(        glow,
         (
             center[0] - glow_center[0],
