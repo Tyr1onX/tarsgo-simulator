@@ -48,7 +48,7 @@ def test_initial_chassis_state_is_full_for_all_ground_robots() -> None:
     match = _match()
 
     assert set(match.ruleset._chassis_power_by_robot) == {
-        robot.id for robot in match.robots
+        robot.id for robot in match.robots if not robot.aerial
     }
     for state in match.ruleset._chassis_power_by_robot.values():
         assert state.buffer_energy == 60
