@@ -74,7 +74,9 @@ def test_lifecycle_state_is_private_per_ground_robot_and_starts_disengaged() -> 
     match = _match()
     states = match.ruleset._robot_lifecycle_by_robot
 
-    assert set(states) == {robot.id for robot in match.robots}
+    assert set(states) == {
+        robot.id for robot in match.robots if not robot.aerial
+    }
     assert "tarsgo-engineer" in states
     assert "tarsgo-engineer" not in match.ruleset._projectile_allowance_by_robot
     for state in states.values():
