@@ -2016,7 +2016,8 @@ def _draw_rmuc_hud(
         "opening": "开闸",
         "firing": "发射期",
         "cooldown": "冷却",
-        "spent": "已用完",
+        "closed": "机会用尽",
+        "spent": "弹药耗尽",
     }
     for index, team_id in enumerate((player_team, opponent_team)):
         state = dart_by_team.get(team_id)

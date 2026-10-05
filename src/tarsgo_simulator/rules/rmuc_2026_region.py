@@ -3232,7 +3232,10 @@ class RMUC2026RegionalRules:
             now + 1e-9 >= available_at
             for available_at in _DART_OPPORTUNITY_TIMES
         )
-        if state.gate_full_open_at is not None and now < state.gate_full_open_at - 1e-9:
+        if now >= self._time_limit:
+            phase = "closed"
+            remaining = 0.0
+        elif state.gate_full_open_at is not None and now < state.gate_full_open_at - 1e-9:
             phase = "opening"
             remaining = state.gate_full_open_at - now
         elif (
@@ -3244,8 +3247,11 @@ class RMUC2026RegionalRules:
         elif now < state.cooldown_until - 1e-9 and state.openings_used > 0:
             phase = "cooldown"
             remaining = state.cooldown_until - now
-        elif state.darts_fired >= _DART_MAX_PER_MATCH or state.openings_used >= opportunities >= len(_DART_OPPORTUNITY_TIMES):
+        elif state.darts_fired >= _DART_MAX_PER_MATCH:
             phase = "spent"
+            remaining = 0.0
+        elif state.openings_used >= opportunities >= len(_DART_OPPORTUNITY_TIMES):
+            phase = "closed"
             remaining = 0.0
         elif state.openings_used >= opportunities:
             phase = "locked"
