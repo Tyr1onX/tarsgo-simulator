@@ -225,6 +225,8 @@ class Match:
         source_robot: Robot | None = None,
         source_team_id: str | None = None,
         bypass_invincibility: bool = False,
+        bypass_attack_defense: bool = False,
+        award_experience: bool = True,
     ) -> int:
         """Apply HP loss and emit its damage and destruction facts exactly once."""
         is_robot = any(robot is target for robot in self.robots)
@@ -241,7 +243,15 @@ class Match:
 
         if source_robot is not None:
             source_team_id = source_robot.team
-        amount = self.ruleset.resolve_damage(target, amount, source_team_id)
+        if bypass_attack_defense:
+            amount = self.ruleset.resolve_damage(
+                target,
+                amount,
+                source_team_id,
+                bypass_attack_defense=True,
+            )
+        else:
+            amount = self.ruleset.resolve_damage(target, amount, source_team_id)
         if amount <= 0:
             return 0
 
@@ -278,6 +288,7 @@ class Match:
                     attacker_id=source_robot.id if source_robot else None,
                     attacker_team_id=source_team_id,
                     damage=actual_damage,
+                    award_experience=award_experience,
                 )
             )
         if was_alive and not target.alive:
@@ -290,6 +301,7 @@ class Match:
                     team_id=target.team,
                     attacker_id=source_robot.id if source_robot else None,
                     attacker_team_id=source_team_id,
+                    award_experience=award_experience,
                 )
             )
         return actual_damage
@@ -1511,6 +1523,9 @@ class Match:
 
     def _update_ai(self, dt: float) -> None:
         if self._rmuc_spectator_ai:
+            dart_ai = getattr(self.ruleset, "update_dart_ai", None)
+            if callable(dart_ai):
+                dart_ai(self)
             display_state = self.ruleset.display_state
             if display_state is None:
                 return

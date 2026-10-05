@@ -2000,6 +2000,50 @@ def _draw_rmuc_hud(
         match_label.get_rect(center=(timer_rect.centerx, timer_rect.y + 103)),
     )
 
+    dart_by_team = {
+        team_id: (ammo, _openings, phase, remaining, _target, result)
+        for team_id, ammo, _openings, phase, remaining, _target, result
+        in display_state.dart_system_statuses
+    }
+    dart_effects = {
+        team_id: (obscured, _buff_suppression)
+        for team_id, obscured, _buff_suppression
+        in display_state.dart_effect_statuses
+    }
+    phase_labels = {
+        "locked": "待解锁",
+        "ready": "可开闸",
+        "opening": "开闸",
+        "firing": "发射期",
+        "cooldown": "冷却",
+        "spent": "已用完",
+    }
+    for index, team_id in enumerate((player_team, opponent_team)):
+        state = dart_by_team.get(team_id)
+        if state is None:
+            continue
+        ammo, _openings, phase, remaining, _target, result = state
+        obscured = dart_effects.get(team_id, (0.0, 0.0))[0]
+        detail = result or (
+            f"遮挡 {math.ceil(obscured)}s"
+            if obscured > 0
+            else f"{phase_labels.get(phase, phase)}"
+            + (f" {math.ceil(remaining)}s" if remaining > 0 else "")
+        )
+        text = _fit_text_to_width(
+            micro_font,
+            f"飞镖 {ammo}/4 · {detail}",
+            timer_rect.width - 12,
+        )
+        surface = micro_font.render(text, True, _rmuc_team_color(match, team_id))
+        screen.blit(
+            surface,
+            surface.get_rect(
+                center=(timer_rect.centerx, timer_rect.y + 127 + index * 17)
+            ),
+        )
+
+
 def _blend_color(
     first: tuple[int, int, int],
     second: tuple[int, int, int],

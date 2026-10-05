@@ -28,6 +28,19 @@ _SMALL_ENERGY_OPPORTUNITY_INTERVAL = 90.0
 _SMALL_ENERGY_ACTIVATION_WINDOW = 20.0
 _SMALL_ENERGY_BUFF_DURATION = 45.0
 _SMALL_ENERGY_EXPERIENCE_BONUS_CAP = 1200.0
+_DART_OPPORTUNITY_TIMES = (30.0, 240.0)
+_DART_GATE_OPENING_SECONDS = 7.0
+_DART_FIRING_WINDOW_SECONDS = 30.0
+_DART_DETECTION_WINDOW_SECONDS = 40.0
+_DART_FIRST_CLOSE_COOLDOWN_SECONDS = 15.0
+_DART_DETECTION_REOPEN_SECONDS = 2.0
+_DART_MAX_PER_MATCH = 4
+_DART_TARGET_MODES = {
+    "fixed",
+    "random-fixed",
+    "random-moving",
+    "terminal-moving",
+}
 # V1.4.0 Radar marking can track Drone, but the vulnerability effect itself
 # is explicitly limited to ground robots.
 _RADAR_VULNERABILITY_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
@@ -147,6 +160,38 @@ class _PendingProjectileDelivery:
 class _TimedAttackBuff:
     multiplier: float
     remaining: float
+    mechanism: str | None = None
+
+
+@dataclass(frozen=True)
+class _DartProjectile:
+    target_structure_id: str
+    target_mode: str
+    expires_at: float
+
+
+@dataclass
+class _DartSystemState:
+    openings_used: int = 0
+    darts_fired: int = 0
+    gate_full_open_at: float | None = None
+    firing_window_ends_at: float | None = None
+    detector_window_ends_at: float | None = None
+    cooldown_until: float = 0.0
+    target_structure_id: str | None = None
+    target_mode: str | None = None
+    fixed_target_hits: int = 0
+    fixed_base_hits: int = 0
+    ai_last_fired_opening: int = 0
+    pending_projectiles: list[_DartProjectile] = field(default_factory=list)
+    last_result: str = ""
+    last_result_remaining: float = 0.0
+
+
+@dataclass
+class _DartEffectsState:
+    screen_obscured_remaining: float = 0.0
+    terrain_energy_suppressed_remaining: float = 0.0
 
 
 @dataclass
@@ -2339,6 +2384,11 @@ class RMUC2026RegionalRules:
         self._energy_mechanism_buffs_by_team: dict[
             str, list[_TimedEnergyMechanismBuff]
         ] = {}
+        self._dart_system_by_team: dict[str, _DartSystemState] = {}
+        self._dart_effects_by_team: dict[str, _DartEffectsState] = {}
+        self._dart_detector_closed_until: dict[str, float] = {}
+        self._field_buff_disabled_until_by_zone: dict[str, float] = {}
+        self._current_time = 0.0
         self._small_energy_mechanism_activation_times_by_team: dict[
             str, list[float]
         ] = {}
@@ -2666,6 +2716,18 @@ class RMUC2026RegionalRules:
                 for buff in buffs
                 if buff.remaining > 0
             ),
+            dart_system_statuses=tuple(
+                self._dart_display_status(team_id, state)
+                for team_id, state in sorted(self._dart_system_by_team.items())
+            ),
+            dart_effect_statuses=tuple(
+                (
+                    team_id,
+                    effects.screen_obscured_remaining,
+                    effects.terrain_energy_suppressed_remaining,
+                )
+                for team_id, effects in sorted(self._dart_effects_by_team.items())
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -2846,6 +2908,401 @@ class RMUC2026RegionalRules:
             return False
         return target.alive
 
+    def open_dart_gate(
+        self,
+        match: "Match",
+        team_id: str,
+        target_mode: str | None = None,
+    ) -> bool:
+        """Start one official seven-second gate opening opportunity.
+
+        Dart flight and physical aiming stay upstream. This API records the
+        selected official target and timing; detected hits enter through
+        :meth:`record_dart_hit`.
+        """
+        state = self._dart_system_by_team.get(team_id)
+        now = match.elapsed_time
+        if (
+            match.finished
+            or state is None
+            or now >= self._time_limit
+            or state.openings_used >= len(_DART_OPPORTUNITY_TIMES)
+            or now < state.cooldown_until - 1e-9
+            or (
+                state.firing_window_ends_at is not None
+                and now < state.firing_window_ends_at - 1e-9
+            )
+        ):
+            return False
+
+        opportunities = sum(
+            now + 1e-9 >= available_at
+            for available_at in _DART_OPPORTUNITY_TIMES
+        )
+        if state.openings_used >= opportunities:
+            return False
+
+        enemy_team_id = next(
+            (other for other in self._dart_system_by_team if other != team_id),
+            None,
+        )
+        if enemy_team_id is None:
+            return False
+        enemy_outpost = self._outpost_by_team[enemy_team_id]
+        if enemy_outpost.alive:
+            if target_mode not in {None, "fixed"}:
+                return False
+            selected_mode = "fixed"
+            target = enemy_outpost
+        else:
+            if target_mode not in _DART_TARGET_MODES:
+                return False
+            selected_mode = target_mode
+            target = self._base_by_team[enemy_team_id]
+
+        state.openings_used += 1
+        state.gate_full_open_at = now + _DART_GATE_OPENING_SECONDS
+        state.firing_window_ends_at = (
+            state.gate_full_open_at + _DART_FIRING_WINDOW_SECONDS
+        )
+        state.detector_window_ends_at = (
+            state.gate_full_open_at + _DART_DETECTION_WINDOW_SECONDS
+        )
+        state.cooldown_until = (
+            state.firing_window_ends_at + _DART_FIRST_CLOSE_COOLDOWN_SECONDS
+            if state.openings_used == 1
+            else state.firing_window_ends_at
+        )
+        state.target_structure_id = target.id
+        state.target_mode = selected_mode
+        state.last_result = "闸门开启中"
+        state.last_result_remaining = _DART_GATE_OPENING_SECONDS
+        return True
+
+    def fire_dart(self, match: "Match", team_id: str) -> bool:
+        """Consume one of the four loaded darts inside the open firing window."""
+        state = self._dart_system_by_team.get(team_id)
+        now = match.elapsed_time
+        if (
+            match.finished
+            or state is None
+            or state.gate_full_open_at is None
+            or state.firing_window_ends_at is None
+            or state.detector_window_ends_at is None
+            or now + 1e-9 < state.gate_full_open_at
+            or now >= state.firing_window_ends_at - 1e-9
+            or now >= state.detector_window_ends_at - 1e-9
+            or state.darts_fired >= _DART_MAX_PER_MATCH
+            or state.target_structure_id is None
+            or state.target_mode is None
+        ):
+            return False
+
+        target = next(
+            (
+                structure
+                for structure in self._base_by_team.values()
+                if structure.id == state.target_structure_id
+            ),
+            None,
+        ) or next(
+            (
+                structure
+                for structure in self._outpost_by_team.values()
+                if structure.id == state.target_structure_id
+            ),
+            None,
+        )
+        if target is None or not target.alive:
+            return False
+        if target.type == "base" and self._outpost_by_team[target.team].alive:
+            return False
+
+        state.darts_fired += 1
+        state.pending_projectiles.append(
+            _DartProjectile(
+                target_structure_id=target.id,
+                target_mode=state.target_mode,
+                expires_at=state.detector_window_ends_at,
+            )
+        )
+        state.last_result = "飞镖已发射"
+        state.last_result_remaining = 3.0
+        return True
+
+    def record_dart_miss(self, match: "Match", team_id: str) -> bool:
+        """Resolve the oldest launched dart as a miss without applying effects."""
+        state = self._dart_system_by_team.get(team_id)
+        if state is None:
+            return False
+        now = match.elapsed_time
+        state.pending_projectiles = [
+            projectile
+            for projectile in state.pending_projectiles
+            if projectile.expires_at > now + 1e-9
+        ]
+        if not state.pending_projectiles:
+            return False
+        state.pending_projectiles.pop(0)
+        state.last_result = "飞镖未命中"
+        state.last_result_remaining = 3.0
+        return True
+
+    def record_dart_hit(
+        self,
+        match: "Match",
+        team_id: str,
+        target_structure_id: str | None = None,
+    ) -> bool:
+        """Apply V1.4.0 effects after the referee reports a detector hit."""
+        state = self._dart_system_by_team.get(team_id)
+        if match.finished or state is None:
+            return False
+        now = match.elapsed_time
+        state.pending_projectiles = [
+            projectile
+            for projectile in state.pending_projectiles
+            if projectile.expires_at > now + 1e-9
+        ]
+        if not state.pending_projectiles:
+            return False
+        projectile = state.pending_projectiles[0]
+        if (
+            target_structure_id is not None
+            and target_structure_id != projectile.target_structure_id
+        ):
+            return False
+        target = next(
+            (
+                structure
+                for structure in (*self._base_by_team.values(), *self._outpost_by_team.values())
+                if structure.id == projectile.target_structure_id
+            ),
+            None,
+        )
+        if (
+            target is None
+            or not target.alive
+            or target.team == team_id
+            or now < self._dart_detector_closed_until.get(target.id, 0.0) - 1e-9
+            or (target.type == "base" and self._outpost_by_team[target.team].alive)
+        ):
+            return False
+
+        damage = (
+            750
+            if target.type == "outpost"
+            else {
+                "fixed": 200,
+                "random-fixed": 300,
+                "random-moving": 625,
+                "terminal-moving": 1000,
+            }[projectile.target_mode]
+        )
+        state.pending_projectiles.pop(0)
+        match.apply_damage(
+            target,
+            damage,
+            source_team_id=team_id,
+            bypass_attack_defense=True,
+            award_experience=False,
+        )
+
+        self._dart_detector_closed_until[target.id] = (
+            now + _DART_DETECTION_REOPEN_SECONDS
+        )
+        self._apply_dart_hit_effects(match, team_id, target, projectile.target_mode)
+        state.last_result = f"命中{'基地' if target.type == 'base' else '前哨站'}"
+        state.last_result_remaining = 3.0
+        return True
+
+    def update_dart_ai(self, match: "Match") -> None:
+        """Use one shared deterministic policy for both RMUC spectator teams."""
+        for team_id, state in sorted(self._dart_system_by_team.items()):
+            now = match.elapsed_time
+            if state.openings_used < len(_DART_OPPORTUNITY_TIMES):
+                next_opportunity = _DART_OPPORTUNITY_TIMES[state.openings_used]
+                if now + 1e-9 >= next_opportunity and now >= state.cooldown_until - 1e-9:
+                    enemy_team_id = next(
+                        other for other in self._dart_system_by_team if other != team_id
+                    )
+                    mode = (
+                        None
+                        if self._outpost_by_team[enemy_team_id].alive
+                        else "random-moving"
+                    )
+                    self.open_dart_gate(match, team_id, mode)
+
+            if (
+                state.openings_used > 0
+                and state.ai_last_fired_opening != state.openings_used
+                and state.gate_full_open_at is not None
+                and now + 1e-9 >= state.gate_full_open_at
+            ):
+                if state.darts_fired >= _DART_MAX_PER_MATCH:
+                    state.ai_last_fired_opening = state.openings_used
+                elif self.fire_dart(match, team_id):
+                    state.ai_last_fired_opening = state.openings_used
+
+    def _apply_dart_hit_effects(
+        self,
+        match: "Match",
+        source_team_id: str,
+        target: Structure,
+        target_mode: str,
+    ) -> None:
+        state = self._dart_system_by_team[source_team_id]
+        effects = self._dart_effects_by_team[target.team]
+        moving = target_mode in {"random-moving", "terminal-moving"}
+        if moving:
+            effects.screen_obscured_remaining += 10.0
+        else:
+            state.fixed_target_hits += 1
+            screen_seconds = {1: 10.0, 2: 5.0, 3: 3.0, 4: 2.0}.get(
+                state.fixed_target_hits,
+                0.0,
+            )
+            effects.screen_obscured_remaining = screen_seconds
+
+        if target.type == "base":
+            eligible = [
+                robot
+                for robot in match.robots
+                if robot.team == source_team_id
+                and robot.alive
+                and robot.type in _EXPERIENCE_ROBOT_TYPES
+            ]
+            experience_pool = (
+                2500.0
+                if moving
+                else 600.0
+                if target_mode == "random-fixed"
+                else 200.0
+            )
+            if eligible:
+                each = experience_pool / len(eligible)
+                for robot in eligible:
+                    self._grant_experience(robot.id, each)
+
+            if target_mode == "random-fixed":
+                effects.terrain_energy_suppressed_remaining = max(
+                    effects.terrain_energy_suppressed_remaining,
+                    screen_seconds,
+                )
+            elif moving:
+                percent = 0.25 if target_mode == "terminal-moving" else 0.10
+                for robot in tuple(match.robots):
+                    if robot.team != target.team or not robot.alive or robot.type not in _GROUND_ROBOT_TYPES:
+                        continue
+                    robot_damage = int(math.floor(robot.max_hp * percent + 0.5))
+                    match.apply_damage(
+                        robot,
+                        robot_damage,
+                        source_team_id=source_team_id,
+                        bypass_invincibility=True,
+                        bypass_attack_defense=True,
+                        award_experience=False,
+                    )
+
+            if moving or state.fixed_base_hits >= _DART_MAX_PER_MATCH:
+                self._team_states[target.team].base_armor_deployed = True
+            if target_mode in {"fixed", "random-fixed"}:
+                state.fixed_base_hits += 1
+                if state.fixed_base_hits >= _DART_MAX_PER_MATCH:
+                    self._team_states[target.team].base_armor_deployed = True
+
+        field_zone = (
+            self._field_base_zone_by_team.get(target.team)
+            if target.type == "base"
+            else self._field_outpost_zone_by_team.get(target.team)
+        )
+        if field_zone is not None:
+            self._field_buff_disabled_until_by_zone[field_zone.id] = max(
+                self._field_buff_disabled_until_by_zone.get(field_zone.id, 0.0),
+                match.elapsed_time + 30.0,
+            )
+
+    def _dart_display_status(
+        self,
+        team_id: str,
+        state: _DartSystemState,
+    ) -> tuple[str, int, int, str, float, str, str]:
+        now = self._current_time
+        opportunities = sum(
+            now + 1e-9 >= available_at
+            for available_at in _DART_OPPORTUNITY_TIMES
+        )
+        if state.gate_full_open_at is not None and now < state.gate_full_open_at - 1e-9:
+            phase = "opening"
+            remaining = state.gate_full_open_at - now
+        elif (
+            state.firing_window_ends_at is not None
+            and now < state.firing_window_ends_at - 1e-9
+        ):
+            phase = "firing"
+            remaining = state.firing_window_ends_at - now
+        elif now < state.cooldown_until - 1e-9 and state.openings_used > 0:
+            phase = "cooldown"
+            remaining = state.cooldown_until - now
+        elif state.darts_fired >= _DART_MAX_PER_MATCH or state.openings_used >= opportunities >= len(_DART_OPPORTUNITY_TIMES):
+            phase = "spent"
+            remaining = 0.0
+        elif state.openings_used >= opportunities:
+            phase = "locked"
+            next_time = next(
+                (
+                    item
+                    for item in _DART_OPPORTUNITY_TIMES
+                    if item > now + 1e-9
+                ),
+                self._time_limit,
+            )
+            remaining = max(0.0, next_time - now)
+        else:
+            phase = "ready"
+            remaining = 0.0
+
+        target = "基地" if state.target_structure_id in {
+            structure.id for structure in self._base_by_team.values()
+        } else "前哨站" if state.target_structure_id else ""
+        result = (
+            state.last_result
+            if state.last_result_remaining > 1e-9
+            else ""
+        )
+        return (
+            team_id,
+            max(0, _DART_MAX_PER_MATCH - state.darts_fired),
+            max(0, opportunities - state.openings_used),
+            phase,
+            max(0.0, remaining),
+            target,
+            result,
+        )
+
+    def _advance_dart_effect_timers(self, dt: float, now: float) -> None:
+        if dt <= 0:
+            return
+        for state in self._dart_system_by_team.values():
+            state.last_result_remaining = max(0.0, state.last_result_remaining - dt)
+            state.pending_projectiles = [
+                projectile
+                for projectile in state.pending_projectiles
+                if projectile.expires_at > now + 1e-9
+            ]
+        for effects in self._dart_effects_by_team.values():
+            effects.screen_obscured_remaining = max(
+                0.0,
+                effects.screen_obscured_remaining - dt,
+            )
+            effects.terrain_energy_suppressed_remaining = max(
+                0.0,
+                effects.terrain_energy_suppressed_remaining - dt,
+            )
+        for zone_id, until in tuple(self._field_buff_disabled_until_by_zone.items()):
+            if until <= now + 1e-9:
+                self._field_buff_disabled_until_by_zone[zone_id] = 0.0
+
     def on_attack_committed(self, robot: Robot) -> None:
         """Commit one legal shot using Fortress reserve first when available."""
         lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
@@ -2941,7 +3398,9 @@ class RMUC2026RegionalRules:
         else:
             zones = self._projectile_exchange_zones_by_team.get(robot.team, ())
             if lifecycle_state.weak or not any(
-                zone.contains(robot.position) for zone in zones
+                zone.contains(robot.position)
+                and not self._field_buff_zone_disabled(zone.id)
+                for zone in zones
             ):
                 return False
             cost = rule.nonremote_coins
@@ -3378,6 +3837,8 @@ class RMUC2026RegionalRules:
         team_id: str,
         multiplier: float,
         duration: float,
+        *,
+        mechanism: str | None = None,
     ) -> bool:
         """Apply an already-resolved team Attack Buff fact.
 
@@ -3396,6 +3857,7 @@ class RMUC2026RegionalRules:
             _TimedAttackBuff(
                 multiplier=float(multiplier),
                 remaining=float(duration),
+                mechanism=mechanism,
             )
         )
         return True
@@ -3408,6 +3870,14 @@ class RMUC2026RegionalRules:
                 buff.multiplier
                 for buff in self._attack_buffs_by_team.get(source_team_id, ())
                 if buff.remaining > 0
+                and not (
+                    buff.mechanism == "large-energy"
+                    and self._dart_effects_by_team.get(source_team_id)
+                    is not None
+                    and self._dart_effects_by_team[source_team_id]
+                    .terrain_energy_suppressed_remaining
+                    > 0
+                )
             ),
             default=1.0,
         )
@@ -3477,7 +3947,12 @@ class RMUC2026RegionalRules:
             return False
 
         attack_multiplier, defense, cooling_multiplier = effects
-        if not self.grant_attack_buff(team_id, attack_multiplier, duration):
+        if not self.grant_attack_buff(
+            team_id,
+            attack_multiplier,
+            duration,
+            mechanism="large-energy",
+        ):
             return False
         buffs.append(
             _TimedEnergyMechanismBuff(
@@ -3570,6 +4045,8 @@ class RMUC2026RegionalRules:
             self._grant_experience(robot_id, experience_each)
 
     def _current_large_energy_mechanism_defense(self, team_id: str) -> float:
+        if self._energy_and_terrain_buffs_suppressed(team_id):
+            return 0.0
         return max(
             (
                 buff.defense
@@ -3582,6 +4059,8 @@ class RMUC2026RegionalRules:
         )
 
     def _current_small_energy_mechanism_defense(self, team_id: str) -> float:
+        if self._energy_and_terrain_buffs_suppressed(team_id):
+            return 0.0
         return max(
             (
                 buff.defense
@@ -3603,6 +4082,8 @@ class RMUC2026RegionalRules:
         self,
         team_id: str,
     ) -> float:
+        if self._energy_and_terrain_buffs_suppressed(team_id):
+            return 1.0
         return max(
             (
                 buff.cooling_multiplier
@@ -3612,6 +4093,13 @@ class RMUC2026RegionalRules:
                 if buff.mechanism == "large" and buff.remaining > 0
             ),
             default=1.0,
+        )
+
+    def _energy_and_terrain_buffs_suppressed(self, team_id: str) -> bool:
+        effects = self._dart_effects_by_team.get(team_id)
+        return (
+            effects is not None
+            and effects.terrain_energy_suppressed_remaining > 1e-9
         )
 
     def set_radar_vulnerability(
@@ -3683,6 +4171,8 @@ class RMUC2026RegionalRules:
         target: DamageableTarget,
         amount: int,
         source_team_id: str | None,
+        *,
+        bypass_attack_defense: bool = False,
     ) -> int:
         """Apply Attack, max Defense/Vulnerability, then Base Virtual Shield."""
         if (
@@ -3696,12 +4186,15 @@ class RMUC2026RegionalRules:
         if state is None:
             return amount
 
-        attack = self._effective_attack_multiplier(source_team_id)
-        defense = self._effective_defense(target)
-        vulnerability = self._effective_vulnerability(target)
-        multiplier = max(0.0, attack * (1.0 - defense + vulnerability))
-        resolved = int(math.floor(amount * multiplier + 0.5))
-        resolved = max(0, resolved)
+        if bypass_attack_defense:
+            resolved = max(0, amount)
+        else:
+            attack = self._effective_attack_multiplier(source_team_id)
+            defense = self._effective_defense(target)
+            vulnerability = self._effective_vulnerability(target)
+            multiplier = max(0.0, attack * (1.0 - defense + vulnerability))
+            resolved = int(math.floor(amount * multiplier + 0.5))
+            resolved = max(0, resolved)
 
         if (
             resolved > 0
@@ -3760,6 +4253,7 @@ class RMUC2026RegionalRules:
         own_base = self._field_base_zone_by_team.get(robot.team)
         if (
             own_base is not None
+            and not self._field_buff_zone_disabled(own_base.id)
             and self._field_occupy_remaining.get((robot.id, own_base.id), 0.0) > 0
         ):
             best = max(best, self._field_defense_by_type["base"])
@@ -3783,12 +4277,20 @@ class RMUC2026RegionalRules:
 
         for point_team, zone in self._field_outpost_zone_by_team.items():
             if (
+                not self._field_buff_zone_disabled(zone.id)
+                and
                 self._field_occupy_remaining.get((robot.id, zone.id), 0.0) > 0
                 and self._outpost_buff_eligible(robot, point_team)
             ):
                 best = max(best, self._field_defense_by_type["outpost"])
 
         return best
+
+    def _field_buff_zone_disabled(self, zone_id: str) -> bool:
+        return (
+            self._field_buff_disabled_until_by_zone.get(zone_id, 0.0)
+            > self._current_time + 1e-9
+        )
 
     def _is_fortress_occupant(self, robot: Robot) -> bool:
         state = self._fortress_state_by_team.get(robot.team)
@@ -4102,7 +4604,7 @@ class RMUC2026RegionalRules:
         return " ".join(labels)
 
     def _current_terrain_defense(self, robot: Robot) -> float:
-        if not robot.alive:
+        if not robot.alive or self._energy_and_terrain_buffs_suppressed(robot.team):
             return 0.0
         state = self._terrain_crossing_by_robot.get(robot.id)
         if state is None:
@@ -4119,7 +4621,11 @@ class RMUC2026RegionalRules:
         robot: Robot,
     ) -> tuple[float, float]:
         state = self._terrain_crossing_by_robot.get(robot.id)
-        if state is None or not robot.alive:
+        if (
+            state is None
+            or not robot.alive
+            or self._energy_and_terrain_buffs_suppressed(robot.team)
+        ):
             return 0.0, 0.0
         options: list[tuple[float, float]] = []
         if state.standard_defense_remaining > 0:
@@ -4534,6 +5040,10 @@ class RMUC2026RegionalRules:
     def prepare_combat(self, match: "Match", dt: float) -> None:
         """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
+        self._advance_dart_effect_timers(
+            frame_dt,
+            min(match.elapsed_time + frame_dt, self._time_limit),
+        )
         self._advance_attack_buffs(frame_dt)
         self._advance_energy_mechanism_buffs(frame_dt)
         self._advance_radar_double_vulnerability(frame_dt)
@@ -4716,6 +5226,15 @@ class RMUC2026RegionalRules:
         self._attack_buffs_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
+        self._dart_system_by_team = {
+            team_id: _DartSystemState() for team_id in team_by_side.values()
+        }
+        self._dart_effects_by_team = {
+            team_id: _DartEffectsState() for team_id in team_by_side.values()
+        }
+        self._dart_detector_closed_until = {}
+        self._field_buff_disabled_until_by_zone = {}
+        self._current_time = match.elapsed_time
         self._energy_mechanism_buffs_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
@@ -4923,6 +5442,13 @@ class RMUC2026RegionalRules:
             ]
             for side in ("red", "blue")
         }
+        self._field_buff_disabled_until_by_zone = {
+            zone.id: 0.0
+            for zone in (
+                *self._field_base_zone_by_team.values(),
+                *self._field_outpost_zone_by_team.values(),
+            )
+        }
         self._field_trapezoid_zone_by_team = {
             team_by_side[side]: zones_by_id[
                 self._field_zone_ids[side]["trapezoid"]
@@ -5076,6 +5602,7 @@ class RMUC2026RegionalRules:
                 self.pause_drone_air_support(drone)
 
     def update(self, match: "Match", dt: float) -> None:
+        self._current_time = match.elapsed_time
         newly_destroyed = self._consume_events(match)
         frame_start = match.elapsed_time - dt
         active_dt = max(
@@ -5579,6 +6106,7 @@ class RMUC2026RegionalRules:
         terrain_state = self._terrain_crossing_by_robot.get(robot_id)
         if (
             terrain_state is not None
+            and not self._energy_and_terrain_buffs_suppressed(robot.team)
             and terrain_state.tunnel_cooling_remaining > 0
         ):
             cooling_candidates.append(
@@ -5687,7 +6215,10 @@ class RMUC2026RegionalRules:
                 None,
             )
         bonus_awarded = 0.0
-        if small_energy_buff is not None:
+        if (
+            small_energy_buff is not None
+            and not self._energy_and_terrain_buffs_suppressed(robot.team)
+        ):
             bonus_awarded = min(
                 base_awarded,
                 small_energy_buff.experience_bonus_remaining,
@@ -5724,7 +6255,8 @@ class RMUC2026RegionalRules:
 
     def _grant_kill_experience(self, event) -> None:
         if (
-            event.attacker_id not in self._progression_by_robot
+            not event.award_experience
+            or event.attacker_id not in self._progression_by_robot
             or event.robot_id not in self._robots_by_id
             or event.attacker_team_id == event.team_id
         ):
@@ -5758,7 +6290,9 @@ class RMUC2026RegionalRules:
                 self.attack_damage_by_team[event.attacker_team_id] += event.damage
 
             known_experience_source = (
-                is_enemy_damage and event.attacker_id in self._progression_by_robot
+                is_enemy_damage
+                and event.award_experience
+                and event.attacker_id in self._progression_by_robot
             )
             if event.type == MatchEventType.ROBOT_DAMAGED:
                 lifecycle = self._robot_lifecycle_by_robot.get(event.robot_id)
