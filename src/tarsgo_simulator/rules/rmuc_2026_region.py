@@ -23,9 +23,7 @@ _GROUND_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
 _REBUILD_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
 _EXPERIENCE_ROBOT_TYPES = {"hero", "infantry", "drone"}
 _HP_PERFORMANCE_ROBOT_TYPES = {"hero", "infantry"}
-# V1.4.0 Radar marking can track Drone, but the vulnerability effect itself
-# is explicitly limited to ground robots.
-_RADAR_VULNERABILITY_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
+# V1.4.0 Radar marking can track Drone, but the vulnerability effect itself\n# is explicitly limited to ground robots.\n_RADAR_VULNERABILITY_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
 
 
 @dataclass
@@ -1998,3 +1996,3920 @@ class RMUC2026RegionalRules:
                     f"{document.path}: `terrain_crossing.{terrain_type}` "
                     "字段不完整或包含未知字段"
                 )
+            parsed = {
+                key: float(
+                    _number(
+                        item,
+                        key,
+                        document,
+                        f"terrain_crossing.{terrain_type}.{key}",
+                    )
+                )
+                for key in expected["keys"]
+            }
+            for key, expected_value in expected.items():
+                if key == "keys":
+                    continue
+                if abs(parsed[key] - expected_value) > 1e-9:
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.{terrain_type}.{key} "
+                        "与 RMUC 2026 Regional V1.4.0 不匹配"
+                    )
+            self._terrain_rules[terrain_type] = _TerrainCrossingRule(
+                sequence_window=parsed["sequence_window"],
+                defense=parsed["defense"],
+                defense_duration=parsed["defense_duration"],
+                reacquire_cooldown=parsed.get("reacquire_cooldown", 0.0),
+                cooling_multiplier=parsed.get("cooling_multiplier", 1.0),
+                cooling_duration=parsed.get("cooling_duration", 0.0),
+            )
+
+        terrain_zones = _mapping(terrain_crossing, "zones", document)
+        if set(terrain_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `terrain_crossing.zones` 必须包含 red、blue"
+            )
+        self._terrain_zone_ids: dict[
+            str, dict[str, tuple[str, ...]]
+        ] = {}
+        all_terrain_zone_ids: set[str] = set()
+        expected_lengths = {
+            "road": 2,
+            "elevated_ground": 2,
+            "launch_ramp": 2,
+            "tunnel": 3,
+        }
+        for side in ("red", "blue"):
+            side_zones = _mapping(terrain_zones, side, document)
+            if set(side_zones) != set(expected_lengths):
+                raise ConfigError(
+                    f"{document.path}: terrain_crossing.zones.{side} "
+                    "必须包含 road、elevated_ground、launch_ramp、tunnel"
+                )
+            parsed_side: dict[str, tuple[str, ...]] = {}
+            for terrain_type, expected_length in expected_lengths.items():
+                raw_zone_ids = side_zones.get(terrain_type)
+                if (
+                    not isinstance(raw_zone_ids, list)
+                    or len(raw_zone_ids) != expected_length
+                    or not all(
+                        isinstance(zone_id, str) and zone_id
+                        for zone_id in raw_zone_ids
+                    )
+                ):
+                    raise ConfigError(
+                        f"{document.path}: terrain_crossing.zones.{side}."
+                        f"{terrain_type} 必须是 {expected_length} 个非空 zone id"
+                    )
+                zone_ids = tuple(raw_zone_ids)
+                if (
+                    len(set(zone_ids)) != len(zone_ids)
+                    or any(zone_id in all_terrain_zone_ids for zone_id in zone_ids)
+                ):
+                    raise ConfigError(
+                        f"{document.path}: Terrain Crossing RFID zone id 不得重复"
+                    )
+                all_terrain_zone_ids.update(zone_ids)
+                parsed_side[terrain_type] = zone_ids
+            self._terrain_zone_ids[side] = parsed_side
+
+        enemy_fortress = _mapping(
+            document.data,
+            "fortress_enemy_occupation",
+            document,
+        )
+        if set(enemy_fortress) != {
+            "available_after",
+            "vulnerability",
+            "armor_after",
+            "retention",
+            "eligible_types",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_enemy_occupation` "
+                "字段不完整或包含未知字段"
+            )
+        enemy_available_after = float(
+            _number(
+                enemy_fortress,
+                "available_after",
+                document,
+                "fortress_enemy_occupation.available_after",
+            )
+        )
+        enemy_vulnerability = float(
+            _number(
+                enemy_fortress,
+                "vulnerability",
+                document,
+                "fortress_enemy_occupation.vulnerability",
+            )
+        )
+        enemy_armor_after = float(
+            _number(
+                enemy_fortress,
+                "armor_after",
+                document,
+                "fortress_enemy_occupation.armor_after",
+            )
+        )
+        enemy_retention = float(
+            _number(
+                enemy_fortress,
+                "retention",
+                document,
+                "fortress_enemy_occupation.retention",
+            )
+        )
+        enemy_eligible_types = enemy_fortress.get("eligible_types")
+        if (
+            abs(enemy_available_after - 180.0) > 1e-9
+            or abs(enemy_vulnerability - 1.0) > 1e-9
+            or abs(enemy_armor_after - 20.0) > 1e-9
+            or abs(enemy_retention - 3.0) > 1e-9
+            or enemy_eligible_types != ["infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: enemy Fortress 必须为 "
+                "180s 开放、100% Vulnerability、20s Armor、3s retention、"
+                "Infantry/Sentry"
+            )
+        self._enemy_fortress_available_after = enemy_available_after
+        self._enemy_fortress_vulnerability = enemy_vulnerability
+        self._enemy_fortress_armor_after = enemy_armor_after
+        self._enemy_fortress_retention = enemy_retention
+        self._enemy_fortress_eligible_types = frozenset(
+            enemy_eligible_types
+        )
+
+        fortress = _mapping(document.data, "fortress_own_buff", document)
+        if set(fortress) != {
+            "defense",
+            "cooling_hp_step",
+            "cooling_cap",
+            "eligible_types",
+            "reserved_projectiles",
+            "zones",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff` "
+                "字段不完整或包含未知字段"
+            )
+        fortress_defense = float(
+            _number(
+                fortress,
+                "defense",
+                document,
+                "fortress_own_buff.defense",
+            )
+        )
+        fortress_cooling_hp_step = _positive_integer(
+            fortress,
+            "cooling_hp_step",
+            document,
+            "fortress_own_buff.cooling_hp_step",
+        )
+        fortress_cooling_cap = _positive_integer(
+            fortress,
+            "cooling_cap",
+            document,
+            "fortress_own_buff.cooling_cap",
+        )
+        eligible_types = fortress.get("eligible_types")
+        if (
+            fortress_defense != 0.50
+            or fortress_cooling_hp_step != 40
+            or fortress_cooling_cap != 75
+            or eligible_types != ["infantry", "sentry"]
+        ):
+            raise ConfigError(
+                f"{document.path}: own Fortress 必须为 "
+                "Defense 50%、Δ/40、cap 75、Infantry/Sentry"
+            )
+        self._fortress_defense = fortress_defense
+        self._fortress_cooling_hp_step = fortress_cooling_hp_step
+        self._fortress_cooling_cap = fortress_cooling_cap
+        self._fortress_eligible_types = frozenset(eligible_types)
+
+        reserved_projectiles = _mapping(
+            fortress,
+            "reserved_projectiles",
+            document,
+        )
+        if set(reserved_projectiles) != {
+            "projectile",
+            "base",
+            "hp_step",
+            "per_step",
+            "cap",
+        }:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.reserved_projectiles` "
+                "字段不完整或包含未知字段"
+            )
+        reserve_projectile = _string(
+            reserved_projectiles,
+            "projectile",
+            document,
+            "fortress_own_buff.reserved_projectiles.projectile",
+        )
+        reserve_base = _positive_integer(
+            reserved_projectiles,
+            "base",
+            document,
+            "fortress_own_buff.reserved_projectiles.base",
+        )
+        reserve_hp_step = _positive_integer(
+            reserved_projectiles,
+            "hp_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.hp_step",
+        )
+        reserve_per_step = _positive_integer(
+            reserved_projectiles,
+            "per_step",
+            document,
+            "fortress_own_buff.reserved_projectiles.per_step",
+        )
+        reserve_cap = _positive_integer(
+            reserved_projectiles,
+            "cap",
+            document,
+            "fortress_own_buff.reserved_projectiles.cap",
+        )
+        if (
+            reserve_projectile != "17mm"
+            or reserve_base != 100
+            or reserve_hp_step != 15
+            or reserve_per_step != 2
+            or reserve_cap != 500
+        ):
+            raise ConfigError(
+                f"{document.path}: Fortress reserve 必须为 "
+                "17mm、100+2*floor(Δ/15)、cap 500"
+            )
+        self._fortress_reserve_projectile = reserve_projectile
+        self._fortress_reserve_base = reserve_base
+        self._fortress_reserve_hp_step = reserve_hp_step
+        self._fortress_reserve_per_step = reserve_per_step
+        self._fortress_reserve_cap = reserve_cap
+
+        fortress_zones = _mapping(fortress, "zones", document)
+        if set(fortress_zones) != {"red", "blue"}:
+            raise ConfigError(
+                f"{document.path}: `fortress_own_buff.zones` "
+                "必须包含 red、blue"
+            )
+        self._fortress_zone_ids = {
+            side: _string(
+                fortress_zones,
+                side,
+                document,
+                f"fortress_own_buff.zones.{side}",
+            )
+            for side in ("red", "blue")
+        }
+        if len(set(self._fortress_zone_ids.values())) != 2:
+            raise ConfigError(
+                f"{document.path}: Fortress zone id 不得重复"
+            )
+
+        self.attack_damage_by_team: dict[str, int] = {}
+        self._attack_buffs_by_team: dict[str, list[_TimedAttackBuff]] = {}
+        self._large_energy_mechanism_buffs_by_team: dict[
+            str, list[_TimedEnergyMechanismBuff]
+        ] = {}
+        self._radar_vulnerability_by_robot: dict[str, _RadarVulnerabilityState] = {}
+        self._radar_double_vulnerability_by_team: dict[
+            str, _RadarDoubleVulnerabilityState
+        ] = {}
+        self._team_states: dict[str, _TeamStructureState] = {}
+        self._base_by_team: dict[str, Structure] = {}
+        self._outpost_by_team: dict[str, Structure] = {}
+        self._rebuild_zone_by_team: dict[str, Zone] = {}
+        self._robot_types_by_id: dict[str, str] = {}
+        self._robots_by_id: dict[str, Robot] = {}
+        self._drone_helipad_by_robot: dict[str, tuple[float, float]] = {}
+        self._drone_air_support_by_robot: dict[str, _DroneAirSupportState] = {}
+        self._progression_by_robot: dict[str, _RobotProgressionState] = {}
+        self._level_cap_by_team: dict[str, int] = {}
+        self._engineer_resources_by_id: dict[str, _EngineerResourceState] = {}
+        self._tech_core_by_team: dict[str, _TechCoreTeamState] = {}
+        self._d4_coordinator = _D4CoordinatorState()
+        self._economy_by_team: dict[str, _TeamEconomyState] = {}
+        self._next_timed_gold_grant_index = 0
+        self._next_periodic_gold_tick = self._economy_periodic_interval
+        self._robot_lifecycle_by_robot: dict[str, _RobotLifecycleState] = {}
+        self._projectile_allowance_by_robot: dict[
+            str, _ProjectileAllowanceState
+        ] = {}
+        self._projectile_purchase_by_team: dict[
+            str, _TeamProjectilePurchaseState
+        ] = {}
+        self._shooting_heat_by_robot: dict[str, _ShootingHeatState] = {}
+        self._heat_cooling_accumulator = 0.0
+        self._chassis_power_by_robot: dict[str, _ChassisPowerState] = {}
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot: dict[str, float] = {}
+        self._next_sentry_supply_grant = self._sentry_supply_interval
+        self._projectile_exchange_zones_by_team: dict[str, tuple[Zone, ...]] = {}
+        self._supply_buff_zone_by_team: dict[str, Zone] = {}
+        self._resource_zone_by_team: dict[str, Zone] = {}
+        self._assembly_zone_by_team: dict[str, Zone] = {}
+        self._assembly_invincibility_elapsed_by_engineer: dict[str, float] = {}
+        self._field_buff_elapsed = 0.0
+        self._field_base_zone_by_team: dict[str, Zone] = {}
+        self._field_outpost_zone_by_team: dict[str, Zone] = {}
+        self._field_trapezoid_zone_by_team: dict[str, Zone] = {}
+        self._field_central_zones: tuple[Zone, ...] = ()
+        self._central_defense_state_by_zone: dict[
+            str, _CentralDefenseBuffState
+        ] = {}
+        self._field_occupy_remaining: dict[tuple[str, str], float] = {}
+        self._fortress_zone_by_team: dict[str, Zone] = {}
+        self._fortress_state_by_team: dict[str, _FortressBuffState] = {}
+        self._fortress_reserved_by_robot: dict[
+            str, _FortressReservedProjectileState
+        ] = {}
+        self._enemy_fortress_occupation: dict[
+            tuple[str, str], _EnemyFortressOccupationState
+        ] = {}
+        self._enemy_fortress_death_retention_started: set[
+            tuple[str, str]
+        ] = set()
+        self._outposts_destroyed_this_frame: set[str] = set()
+        self._terrain_crossing_by_robot: dict[
+            str, _TerrainCrossingState
+        ] = {}
+        self._terrain_zones_by_side_and_type: dict[
+            str, dict[str, tuple[Zone, ...]]
+        ] = {}
+        self._terrain_zone_lookup: dict[str, tuple[str, str, int]] = {}
+        self._terrain_interrupt_zones_by_id: dict[str, Zone] = {}
+
+    @property
+    def time_limit(self) -> float:
+        return self._time_limit
+
+    @property
+    def display_state(self) -> RuleSetDisplayState:
+        structure_statuses = []
+        for team_id in sorted(self._base_by_team):
+            base = self._base_by_team[team_id]
+            outpost = self._outpost_by_team[team_id]
+            state = self._team_states[team_id]
+            defense_label = (
+                f"DEF {int(state.tech_core_defense * 100)}%"
+                if state.tech_core_defense > 0
+                else ""
+            )
+
+            base_status_parts = []
+            if state.base_armor_deployed:
+                base_status_parts.append("ARMOR")
+            if defense_label:
+                base_status_parts.append(defense_label)
+            if state.base_virtual_shield > 0:
+                base_status_parts.append(f"SH:{state.base_virtual_shield}")
+            structure_statuses.append(
+                (
+                    base.id,
+                    base.hp,
+                    base.max_hp,
+                    " ".join(base_status_parts),
+                )
+            )
+
+            outpost_status_parts = []
+            if not outpost.alive:
+                outpost_status_parts.append("DESTROYED")
+            elif state.outpost_ever_destroyed:
+                outpost_status_parts.append("REBUILT")
+            if defense_label:
+                outpost_status_parts.append(defense_label)
+            structure_statuses.append(
+                (
+                    outpost.id,
+                    outpost.hp,
+                    outpost.max_hp,
+                    " ".join(outpost_status_parts),
+                )
+            )
+        rebuild_progress = []
+        for team_id, state in sorted(self._team_states.items()):
+            for robot_id, progress in sorted(state.rebuild_progress_by_robot.items()):
+                if progress <= 0:
+                    continue
+                duration = self._rebuild_duration(self._robot_types_by_id[robot_id])
+                rebuild_progress.append((team_id, robot_id, progress, duration))
+
+        return RuleSetDisplayState(
+            victory_points=(),
+            control_owner=None,
+            robot_statuses=tuple(
+                (robot.id, status)
+                for robot in sorted(
+                    self._robots_by_id.values(),
+                    key=lambda item: item.id,
+                )
+                if (status := self._robot_status_label(robot))
+            ),
+            attack_damage=tuple(sorted(self.attack_damage_by_team.items())),
+            coins=tuple(
+                (team_id, state.coins)
+                for team_id, state in sorted(self._economy_by_team.items())
+            ),
+            team_economy=tuple(
+                (
+                    team_id,
+                    state.coins,
+                    *self._periodic_gold_rate(team_id),
+                )
+                for team_id, state in sorted(self._economy_by_team.items())
+            ),
+            robot_projectiles=tuple(
+                (
+                    robot_id,
+                    state.projectile_type,
+                    state.allowed,
+                )
+                for robot_id, state in sorted(
+                    self._projectile_allowance_by_robot.items()
+                )
+            ),
+            robot_projectile_reserves=tuple(
+                (robot_id, state.reserved)
+                for robot_id, state in sorted(
+                    self._fortress_reserved_by_robot.items()
+                )
+                if state.initialized
+            ),
+            robot_shooting_heat=tuple(
+                (
+                    robot_id,
+                    state.heat,
+                    self._effective_heat_parameters(robot_id).heat_limit,
+                    state.temporarily_locked,
+                    state.permanently_locked,
+                )
+                for robot_id, state in sorted(
+                    self._shooting_heat_by_robot.items()
+                )
+            ),
+            robot_chassis_power=tuple(
+                (
+                    robot_id,
+                    state.buffer_energy,
+                    self._effective_buffer_energy_max(robot_id),
+                    self._current_synthetic_power_by_robot.get(robot_id, 0.0),
+                    self._effective_chassis_power_limit(robot_id),
+                    state.power_off_remaining,
+                )
+                for robot_id, state in sorted(
+                    self._chassis_power_by_robot.items()
+                )
+            ),
+            structure_statuses=tuple(structure_statuses),
+            rebuild_opportunities=tuple(
+                (team_id, state.outpost_rebuild_opportunities)
+                for team_id, state in sorted(self._team_states.items())
+            ),
+            rebuild_progress=tuple(rebuild_progress),
+            robot_progression=tuple(
+                (
+                    robot_id,
+                    state.level,
+                    state.experience,
+                    self._level_cap_by_team[self._robots_by_id[robot_id].team],
+                )
+                for robot_id, state in sorted(self._progression_by_robot.items())
+            ),
+            robot_performance=tuple(
+                (
+                    robot_id,
+                    performance.max_hp,
+                    performance.chassis_power_limit,
+                    performance.heat_limit,
+                    performance.cooling_per_second,
+                )
+                for robot_id, performance in (
+                    (
+                        robot_id,
+                        self._effective_performance(robot_id),
+                    )
+                    for robot_id in sorted(self._progression_by_robot)
+                    if self._robots_by_id[robot_id].type
+                    in _HP_PERFORMANCE_ROBOT_TYPES
+                )
+            ),
+            tech_core_status=tuple(
+                (
+                    team_id,
+                    self._level_cap_by_team[team_id],
+                    state.completion_count_by_difficulty[1],
+                    state.completion_count_by_difficulty[2],
+                    state.completion_count_by_difficulty[3],
+                    state.completion_count_by_difficulty[4],
+                    (
+                        state.active_attempt.difficulty
+                        if state.active_attempt is not None
+                        else None
+                    ),
+                    (
+                        state.active_attempt.outside_zone_elapsed
+                        if state.active_attempt is not None
+                        else 0.0
+                    ),
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
+            ),
+            engineer_energy_units=tuple(
+                (
+                    engineer_id,
+                    state.energy_unit_credits,
+                )
+                for engineer_id, state in sorted(
+                    self._engineer_resources_by_id.items()
+                )
+            ),
+            d4_status=tuple(
+                (
+                    team_id,
+                    (
+                        "complete"
+                        if state.completion_count_by_difficulty[4] >= 1
+                        else "active"
+                        if self._d4_coordinator.active_team_id == team_id
+                        else "pending"
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else "locked"
+                        if state.permanently_locked_out_of_d4
+                        else "idle"
+                    ),
+                    state.d4_attempt.current_step if state.d4_attempt is not None else 0,
+                    state.d4_attempt.activated_at if state.d4_attempt is not None else 0.0,
+                    (
+                        state.d4_attempt.first_core_completed_at
+                        if state.d4_attempt is not None
+                        and state.d4_attempt.first_core_completed_at is not None
+                        else -1.0
+                    ),
+                    (
+                        self._d4_coordinator.priority_buffer_remaining
+                        if self._d4_coordinator.pending_team_id == team_id
+                        else 0.0
+                    ),
+                    state.d4_retry_after,
+                    state.permanently_locked_out_of_d4,
+                    state.d4_priority_failure_gold_penalty,
+                )
+                for team_id, state in sorted(self._tech_core_by_team.items())
+            ),
+            drone_air_support=tuple(
+                (
+                    robot_id,
+                    state.active,
+                    state.free_seconds,
+                )
+                for robot_id, state in sorted(
+                    self._drone_air_support_by_robot.items()
+                )
+            ),
+        )
+
+    def robot_parameters(self, robot_type: str) -> RobotParameters:
+        try:
+            return self._lab_parameters[robot_type]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{self._document.path}: rmuc-2026-region-v1.4.0 "
+                f"不支持机器人类型 `{robot_type}`"
+            ) from exc
+
+    def structure_parameters(self, structure_type: str) -> StructureParameters:
+        try:
+            return self._structure_parameters[structure_type]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{self._document.path}: rmuc-2026-region-v1.4.0 "
+                f"不支持结构类型 `{structure_type}`"
+            ) from exc
+
+    def drone_air_support_active(self, robot_id: str) -> bool:
+        state = self._drone_air_support_by_robot.get(robot_id)
+        return state is not None and state.active
+
+    def drone_air_support_available(self, robot_id: str) -> float:
+        state = self._drone_air_support_by_robot.get(robot_id)
+        return state.free_seconds if state is not None else 0.0
+
+    def start_drone_air_support(self, match: "Match", drone: Robot) -> bool:
+        state = self._drone_air_support_by_robot.get(drone.id)
+        if (
+            match.finished
+            or drone.type != "drone"
+            or self._robots_by_id.get(drone.id) is not drone
+            or state is None
+            or state.active
+            or state.free_seconds <= 1e-9
+        ):
+            return False
+        state.active = True
+        drone.alive = True
+        drone.hp = drone.max_hp
+        return True
+
+    def pause_drone_air_support(self, drone: Robot) -> bool:
+        state = self._drone_air_support_by_robot.get(drone.id)
+        if state is None or not state.active:
+            return False
+        state.active = False
+        drone.alive = False
+        drone.path.clear()
+        helipad = self._drone_helipad_by_robot.get(drone.id)
+        if helipad is not None:
+            drone.position = helipad
+        return True
+
+    def _drone_on_helipad(self, drone: Robot) -> bool:
+        helipad = self._drone_helipad_by_robot.get(drone.id)
+        return (
+            helipad is not None
+            and math.dist(drone.position, helipad) <= 1e-6
+        )
+
+    def can_move(self, robot: Robot) -> bool:
+        if robot.type == "drone":
+            return robot.alive and self.drone_air_support_active(robot.id)
+        state = self._chassis_power_by_robot.get(robot.id)
+        return (
+            robot.alive
+            and state is not None
+            and not state.blocked_this_frame
+            and state.power_off_remaining <= 0
+        )
+
+    def _is_weak(self, robot: Robot) -> bool:
+        state = self._robot_lifecycle_by_robot.get(robot.id)
+        return state is not None and state.weak
+
+    def can_attack(self, robot: Robot) -> bool:
+        lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
+        allowance = self._projectile_allowance_by_robot.get(robot.id)
+        shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = (
+            0 if robot.type == "drone" else self._usable_fortress_reserved(robot)
+        )
+        lifecycle_ready = (
+            self.drone_air_support_active(robot.id)
+            and not self._drone_on_helipad(robot)
+            if robot.type == "drone"
+            else lifecycle is not None and not lifecycle.weak
+        )
+        return (
+            robot.alive
+            and lifecycle_ready
+            and robot.damage > 0
+            and allowance is not None
+            and (allowance.allowed > 0 or usable_fortress_reserved > 0)
+            and shooting_heat is not None
+            and not shooting_heat.temporarily_locked
+            and not shooting_heat.permanently_locked
+        )
+
+    def can_target(self, target: DamageableTarget) -> bool:
+        if isinstance(target, Structure):
+            # Unlike RMUL robot invincibility, an invincible RMUC Base must not
+            # consume target selection while its Outpost is alive.
+            return self.can_receive_damage(target)
+        if isinstance(target, Robot) and target.type == "drone":
+            return False
+        return target.alive
+
+    def on_attack_committed(self, robot: Robot) -> None:
+        """Commit one legal shot using Fortress reserve first when available."""
+        lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
+        allowance = self._projectile_allowance_by_robot.get(robot.id)
+        shooting_heat = self._shooting_heat_by_robot.get(robot.id)
+        usable_fortress_reserved = (
+            0 if robot.type == "drone" else self._usable_fortress_reserved(robot)
+        )
+        lifecycle_ready = (
+            self.drone_air_support_active(robot.id)
+            and not self._drone_on_helipad(robot)
+            if robot.type == "drone"
+            else lifecycle is not None and not lifecycle.weak
+        )
+        if (
+            not lifecycle_ready
+            or allowance is None
+            or (
+                allowance.allowed <= 0
+                and usable_fortress_reserved <= 0
+            )
+            or shooting_heat is None
+            or shooting_heat.temporarily_locked
+            or shooting_heat.permanently_locked
+        ):
+            return
+
+        if usable_fortress_reserved > 0:
+            reserve_state = self._fortress_reserved_by_robot[robot.id]
+            reserve_state.reserved -= 1
+        else:
+            allowance.allowed -= 1
+
+        if lifecycle is not None:
+            lifecycle.disengaged_elapsed = 0.0
+            lifecycle.combat_activity_this_frame = True
+
+        heat_parameters = self._effective_heat_parameters(robot.id)
+        shooting_heat.heat += self._shooting_heat_per_shot[
+            heat_parameters.projectile_type
+        ]
+        if shooting_heat.heat + 1e-9 >= heat_parameters.permanent_threshold:
+            shooting_heat.permanently_locked = True
+            shooting_heat.temporarily_locked = False
+        elif shooting_heat.heat > heat_parameters.heat_limit + 1e-9:
+            shooting_heat.temporarily_locked = True
+
+        shot_experience = self._shot_experience.get(robot.type)
+        if shot_experience is not None:
+            self._grant_experience(robot.id, shot_experience)
+
+    def exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        """Perform the non-remote exchange at an eligible own-side buff point."""
+        return self._purchase_projectile_allowance(match, robot, remote=False)
+
+    def remote_exchange_projectiles(self, match: "Match", robot: Robot) -> bool:
+        """Accept a remote exchange now and deliver its allowance six seconds later."""
+        return self._purchase_projectile_allowance(match, robot, remote=True)
+
+    def _purchase_projectile_allowance(
+        self,
+        match: "Match",
+        robot: Robot,
+        *,
+        remote: bool,
+    ) -> bool:
+        lifecycle_state = self._robot_lifecycle_by_robot.get(robot.id)
+        allowance_state = self._projectile_allowance_by_robot.get(robot.id)
+        economy_state = self._economy_by_team.get(robot.team)
+        purchase_state = self._projectile_purchase_by_team.get(robot.team)
+        if (
+            match.finished
+            or robot.type == "drone"
+            or not robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or lifecycle_state is None
+            or allowance_state is None
+            or economy_state is None
+            or purchase_state is None
+        ):
+            return False
+
+        projectile = allowance_state.projectile_type
+        rule = self._projectile_purchase_rules.get(projectile)
+        if rule is None or self._projectile_by_type.get(robot.type) != projectile:
+            return False
+
+        if remote:
+            if lifecycle_state.disengaged_elapsed + 1e-9 < self._disengaged_after:
+                return False
+            cost = rule.remote_coins
+            amount = rule.remote_allowance
+        else:
+            zones = self._projectile_exchange_zones_by_team.get(robot.team, ())
+            if lifecycle_state.weak or not any(
+                zone.contains(robot.position) for zone in zones
+            ):
+                return False
+            cost = rule.nonremote_coins
+            amount = rule.nonremote_allowance
+
+        purchased = (
+            purchase_state.purchased_17mm
+            if projectile == "17mm"
+            else purchase_state.purchased_42mm
+        )
+        if economy_state.coins < cost or purchased + amount > rule.team_cap:
+            return False
+
+        economy_state.coins -= cost
+        if projectile == "17mm":
+            purchase_state.purchased_17mm += amount
+        else:
+            purchase_state.purchased_42mm += amount
+
+        if remote:
+            allowance_state.pending_remote_deliveries.append(
+                _PendingProjectileDelivery(
+                    amount=amount,
+                    effective_at=match.elapsed_time
+                    + self._projectile_remote_effective_delay,
+                )
+            )
+        else:
+            allowance_state.allowed += amount
+        return True
+
+    def remote_healing_cost(self, match: "Match") -> int:
+        elapsed = min(self._time_limit, max(0.0, match.elapsed_time))
+        elapsed_component = math.ceil(
+            elapsed
+            * self._remote_healing_elapsed_coins_multiplier
+            / self._remote_healing_elapsed_seconds
+        )
+        return self._remote_healing_base_coins + elapsed_component
+
+    def purchase_remote_healing(self, match: "Match", robot: Robot) -> bool:
+        lifecycle = self._robot_lifecycle_by_robot.get(robot.id)
+        economy = self._economy_by_team.get(robot.team)
+        if (
+            match.finished
+            or not robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or robot.type not in self._remote_healing_eligible_types
+            or lifecycle is None
+            or economy is None
+            or lifecycle.disengaged_elapsed + 1e-9 < self._disengaged_after
+            or lifecycle.pending_remote_healing_effective_at is not None
+        ):
+            return False
+
+        cost = self.remote_healing_cost(match)
+        if economy.coins < cost:
+            return False
+
+        economy.coins -= cost
+        lifecycle.pending_remote_healing_effective_at = (
+            match.elapsed_time + self._remote_healing_effective_delay
+        )
+        return True
+
+    def pickup_energy_unit(self, match: "Match", engineer: Robot) -> bool:
+        """Add one Rules Lab Energy Unit resource credit, up to the D4 cap of two."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        resource_zone = self._resource_zone_by_team.get(engineer.team)
+        if (
+            resource_state is None
+            or resource_state.energy_unit_credits >= 2
+            or resource_zone is None
+            or not resource_zone.contains(engineer.position)
+        ):
+            return False
+        resource_state.energy_unit_credits += 1
+        return True
+
+    def start_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+        difficulty: int,
+    ) -> bool:
+        """Start D1-D3 directly or request D4 through the global coordinator."""
+        if difficulty == 4:
+            return self._request_d4_assembly(match, engineer)
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._is_weak(engineer)
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or difficulty not in {1, 2, 3}
+            or self._d4_coordinator.active_team_id is not None
+            or self._d4_coordinator.pending_team_id is not None
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        rule = self._tech_core_difficulties[difficulty]
+        if (
+            team_state is None
+            or resource_state is None
+            or resource_state.energy_unit_credits < 1
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+            or team_state.active_attempt is not None
+            or team_state.d4_attempt is not None
+            or match.elapsed_time + 1e-9 < rule.available_after
+        ):
+            return False
+
+        if (
+            rule.prerequisite is not None
+            and team_state.completion_count_by_difficulty[rule.prerequisite] < 1
+        ):
+            return False
+
+        resource_state.energy_unit_credits -= 1
+        team_state.active_attempt = _TechCoreAttempt(
+            engineer_id=engineer.id,
+            difficulty=difficulty,
+        )
+        return True
+
+    def confirm_tech_core_assembly(
+        self,
+        match: "Match",
+        engineer: Robot,
+    ) -> bool:
+        """Confirm that the abstracted physical D1-D3 assembly succeeded."""
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._is_weak(engineer)
+            or self._robots_by_id.get(engineer.id) is not engineer
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        if (
+            team_state is None
+            or team_state.active_attempt is None
+            or team_state.active_attempt.engineer_id != engineer.id
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+        ):
+            return False
+
+        difficulty = team_state.active_attempt.difficulty
+        previous_count = team_state.completion_count_by_difficulty[difficulty]
+        team_state.completion_count_by_difficulty[difficulty] = previous_count + 1
+        team_state.active_attempt = None
+        self._add_tech_core_periodic_gold(
+            engineer.team,
+            difficulty,
+            first_completion=previous_count == 0,
+        )
+
+        if previous_count == 0:
+            self._apply_tech_core_first_rewards(engineer.team, difficulty)
+        return True
+
+    def confirm_d4_step(
+        self,
+        match: "Match",
+        engineer: Robot,
+        core_slot: str,
+        step: int,
+    ) -> bool:
+        """Confirm one abstracted D4 mechanical step on one of the two Core slots."""
+        if (
+            match.finished
+            or core_slot not in {"own", "opponent"}
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._is_weak(engineer)
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or self._d4_coordinator.active_team_id != engineer.team
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        attempt = team_state.d4_attempt if team_state is not None else None
+        if (
+            attempt is None
+            or attempt.engineer_id != engineer.id
+            or step != attempt.current_step
+            or core_slot in attempt.completed_core_slots
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+        ):
+            return False
+
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            self._fail_d4_attempt(engineer.team, total_deadline, "total-timeout")
+            return False
+
+        if step in self._d4_paired_steps and attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                self._fail_d4_attempt(engineer.team, pair_deadline, "pair-timeout")
+                return False
+
+        attempt.completed_core_slots.add(core_slot)
+        if (
+            step in self._d4_paired_steps
+            and attempt.first_core_completed_at is None
+        ):
+            attempt.first_core_completed_at = match.elapsed_time
+
+        if len(attempt.completed_core_slots) < 2:
+            return True
+
+        if step == 6:
+            self._complete_d4_attempt(engineer.team)
+            return True
+
+        attempt.current_step += 1
+        attempt.completed_core_slots.clear()
+        attempt.first_core_completed_at = None
+        return True
+
+    def _request_d4_assembly(self, match: "Match", engineer: Robot) -> bool:
+        if (
+            match.finished
+            or engineer.type != "engineer"
+            or not engineer.alive
+            or self._is_weak(engineer)
+            or self._robots_by_id.get(engineer.id) is not engineer
+            or self._d4_coordinator.active_team_id is not None
+            or self._d4_coordinator.pending_team_id is not None
+        ):
+            return False
+
+        team_state = self._tech_core_by_team.get(engineer.team)
+        resource_state = self._engineer_resources_by_id.get(engineer.id)
+        assembly_zone = self._assembly_zone_by_team.get(engineer.team)
+        rule = self._tech_core_difficulties[4]
+        if (
+            team_state is None
+            or resource_state is None
+            or resource_state.energy_unit_credits < 2
+            or assembly_zone is None
+            or not assembly_zone.contains(engineer.position)
+            or team_state.active_attempt is not None
+            or team_state.d4_attempt is not None
+            or team_state.completion_count_by_difficulty[4] >= 1
+            or team_state.permanently_locked_out_of_d4
+            or match.elapsed_time + 1e-9 < team_state.d4_retry_after
+            or match.elapsed_time + 1e-9 < rule.available_after
+            or team_state.completion_count_by_difficulty[3] < 1
+        ):
+            return False
+
+        other_team_id = next(
+            team_id
+            for team_id in self._tech_core_by_team
+            if team_id != engineer.team
+        )
+        other_state = self._tech_core_by_team[other_team_id]
+
+        resource_state.energy_unit_credits -= 2
+        if other_state.active_attempt is not None:
+            self._d4_coordinator.pending_team_id = engineer.team
+            self._d4_coordinator.pending_engineer_id = engineer.id
+            self._d4_coordinator.priority_buffer_remaining = self._d4_priority_buffer
+            self._d4_coordinator.priority_takeover = True
+            return True
+
+        self._activate_d4(
+            team_id=engineer.team,
+            engineer_id=engineer.id,
+            activated_at=match.elapsed_time,
+            priority_takeover=False,
+        )
+        return True
+
+    def _activate_d4(
+        self,
+        *,
+        team_id: str,
+        engineer_id: str,
+        activated_at: float,
+        priority_takeover: bool,
+    ) -> None:
+        team_state = self._tech_core_by_team[team_id]
+        team_state.d4_attempt = _D4Attempt(
+            engineer_id=engineer_id,
+            activated_at=activated_at,
+            priority_takeover=priority_takeover,
+        )
+        self._d4_coordinator.active_team_id = team_id
+        self._d4_coordinator.pending_team_id = None
+        self._d4_coordinator.pending_engineer_id = None
+        self._d4_coordinator.priority_buffer_remaining = 0.0
+        self._d4_coordinator.priority_takeover = False
+
+    def _apply_tech_core_first_rewards(
+        self,
+        team_id: str,
+        difficulty: int,
+    ) -> None:
+        rule = self._tech_core_difficulties[difficulty]
+        if rule.first_level_cap is not None:
+            self._level_cap_by_team[team_id] = max(
+                self._level_cap_by_team[team_id],
+                rule.first_level_cap,
+            )
+
+        structure_state = self._team_states[team_id]
+        if rule.first_defense_bonus is not None:
+            structure_state.tech_core_defense = max(
+                structure_state.tech_core_defense,
+                rule.first_defense_bonus,
+            )
+
+        if rule.first_base_hp_bonus is not None:
+            base = self._base_by_team[team_id]
+            bonus = rule.first_base_hp_bonus
+            missing_hp = max(0, base.max_hp - base.hp)
+            hp_gain = min(bonus, missing_hp)
+            base.hp += hp_gain
+            structure_state.base_virtual_shield += bonus - hp_gain
+            self._sync_initialized_fortress_reserves(team_id)
+
+    def _complete_d4_attempt(self, team_id: str) -> None:
+        team_state = self._tech_core_by_team[team_id]
+        if team_state.completion_count_by_difficulty[4] != 0:
+            raise RuntimeError("D4 completion count must be zero before success")
+        team_state.completion_count_by_difficulty[4] = 1
+        self._add_tech_core_periodic_gold(
+            team_id,
+            4,
+            first_completion=True,
+        )
+        self._apply_tech_core_first_rewards(team_id, 4)
+        team_state.d4_attempt = None
+        self._d4_coordinator.active_team_id = None
+
+    def _fail_d4_attempt(
+        self,
+        team_id: str,
+        failure_time: float,
+        reason: str,
+    ) -> None:
+        del reason  # Reserved for deterministic tests/debugging without a failure engine.
+        team_state = self._tech_core_by_team[team_id]
+        attempt = team_state.d4_attempt
+        if attempt is None:
+            return
+
+        priority_takeover = attempt.priority_takeover
+        team_state.d4_attempt = None
+        self._d4_coordinator.active_team_id = None
+        if priority_takeover:
+            team_state.permanently_locked_out_of_d4 = True
+            team_state.d4_priority_failure_gold_penalty = (
+                self._d4_priority_failure_gold_penalty
+            )
+            economy_state = self._economy_by_team.get(team_id)
+            if economy_state is not None:
+                economy_state.d4_priority_penalty_active_from = failure_time
+        else:
+            team_state.d4_retry_after = max(
+                team_state.d4_retry_after,
+                failure_time + self._d4_retry_lockout,
+            )
+
+    def _engineer_field_invincible(self, robot: Robot) -> bool:
+        if (
+            robot.type != "engineer"
+            or not robot.alive
+            or self._is_weak(robot)
+        ):
+            return False
+
+        own_supply = self._supply_buff_zone_by_team.get(robot.team)
+        if (
+            own_supply is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_supply.id), 0.0
+            )
+            > 0
+        ):
+            return True
+
+        own_assembly = self._assembly_zone_by_team.get(robot.team)
+        return (
+            own_assembly is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_assembly.id), 0.0
+            )
+            > 0
+            and self._assembly_invincibility_elapsed_by_engineer.get(
+                robot.id, 0.0            )
+            < self._assembly_invincibility_limit - 1e-9
+        )
+
+    def can_receive_damage(self, target: DamageableTarget) -> bool:
+        if not target.alive:
+            return False
+        if isinstance(target, Robot):
+            if target.type == "drone":
+                return False
+            lifecycle = self._robot_lifecycle_by_robot.get(target.id)
+            if lifecycle is not None and lifecycle.invincible_remaining > 0:
+                return False
+            return not self._engineer_field_invincible(target)
+        if isinstance(target, Structure) and target.type == "base":
+            outpost = self._outpost_by_team.get(target.team)
+            return outpost is None or not outpost.alive
+        return True
+
+    def grant_attack_buff(
+        self,
+        team_id: str,
+        multiplier: float,
+        duration: float,
+    ) -> bool:
+        """Apply an already-resolved team Attack Buff fact.
+
+        Source acquisition (for example Energy Mechanism activation) remains
+        outside this rule-level consumer.
+        """
+        if (
+            team_id not in self._attack_buffs_by_team
+            or not math.isfinite(multiplier)
+            or multiplier <= 1.0
+            or not math.isfinite(duration)
+            or duration <= 0
+        ):
+            return False
+        self._attack_buffs_by_team[team_id].append(
+            _TimedAttackBuff(
+                multiplier=float(multiplier),
+                remaining=float(duration),
+            )
+        )
+        return True
+
+    def _effective_attack_multiplier(self, source_team_id: str | None) -> float:
+        if source_team_id is None:
+            return 1.0
+        return max(
+            (
+                buff.multiplier
+                for buff in self._attack_buffs_by_team.get(source_team_id, ())
+                if buff.remaining > 0
+            ),
+            default=1.0,
+        )
+
+    def _large_energy_mechanism_effects(
+        self,
+        average_ring_score: float,
+    ) -> tuple[float, float, float] | None:
+        if (
+            not math.isfinite(average_ring_score)
+            or average_ring_score < 1.0
+            or average_ring_score > 10.0
+        ):
+            return None
+        if average_ring_score <= 3.0:
+            return (1.5, 0.25, 1.0)
+        if average_ring_score <= 7.0:
+            return (1.5, 0.25, 2.0)
+        if average_ring_score <= 8.0:
+            return (2.0, 0.25, 2.0)
+        if average_ring_score <= 9.0:
+            return (2.0, 0.25, 3.0)
+        if average_ring_score <= 10.0:
+            return (3.0, 0.50, 5.0)
+        return None
+
+    def _large_energy_mechanism_duration(
+        self,
+        lit_arm_count: int,
+    ) -> float | None:
+        return {
+            5: 30.0,
+            6: 35.0,
+            7: 40.0,
+            8: 45.0,
+            9: 50.0,
+            10: 60.0,
+        }.get(lit_arm_count)
+
+    def activate_large_energy_mechanism_buff(
+        self,
+        team_id: str,
+        average_ring_score: float,
+        lit_arm_count: int,
+    ) -> bool:
+        """Apply one already-confirmed V1.4.0 large-mechanism activation result.
+
+        Rotation, hit detection, ring recognition, activation opportunities, and
+        the 20-second activation procedure remain outside this rule-level API.
+        """
+        buffs = self._large_energy_mechanism_buffs_by_team.get(team_id)
+        effects = self._large_energy_mechanism_effects(average_ring_score)
+        duration = (
+            None
+            if isinstance(lit_arm_count, bool)
+            else self._large_energy_mechanism_duration(lit_arm_count)
+        )
+        if (
+            buffs is None
+            or effects is None
+            or duration is None
+            or any(buff.remaining > 0 for buff in buffs)
+        ):
+            return False
+
+        attack_multiplier, defense, cooling_multiplier = effects
+        if not self.grant_attack_buff(team_id, attack_multiplier, duration):
+            return False
+        buffs.append(
+            _TimedEnergyMechanismBuff(
+                defense=defense,
+                cooling_multiplier=cooling_multiplier,
+                remaining=duration,
+            )
+        )
+        return True
+
+    def _current_large_energy_mechanism_defense(self, team_id: str) -> float:
+        return max(
+            (
+                buff.defense
+                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                    team_id, ()
+                )
+                if buff.remaining > 0
+            ),
+            default=0.0,
+        )
+
+    def _current_large_energy_mechanism_cooling_multiplier(
+        self,
+        team_id: str,
+    ) -> float:
+        return max(
+            (
+                buff.cooling_multiplier
+                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                    team_id, ()
+                )
+                if buff.remaining > 0
+            ),
+            default=1.0,
+        )
+
+    def set_radar_vulnerability(
+        self,
+        source_team_id: str,
+        target: Robot,
+        vulnerability: float,
+    ) -> bool:
+        """Set the official P-derived Radar Vulnerability effect for one target.
+
+        Radar detection, marking progress P, interference-wave gating, and
+        target acquisition are intentionally outside this rule-level consumer.
+        """
+        if (
+            self._robots_by_id.get(target.id) is not target
+            or target.type not in _RADAR_VULNERABILITY_ROBOT_TYPES
+            or source_team_id not in self.attack_damage_by_team
+            or source_team_id == target.team
+            or vulnerability not in {0.0, 0.15, 0.20}
+        ):
+            return False
+
+        if vulnerability == 0.0:
+            self._radar_vulnerability_by_robot.pop(target.id, None)
+            return True
+
+        self._radar_vulnerability_by_robot[target.id] = _RadarVulnerabilityState(
+            source_team_id=source_team_id,
+            base_vulnerability=vulnerability,
+        )
+        return True
+
+    def start_radar_double_vulnerability_effect(
+        self,
+        source_team_id: str,
+    ) -> bool:
+        """Start an already-authorized 30 s Radar double-vulnerability effect.
+
+        Opportunity accumulation and referee-command queueing remain outside
+        this effect-only API.
+        """
+        state = self._radar_double_vulnerability_by_team.get(source_team_id)
+        if (
+            state is None
+            or state.remaining > 0
+            or state.activations >= 2
+        ):
+            return False
+        state.remaining = 30.0
+        state.activations += 1
+        return True
+
+    def _current_radar_vulnerability(self, target: Robot) -> float:
+        state = self._radar_vulnerability_by_robot.get(target.id)
+        if state is None:
+            return 0.0
+        double_state = self._radar_double_vulnerability_by_team.get(
+            state.source_team_id
+        )
+        multiplier = (
+            2.0
+            if double_state is not None and double_state.remaining > 0
+            else 1.0
+        )
+        return state.base_vulnerability * multiplier
+
+    def resolve_damage(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+    ) -> int:
+        """Apply Attack, max Defense/Vulnerability, then Base Virtual Shield."""
+        if (
+            amount <= 0
+            or source_team_id not in self.attack_damage_by_team
+            or source_team_id == target.team
+        ):
+            return amount
+
+        state = self._team_states.get(target.team)
+        if state is None:
+            return amount
+
+        attack = self._effective_attack_multiplier(source_team_id)
+        defense = self._effective_defense(target)
+        vulnerability = self._effective_vulnerability(target)
+        multiplier = max(0.0, attack * (1.0 - defense + vulnerability))
+        resolved = int(math.floor(amount * multiplier + 0.5))
+        resolved = max(0, resolved)
+
+        if (
+            resolved > 0
+            and isinstance(target, Structure)
+            and target.type == "base"
+            and state.base_virtual_shield > 0
+        ):
+            absorbed = min(state.base_virtual_shield, resolved)
+            state.base_virtual_shield -= absorbed
+            resolved -= absorbed
+
+        return resolved
+
+    def _effective_vulnerability(
+        self,
+        target: DamageableTarget,
+    ) -> float:
+        if not isinstance(target, Robot) or not target.alive:
+            return 0.0
+
+        vulnerabilities = [
+            self._enemy_fortress_vulnerability
+            for (robot_id, fortress_team_id), occupation
+            in self._enemy_fortress_occupation.items()
+            if robot_id == target.id
+            and occupation.occupy_remaining > 0
+            and not self._team_states[fortress_team_id].base_armor_deployed
+        ]
+        radar = self._current_radar_vulnerability(target)
+        if radar > 0:
+            vulnerabilities.append(radar)
+        return max(vulnerabilities, default=0.0)
+
+    def _effective_defense(self, target: DamageableTarget) -> float:
+        if isinstance(target, Robot) and target.type == "drone":
+            return self._current_large_energy_mechanism_defense(target.team)
+        state = self._team_states.get(target.team)
+        if state is None:
+            return 0.0
+        energy_defense = self._current_large_energy_mechanism_defense(target.team)
+        if not isinstance(target, Robot):
+            return max(state.tech_core_defense, energy_defense)
+        return max(
+            state.tech_core_defense,
+            energy_defense,
+            self._current_field_defense(target),
+            self._current_terrain_defense(target),
+            self._current_fortress_defense(target),
+        )
+
+    def _current_field_defense(self, robot: Robot) -> float:
+        if not robot.alive:
+            return 0.0
+
+        best = 0.0
+        own_base = self._field_base_zone_by_team.get(robot.team)
+        if (
+            own_base is not None
+            and self._field_occupy_remaining.get((robot.id, own_base.id), 0.0) > 0
+        ):
+            best = max(best, self._field_defense_by_type["base"])
+
+        own_trapezoid = self._field_trapezoid_zone_by_team.get(robot.team)
+        if (
+            own_trapezoid is not None
+            and self._field_occupy_remaining.get(
+                (robot.id, own_trapezoid.id), 0.0
+            ) > 0
+        ):
+            best = max(best, self._field_defense_by_type["trapezoid"])
+
+        for zone in self._field_central_zones:
+            point_state = self._central_defense_state_by_zone[zone.id]
+            if (
+                point_state.owner_team_id == robot.team
+                and self._field_occupy_remaining.get((robot.id, zone.id), 0.0) > 0
+            ):
+                best = max(best, self._field_defense_by_type["central"])
+
+        for point_team, zone in self._field_outpost_zone_by_team.items():
+            if (
+                self._field_occupy_remaining.get((robot.id, zone.id), 0.0) > 0
+                and self._outpost_buff_eligible(robot, point_team)
+            ):
+                best = max(best, self._field_defense_by_type["outpost"])
+
+        return best
+
+    def _is_fortress_occupant(self, robot: Robot) -> bool:
+        state = self._fortress_state_by_team.get(robot.team)
+        return (
+            robot.alive
+            and not self._is_weak(robot)
+            and robot.type in self._fortress_eligible_types
+            and state is not None
+            and state.owner_robot_id == robot.id
+            and self._team_states[robot.team].outpost_ever_destroyed
+        )
+
+    def _fortress_reserve_limit(self, robot: Robot) -> int:
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_reserve_cap,
+            self._fortress_reserve_base
+            + self._fortress_reserve_per_step
+            * math.floor(delta / self._fortress_reserve_hp_step),
+        )
+
+    def _sync_fortress_reserved(
+        self,
+        robot: Robot,
+        *,
+        allow_initialize: bool,
+    ) -> _FortressReservedProjectileState | None:
+        state = self._fortress_reserved_by_robot.get(robot.id)
+        if state is None:
+            return None
+
+        limit = self._fortress_reserve_limit(robot)
+        if not state.initialized:
+            if not allow_initialize:
+                return state
+            state.reserved = limit
+            state.last_limit = limit
+            state.initialized = True
+            return state
+
+        if limit > state.last_limit:
+            state.reserved += limit - state.last_limit
+        elif limit < state.last_limit:
+            state.reserved = min(state.reserved, limit)
+        state.last_limit = limit
+        return state
+
+    def _sync_initialized_fortress_reserves(
+        self,
+        team_id: str | None = None,
+    ) -> None:
+        for robot_id, state in self._fortress_reserved_by_robot.items():
+            if not state.initialized:
+                continue
+            robot = self._robots_by_id[robot_id]
+            if team_id is not None and robot.team != team_id:
+                continue
+            self._sync_fortress_reserved(
+                robot,
+                allow_initialize=False,
+            )
+
+    def _usable_fortress_reserved(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        state = self._sync_fortress_reserved(
+            robot,
+            allow_initialize=True,
+        )
+        if state is None:
+            return 0
+        return state.reserved
+
+    def _current_fortress_defense(self, robot: Robot) -> float:
+        return self._fortress_defense if self._is_fortress_occupant(robot) else 0.0
+
+    def _fortress_cooling_bonus(self, robot: Robot) -> int:
+        if not self._is_fortress_occupant(robot):
+            return 0
+        base = self._base_by_team[robot.team]
+        delta = max(0, base.max_hp - base.hp)
+        return min(
+            self._fortress_cooling_cap,
+            math.floor(delta / self._fortress_cooling_hp_step),
+        )
+
+    def _advance_fortress_occupancy(self, dt: float) -> None:
+        for team_id, zone in self._fortress_zone_by_team.items():
+            state = self._fortress_state_by_team[team_id]
+            if not self._team_states[team_id].outpost_ever_destroyed:
+                state.owner_robot_id = None
+                state.release_remaining = 0.0
+                continue
+
+            owner = (
+                self._robots_by_id.get(state.owner_robot_id)
+                if state.owner_robot_id is not None
+                else None
+            )
+            if (
+                owner is not None
+                and owner.alive
+                and not self._is_weak(owner)
+                and owner.team == team_id
+                and owner.type in self._fortress_eligible_types
+                and zone.contains(owner.position)
+            ):
+                state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    owner,
+                    allow_initialize=True,
+                )
+            elif state.owner_robot_id is not None:
+                state.release_remaining = max(
+                    0.0,
+                    state.release_remaining - dt,
+                )
+                if state.release_remaining <= 1e-9:
+                    state.owner_robot_id = None
+                    state.release_remaining = 0.0
+
+            if state.owner_robot_id is not None:
+                continue
+
+            candidates = sorted(
+                (
+                    robot
+                    for robot in self._robots_by_id.values()
+                    if robot.alive
+                    and not self._is_weak(robot)
+                    and robot.team == team_id
+                    and robot.type in self._fortress_eligible_types
+                    and zone.contains(robot.position)
+                ),
+                key=lambda robot: robot.id,
+            )
+            if candidates:
+                state.owner_robot_id = candidates[0].id
+                state.release_remaining = self._field_occupy_release_delay
+                self._sync_fortress_reserved(
+                    candidates[0],
+                    allow_initialize=True,
+                )
+
+    def _enemy_fortress_eligible(
+        self,
+        robot: Robot,
+        fortress_team_id: str,
+        at_time: float,
+    ) -> bool:
+        return (
+            robot.alive
+            and not self._is_weak(robot)
+            and robot.team != fortress_team_id
+            and robot.type in self._enemy_fortress_eligible_types
+            and at_time + 1e-9 >= self._enemy_fortress_available_after
+            and self._team_states[
+                fortress_team_id
+            ].outpost_ever_destroyed
+        )
+
+    def _refresh_enemy_fortress_occupancy(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        frame_end = min(
+            match.elapsed_time + max(0.0, dt),
+            self._time_limit,
+        )
+        for (robot_id, fortress_team_id), state in (
+            self._enemy_fortress_occupation.items()
+        ):
+            robot = self._robots_by_id[robot_id]
+            zone = self._fortress_zone_by_team[fortress_team_id]
+            if (
+                self._enemy_fortress_eligible(
+                    robot,
+                    fortress_team_id,
+                    frame_end,
+                )
+                and zone.contains(robot.position)
+            ):
+                state.occupy_remaining = self._field_occupy_release_delay
+                state.retention_remaining = 0.0
+
+    def _advance_enemy_fortress_occupation(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        frame_dt = max(0.0, dt)
+        frame_end = min(match.elapsed_time, self._time_limit)
+        frame_start = max(0.0, frame_end - frame_dt)
+        armor_at_frame_start = {
+            team_id: state.base_armor_deployed
+            for team_id, state in self._team_states.items()
+        }
+        teams_to_deploy: set[str] = set()
+
+        for key, state in self._enemy_fortress_occupation.items():
+            robot_id, fortress_team_id = key
+            robot = self._robots_by_id[robot_id]
+            zone = self._fortress_zone_by_team[fortress_team_id]
+
+            if key in self._enemy_fortress_death_retention_started:
+                continue
+
+            physically_occupying = (
+                self._enemy_fortress_eligible(
+                    robot,
+                    fortress_team_id,
+                    frame_end,
+                )
+                and zone.contains(robot.position)
+            )
+            armor_already_deployed = armor_at_frame_start[
+                fortress_team_id
+            ]
+
+            if physically_occupying:
+                state.occupy_remaining = self._field_occupy_release_delay
+                state.retention_remaining = 0.0
+
+                active_dt = frame_dt
+                if frame_start < self._enemy_fortress_available_after:
+                    active_dt = max(
+                        0.0,
+                        frame_end - self._enemy_fortress_available_after,
+                    )
+                if fortress_team_id in self._outposts_destroyed_this_frame:
+                    active_dt = 0.0
+
+                if not armor_already_deployed and active_dt > 0:
+                    state.occupation_elapsed += active_dt
+                    if (
+                        state.occupation_elapsed + 1e-9
+                        >= self._enemy_fortress_armor_after
+                    ):
+                        teams_to_deploy.add(fortress_team_id)
+                continue
+
+            if state.occupy_remaining > 0:
+                active_dt = min(frame_dt, state.occupy_remaining)
+                if not armor_already_deployed and active_dt > 0:
+                    state.occupation_elapsed += active_dt
+                    if (
+                        state.occupation_elapsed + 1e-9
+                        >= self._enemy_fortress_armor_after
+                    ):
+                        teams_to_deploy.add(fortress_team_id)
+
+                old_occupy = state.occupy_remaining
+                state.occupy_remaining = max(
+                    0.0,
+                    old_occupy - frame_dt,
+                )
+                if state.occupy_remaining <= 1e-9:
+                    state.occupy_remaining = 0.0
+                    overflow = max(0.0, frame_dt - old_occupy)
+                    state.retention_remaining = max(
+                        0.0,
+                        self._enemy_fortress_retention - overflow,
+                    )
+                    if state.retention_remaining <= 1e-9:
+                        state.retention_remaining = 0.0
+                        state.occupation_elapsed = 0.0
+                continue
+
+            if state.retention_remaining > 0:
+                state.retention_remaining = max(
+                    0.0,
+                    state.retention_remaining - frame_dt,
+                )
+                if state.retention_remaining <= 1e-9:
+                    state.retention_remaining = 0.0
+                    state.occupation_elapsed = 0.0
+
+        for team_id in teams_to_deploy:
+            self._team_states[team_id].base_armor_deployed = True
+
+        self._enemy_fortress_death_retention_started.clear()
+        self._outposts_destroyed_this_frame.clear()
+
+    def _enemy_fortress_status_label(self, robot: Robot) -> str:
+        labels: list[str] = []
+        for (robot_id, fortress_team_id), state in (
+            self._enemy_fortress_occupation.items()
+        ):
+            if robot_id != robot.id:
+                continue
+            armor_deployed = self._team_states[
+                fortress_team_id
+            ].base_armor_deployed
+            if state.occupy_remaining > 0:
+                if armor_deployed:
+                    labels.append(
+                        f"EFORT T:{state.occupation_elapsed:.1f}/"
+                        f"{self._enemy_fortress_armor_after:g}"
+                    )
+                else:
+                    labels.append(
+                        f"EFORT VULN100 T:{state.occupation_elapsed:.1f}/"
+                        f"{self._enemy_fortress_armor_after:g}"
+                    )
+            elif state.retention_remaining > 0:
+                labels.append(
+                    f"EFORT HOLD {state.retention_remaining:.1f}s"
+                )
+        return " ".join(labels)
+
+    def _current_terrain_defense(self, robot: Robot) -> float:
+        if not robot.alive:
+            return 0.0
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if state is None:
+            return 0.0
+        best = 0.0
+        if state.standard_defense_remaining > 0:
+            best = max(best, state.standard_defense)
+        if state.tunnel_defense_remaining > 0:
+            best = max(best, self._terrain_rules["tunnel"].defense)
+        return best
+
+    def _terrain_defense_display(
+        self,
+        robot: Robot,
+    ) -> tuple[float, float]:
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if state is None or not robot.alive:
+            return 0.0, 0.0
+        options: list[tuple[float, float]] = []
+        if state.standard_defense_remaining > 0:
+            options.append(
+                (state.standard_defense, state.standard_defense_remaining)
+            )
+        if state.tunnel_defense_remaining > 0:
+            options.append(
+                (
+                    self._terrain_rules["tunnel"].defense,
+                    state.tunnel_defense_remaining,
+                )
+            )
+        if not options:
+            return 0.0, 0.0
+        max_defense = max(value for value, _remaining in options)
+        max_remaining = max(
+            remaining
+            for value, remaining in options
+            if abs(value - max_defense) <= 1e-9
+        )
+        return max_defense, max_remaining
+
+    def _robot_status_label(self, robot: Robot) -> str:
+        parts: list[str] = []
+        effective_defense = self._effective_defense(robot)
+        if effective_defense > 0:
+            parts.append(f"DEF {int(effective_defense * 100)}%")
+
+        terrain_defense, terrain_remaining = self._terrain_defense_display(robot)
+        if terrain_defense > 0 and terrain_remaining > 0:
+            parts.append(
+                f"TDEF {int(terrain_defense * 100)}% {terrain_remaining:.1f}s"
+            )
+
+        terrain_state = self._terrain_crossing_by_robot.get(robot.id)
+        if (
+            terrain_state is not None
+            and terrain_state.tunnel_cooling_remaining > 0
+        ):
+            multiplier = self._terrain_rules["tunnel"].cooling_multiplier
+            parts.append(
+                f"TCool ×{multiplier:g} "
+                f"{terrain_state.tunnel_cooling_remaining:.1f}s"
+            )
+
+        if self._is_fortress_occupant(robot):
+            parts.append(
+                f"FORT DEF50 FC:+{self._fortress_cooling_bonus(robot)}"
+            )
+
+        enemy_fortress_status = self._enemy_fortress_status_label(robot)
+        if enemy_fortress_status:
+            parts.append(enemy_fortress_status)
+        return " ".join(parts)
+
+    def _advance_terrain_crossing_timers(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for state in self._terrain_crossing_by_robot.values():
+            state.standard_defense_remaining = max(
+                0.0,
+                state.standard_defense_remaining - dt,
+            )
+            if state.standard_defense_remaining <= 1e-9:
+                state.standard_defense_remaining = 0.0
+                state.standard_defense = 0.0
+
+            state.tunnel_defense_remaining = max(
+                0.0,
+                state.tunnel_defense_remaining - dt,
+            )
+            if state.tunnel_defense_remaining <= 1e-9:
+                state.tunnel_defense_remaining = 0.0
+
+            state.tunnel_cooling_remaining = max(
+                0.0,
+                state.tunnel_cooling_remaining - dt,
+            )
+            if state.tunnel_cooling_remaining <= 1e-9:
+                state.tunnel_cooling_remaining = 0.0
+
+            state.road_reacquire_remaining = max(
+                0.0,
+                state.road_reacquire_remaining - dt,
+            )
+            if state.road_reacquire_remaining <= 1e-9:
+                state.road_reacquire_remaining = 0.0
+
+    @staticmethod
+    def _reset_terrain_sequence(state: _TerrainCrossingState) -> None:
+        state.sequence = _TerrainSequenceState()
+
+    def _process_terrain_crossing_rfid(
+        self,
+        match: "Match",
+        event_time: float,
+    ) -> None:
+        del match
+        for robot in self._robots_by_id.values():
+            state = self._terrain_crossing_by_robot.get(robot.id)
+            if state is None:
+                continue
+            if not robot.alive or self._is_weak(robot):
+                state.occupied_rfid_zone_ids.clear()
+                self._reset_terrain_sequence(state)
+                continue
+
+            if (
+                state.sequence.terrain_type is not None
+                and event_time > state.sequence.expires_at + 1e-9
+            ):
+                self._reset_terrain_sequence(state)
+
+            current_zone_ids = {
+                zone_id
+                for zone_id, zone in self._terrain_interrupt_zones_by_id.items()
+                if zone.contains(robot.position)
+            }
+            entered_zone_ids = sorted(
+                current_zone_ids - state.occupied_rfid_zone_ids
+            )
+
+            for zone_id in entered_zone_ids:
+                self._process_terrain_rfid_entry(
+                    robot,
+                    state,
+                    zone_id,
+                    event_time,
+                )
+
+            state.occupied_rfid_zone_ids = current_zone_ids
+
+    def _process_terrain_rfid_entry(
+        self,
+        robot: Robot,        state: _TerrainCrossingState,
+        zone_id: str,
+        event_time: float,
+    ) -> None:
+        sequence = state.sequence
+        if sequence.terrain_type is not None:
+            if (
+                event_time <= sequence.expires_at + 1e-9
+                and sequence.next_index < len(sequence.expected_zone_ids)
+                and zone_id == sequence.expected_zone_ids[sequence.next_index]
+            ):
+                sequence.next_index += 1
+                if sequence.next_index >= len(sequence.expected_zone_ids):
+                    terrain_type = sequence.terrain_type
+                    self._reset_terrain_sequence(state)
+                    self._grant_terrain_crossing_buff(robot, terrain_type)
+                return
+
+            self._reset_terrain_sequence(state)
+            return
+
+        lookup = self._terrain_zone_lookup.get(zone_id)
+        if lookup is None:
+            return
+        side, terrain_type, index = lookup
+        zones = self._terrain_zones_by_side_and_type[side][terrain_type]
+        if terrain_type == "tunnel":
+            if index == 0:
+                expected = tuple(zone.id for zone in zones)
+            elif index == len(zones) - 1:
+                expected = tuple(zone.id for zone in reversed(zones))
+            else:
+                return
+        else:
+            if index != 0:
+                return
+            expected = tuple(zone.id for zone in zones)
+
+        state.sequence = _TerrainSequenceState(
+            terrain_type=terrain_type,
+            expected_zone_ids=expected,
+            next_index=1,
+            expires_at=event_time
+            + self._terrain_rules[terrain_type].sequence_window,
+        )
+
+    def _grant_terrain_crossing_buff(
+        self,
+        robot: Robot,
+        terrain_type: str,
+    ) -> bool:
+        state = self._terrain_crossing_by_robot.get(robot.id)
+        if not robot.alive or state is None:
+            return False
+        rule = self._terrain_rules[terrain_type]
+
+        if terrain_type == "road" and state.road_reacquire_remaining > 0:
+            return False
+
+        if terrain_type in {"launch_ramp", "elevated_ground", "road"}:
+            if state.standard_defense_remaining > 0:
+                state.standard_defense = 0.50
+                state.standard_defense_remaining = max(
+                    state.standard_defense_remaining,
+                    rule.defense_duration,
+                )
+            else:
+                state.standard_defense = rule.defense
+                state.standard_defense_remaining = rule.defense_duration
+            if terrain_type == "road":
+                state.road_reacquire_remaining = rule.reacquire_cooldown
+        elif terrain_type == "tunnel":
+            state.tunnel_defense_remaining = rule.defense_duration
+            state.tunnel_cooling_remaining = rule.cooling_duration
+        else:
+            raise KeyError(terrain_type)
+
+        if terrain_type not in state.first_acquired_types:
+            state.first_acquired_types.add(terrain_type)
+            self._grant_experience(robot.id, self._terrain_first_experience)
+        return True
+
+    def _outpost_buff_eligible(self, robot: Robot, point_team: str) -> bool:
+        own_outpost = self._outpost_by_team.get(robot.team)
+        point_outpost = self._outpost_by_team.get(point_team)
+        if own_outpost is None or point_outpost is None or not own_outpost.alive:
+            return False
+        if point_team == robot.team:
+            return True
+        return (
+            self._field_buff_elapsed < 300.0
+            and not point_outpost.alive
+        )
+
+    def _advance_field_occupy_remaining(
+        self,
+        robot: Robot,
+        zone: Zone,
+        eligible: bool,
+        dt: float,
+    ) -> float:
+        key = (robot.id, zone.id)
+        if eligible and zone.contains(robot.position):
+            self._field_occupy_remaining[key] = self._field_occupy_release_delay
+            return max(0.0, dt)
+        if not eligible:
+            self._field_occupy_remaining[key] = 0.0
+            return 0.0
+
+        previous_remaining = self._field_occupy_remaining.get(key, 0.0)
+        active_dt = min(max(0.0, dt), previous_remaining)
+        remaining = max(0.0, previous_remaining - max(0.0, dt))
+        self._field_occupy_remaining[key] = (
+            0.0 if remaining <= 1e-9 else remaining
+        )
+        return active_dt
+
+    def _advance_field_defense_occupancy(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        self._field_buff_elapsed = min(
+            match.elapsed_time + dt,
+            self._time_limit,
+        )
+
+        for zone in self._field_central_zones:
+            point_state = self._central_defense_state_by_zone[zone.id]
+            physical_teams = {
+                robot.team
+                for robot in self._robots_by_id.values()
+                if robot.alive
+                and not self._is_weak(robot)
+                and robot.type in {"hero", "infantry", "sentry"}
+                and zone.contains(robot.position)
+            }
+
+            if point_state.owner_team_id is not None:
+                if point_state.owner_team_id in physical_teams:
+                    point_state.release_remaining = self._field_occupy_release_delay
+                else:
+                    point_state.release_remaining = max(
+                        0.0,
+                        point_state.release_remaining - dt,
+                    )
+                    if point_state.release_remaining <= 1e-9:
+                        point_state.owner_team_id = None
+                        point_state.release_remaining = 0.0
+
+            if point_state.owner_team_id is None and len(physical_teams) == 1:
+                point_state.owner_team_id = next(iter(physical_teams))
+                point_state.release_remaining = self._field_occupy_release_delay
+
+        for robot in self._robots_by_id.values():
+            if robot.type == "drone" or not robot.alive or self._is_weak(robot):
+                for key in [
+                    key
+                    for key in self._field_occupy_remaining
+                    if key[0] == robot.id
+                ]:
+                    self._field_occupy_remaining[key] = 0.0
+                continue
+
+            candidate_zones: list[tuple[Zone, bool]] = []
+            own_base = self._field_base_zone_by_team[robot.team]
+            own_trapezoid = self._field_trapezoid_zone_by_team[robot.team]
+            own_supply = self._supply_buff_zone_by_team[robot.team]
+            own_assembly = self._assembly_zone_by_team[robot.team]
+            candidate_zones.extend(
+                (
+                    (own_base, True),
+                    (own_trapezoid, True),
+                    (own_supply, True),
+                    (own_assembly, robot.type == "engineer"),
+                )
+            )
+            candidate_zones.extend(
+                (
+                    zone,
+                    robot.type in {"hero", "infantry", "sentry"},
+                )
+                for zone in self._field_central_zones
+            )
+            candidate_zones.extend(
+                (
+                    zone,
+                    self._outpost_buff_eligible(robot, point_team),
+                )
+                for point_team, zone in self._field_outpost_zone_by_team.items()
+            )
+
+            assembly_active_dt = 0.0
+            for zone, eligible in candidate_zones:
+                active_dt = self._advance_field_occupy_remaining(
+                    robot,
+                    zone,
+                    eligible,
+                    dt,
+                )
+                if zone is own_assembly:
+                    assembly_active_dt = active_dt
+
+            if robot.type == "engineer" and assembly_active_dt > 0:
+                elapsed = self._assembly_invincibility_elapsed_by_engineer[
+                    robot.id
+                ]
+                self._assembly_invincibility_elapsed_by_engineer[robot.id] = min(
+                    self._assembly_invincibility_limit,
+                    elapsed + assembly_active_dt,
+                )
+
+    def prepare_movement(self, match: "Match", dt: float) -> None:
+        """Settle synthetic RMUC chassis power at 10 Hz before movement."""
+        for robot_id, state in self._chassis_power_by_robot.items():
+            state.blocked_this_frame = state.power_off_remaining > 0
+            robot = self._robots_by_id[robot_id]
+            self._current_synthetic_power_by_robot[robot_id] = (
+                self._synthetic_chassis_power(robot, state)
+            )
+
+        if dt <= 0:
+            return
+
+        self._chassis_power_accumulator += dt
+        ticks = math.floor(
+            self._chassis_power_accumulator * self._chassis_power_detection_hz
+            + 1e-9
+        )
+        if ticks <= 0:
+            return
+
+        tick_duration = 1.0 / self._chassis_power_detection_hz
+        self._chassis_power_accumulator = max(
+            0.0,
+            self._chassis_power_accumulator - ticks * tick_duration,
+        )
+
+        for _ in range(ticks):
+            for robot_id, state in self._chassis_power_by_robot.items():
+                robot = self._robots_by_id[robot_id]
+                power_limit = self._effective_chassis_power_limit(robot_id)
+                was_powered_off = state.power_off_remaining > 0
+
+                if was_powered_off:
+                    state.blocked_this_frame = True
+                    power = self._chassis_stationary_power_demand
+                else:
+                    power = self._synthetic_chassis_power(robot, state)
+
+                state.buffer_energy -= (power - power_limit) * tick_duration
+                state.buffer_energy = min(
+                    self._effective_buffer_energy_max(robot_id),
+                    state.buffer_energy,
+                )
+
+                if state.buffer_energy <= 0:
+                    state.buffer_energy = 0.0
+                    if not was_powered_off and power > power_limit:
+                        state.power_off_remaining = self._chassis_power_off_duration
+                        state.blocked_this_frame = True
+
+                if was_powered_off:
+                    state.power_off_remaining = max(
+                        0.0,
+                        state.power_off_remaining - tick_duration,
+                    )
+                    if state.power_off_remaining <= 1e-9:
+                        state.power_off_remaining = 0.0
+
+        for robot_id, state in self._chassis_power_by_robot.items():
+            robot = self._robots_by_id[robot_id]
+            self._current_synthetic_power_by_robot[robot_id] = (
+                self._synthetic_chassis_power(robot, state)
+            )
+
+    def prepare_combat(self, match: "Match", dt: float) -> None:
+        """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
+        frame_dt = max(0.0, dt)
+        self._advance_attack_buffs(frame_dt)
+        self._advance_large_energy_mechanism_buffs(frame_dt)
+        self._advance_radar_double_vulnerability(frame_dt)
+        self._advance_field_defense_occupancy(match, frame_dt)
+        self._advance_fortress_occupancy(frame_dt)
+        self._refresh_enemy_fortress_occupancy(match, frame_dt)
+        self._advance_terrain_crossing_timers(frame_dt)
+
+        if dt > 0:
+            self._heat_cooling_accumulator += dt
+            ticks = math.floor(
+                self._heat_cooling_accumulator * self._shooting_heat_detection_hz
+                + 1e-9
+            )
+            if ticks > 0:
+                tick_duration = 1.0 / self._shooting_heat_detection_hz
+                self._heat_cooling_accumulator = max(
+                    0.0,
+                    self._heat_cooling_accumulator - ticks * tick_duration,
+                )
+                for _ in range(ticks):
+                    for robot_id, state in self._shooting_heat_by_robot.items():
+                        robot = self._robots_by_id[robot_id]
+                        if not robot.alive or state.heat <= 0:
+                            continue
+                        parameters = self._effective_heat_parameters(robot_id)
+                        state.heat = max(
+                            0.0,
+                            state.heat
+                            - parameters.cooling_per_second
+                            / self._shooting_heat_detection_hz,
+                        )
+                        if state.heat <= 1e-9:
+                            state.heat = 0.0
+                            state.temporarily_locked = False
+
+        self._process_terrain_crossing_rfid(
+            match,
+            min(match.elapsed_time + frame_dt, self._time_limit),
+        )
+
+    def _advance_attack_buffs(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, buffs in self._attack_buffs_by_team.items():
+            active: list[_TimedAttackBuff] = []
+            for buff in buffs:
+                buff.remaining = max(0.0, buff.remaining - dt)
+                if buff.remaining > 1e-9:
+                    active.append(buff)
+            self._attack_buffs_by_team[team_id] = active
+
+    def _advance_large_energy_mechanism_buffs(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, buffs in self._large_energy_mechanism_buffs_by_team.items():
+            active: list[_TimedEnergyMechanismBuff] = []
+            for buff in buffs:
+                buff.remaining = max(0.0, buff.remaining - dt)
+                if buff.remaining > 1e-9:
+                    active.append(buff)
+            self._large_energy_mechanism_buffs_by_team[team_id] = active
+
+    def _advance_radar_double_vulnerability(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        for state in self._radar_double_vulnerability_by_team.values():
+            if state.remaining <= 0:
+                continue
+            state.remaining = max(0.0, state.remaining - dt)
+            if state.remaining <= 1e-9:
+                state.remaining = 0.0
+
+    def reset(self, match: "Match") -> None:
+        expected_roster = {
+            "hero": 1,
+            "engineer": 1,
+            "infantry": 2,
+            "sentry": 1,
+            "drone": 1,
+        }
+        for team in match.config.scenario.teams.values():
+            actual_roster = {
+                robot_type: sum(robot.type == robot_type for robot in team.robots)
+                for robot_type in _RMUC_ROBOT_TYPES
+            }
+            if actual_roster != expected_roster:
+                raise ConfigError(
+                    f"{self._document.path}: 队伍 `{team.team_id}` 必须恰好包含 "
+                    "1 hero、1 engineer、2 infantry、1 sentry、1 drone"
+                )
+
+        player_team = match.config.scenario.player_team
+        player_definitions = next(
+            team.robots
+            for team in match.config.scenario.teams.values()
+            if team.team_id == player_team
+        )
+        expected_player_controlled = {
+            robot.id
+            for robot in player_definitions
+            if robot.type not in {"sentry", "drone"}
+        }
+        if match.config.scenario.player_controlled != expected_player_controlled:
+            raise ConfigError(
+                f"{self._document.path}: player_controlled 必须包含 player_team 的 "
+                "hero、engineer、两台 infantry；sentry、drone 由 AI 控制"
+            )
+
+        team_by_side = {
+            side: match.config.scenario.teams[side].team_id for side in ("red", "blue")
+        }
+        self.attack_damage_by_team = {
+            team_id: 0 for team_id in team_by_side.values()
+        }
+        self._attack_buffs_by_team = {
+            team_id: [] for team_id in team_by_side.values()
+        }
+        self._large_energy_mechanism_buffs_by_team = {
+            team_id: [] for team_id in team_by_side.values()
+        }
+        self._radar_vulnerability_by_robot = {}
+        self._radar_double_vulnerability_by_team = {
+            team_id: _RadarDoubleVulnerabilityState()
+            for team_id in team_by_side.values()
+        }
+        self._team_states = {
+            team_id: _TeamStructureState() for team_id in team_by_side.values()
+        }
+        self._robot_types_by_id = {robot.id: robot.type for robot in match.robots}
+        self._robots_by_id = {robot.id: robot for robot in match.robots}
+        self._level_cap_by_team = {
+            team_id: self._initial_level_cap for team_id in team_by_side.values()
+        }
+        self._engineer_resources_by_id = {
+            robot.id: _EngineerResourceState()
+            for robot in match.robots
+            if robot.type == "engineer"
+        }
+        self._assembly_invincibility_elapsed_by_engineer = {
+            robot_id: 0.0 for robot_id in self._engineer_resources_by_id
+        }
+        self._tech_core_by_team = {
+            team_id: _TechCoreTeamState() for team_id in team_by_side.values()
+        }
+        self._d4_coordinator = _D4CoordinatorState()
+        initial_coins = self._initial_coins_for_ratings(
+            self._economy_lab_rating["project_document"],
+            self._economy_lab_rating["technical_solution"],
+        )
+        self._economy_by_team = {
+            team_id: _TeamEconomyState(coins=initial_coins)
+            for team_id in team_by_side.values()
+        }
+        self._next_timed_gold_grant_index = 0
+        self._next_periodic_gold_tick = self._economy_periodic_interval
+        self._robot_lifecycle_by_robot = {
+            robot.id: _RobotLifecycleState(
+                disengaged_elapsed=self._disengaged_after
+            )
+            for robot in match.robots
+            if robot.type != "drone"
+        }
+        self._drone_helipad_by_robot = {
+            robot.id: robot.position
+            for robot in match.robots
+            if robot.type == "drone"
+        }
+        self._drone_air_support_by_robot = {
+            robot.id: _DroneAirSupportState(
+                free_seconds=self._drone_initial_free_air_support,
+                next_grant_at=self._drone_periodic_grant_interval,
+            )
+            for robot in match.robots
+            if robot.type == "drone"
+        }
+        for robot in match.robots:
+            if robot.type == "drone":
+                robot.alive = False
+                robot.path.clear()
+        self._projectile_allowance_by_robot = {}
+        for robot in match.robots:
+            initial_rule = self._projectile_initial.get(robot.type)
+            if initial_rule is None or robot.type == "engineer":
+                continue
+            projectile, initial_allowance = initial_rule
+            self._projectile_allowance_by_robot[robot.id] = (
+                _ProjectileAllowanceState(
+                    projectile_type=projectile,
+                    allowed=initial_allowance,
+                )
+            )
+        self._projectile_purchase_by_team = {
+            team_id: _TeamProjectilePurchaseState()
+            for team_id in team_by_side.values()
+        }
+        self._shooting_heat_by_robot = {
+            robot_id: _ShootingHeatState()
+            for robot_id in self._projectile_allowance_by_robot
+        }
+        self._heat_cooling_accumulator = 0.0
+        self._chassis_power_by_robot = {
+            robot.id: _ChassisPowerState(
+                buffer_energy=self._effective_buffer_energy_max(robot.id)
+            )
+            for robot in match.robots
+            if robot.type != "drone"
+        }
+        self._chassis_power_accumulator = 0.0
+        self._current_synthetic_power_by_robot = {
+            robot.id: self._chassis_stationary_power_demand
+            for robot in match.robots
+            if robot.type != "drone"
+        }
+        self._next_sentry_supply_grant = self._sentry_supply_interval
+        self._progression_by_robot = {
+            robot.id: _RobotProgressionState()
+            for robot in match.robots
+            if robot.type in _EXPERIENCE_ROBOT_TYPES
+        }
+        for robot_id in self._progression_by_robot:
+            robot = self._robots_by_id[robot_id]
+            if robot.type in _HP_PERFORMANCE_ROBOT_TYPES:
+                performance = self._effective_performance(robot_id)
+                robot.max_hp = performance.max_hp
+                robot.hp = performance.max_hp
+
+        self._base_by_team = {}
+        self._outpost_by_team = {}
+        for team_id in team_by_side.values():
+            team_structures = [
+                structure for structure in match.structures if structure.team == team_id
+            ]
+            bases = [structure for structure in team_structures if structure.type == "base"]
+            outposts = [
+                structure for structure in team_structures if structure.type == "outpost"
+            ]
+            if len(bases) != 1 or len(outposts) != 1 or len(team_structures) != 2:
+                raise ConfigError(
+                    f"{self._document.path}: 队伍 `{team_id}` 必须恰好有 1 Base 和 1 Outpost"
+                )
+            self._base_by_team[team_id] = bases[0]
+            self._outpost_by_team[team_id] = outposts[0]
+
+        zones_by_id = {zone.id: zone for zone in match.map.zones}
+        required_zone_ids = (
+            set(self._rebuild_zone_ids.values())
+            | {
+                zone_id
+                for side_zones in self._tech_core_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
+            | {
+                zone_id
+                for side_zones in self._projectile_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
+            | {
+                zone_id
+                for side_zones in self._field_zone_ids.values()
+                for zone_id in side_zones.values()
+            }
+            | {
+                zone_id
+                for side_zones in self._terrain_zone_ids.values()
+                for zone_ids in side_zones.values()
+                for zone_id in zone_ids
+            }
+            | set(self._fortress_zone_ids.values())
+        )
+        missing_zones = sorted(required_zone_ids - set(zones_by_id))
+        if missing_zones:
+            raise ConfigError(
+                f"{self._document.path}: scenario 缺少 RMUC Rules Lab zone："
+                + ", ".join(missing_zones)
+            )
+        self._rebuild_zone_by_team = {
+            team_by_side[side]: zones_by_id[zone_id]
+            for side, zone_id in self._rebuild_zone_ids.items()
+        }
+        self._resource_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["resource"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._assembly_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._tech_core_zone_ids[side]["assembly"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._projectile_exchange_zones_by_team = {
+            team_by_side[side]: tuple(
+                zones_by_id[self._projectile_zone_ids[side][zone_type]]
+                for zone_type in ("supply", "base", "outpost")
+            )
+            for side in ("red", "blue")
+        }
+        self._supply_buff_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["supply"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_base_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["base"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_outpost_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._projectile_zone_ids[side]["outpost"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_trapezoid_zone_by_team = {
+            team_by_side[side]: zones_by_id[
+                self._field_zone_ids[side]["trapezoid"]
+            ]
+            for side in ("red", "blue")
+        }
+        self._field_central_zones = tuple(
+            zones_by_id[self._field_zone_ids[side]["central"]]
+            for side in ("red", "blue")
+        )
+        self._central_defense_state_by_zone = {
+            zone.id: _CentralDefenseBuffState()
+            for zone in self._field_central_zones
+        }
+        self._field_occupy_remaining = {}
+        self._field_buff_elapsed = match.elapsed_time
+        self._fortress_zone_by_team = {
+            team_by_side[side]: zones_by_id[self._fortress_zone_ids[side]]
+            for side in ("red", "blue")
+        }
+        self._fortress_state_by_team = {
+            team_id: _FortressBuffState()
+            for team_id in team_by_side.values()
+        }
+        self._fortress_reserved_by_robot = {
+            robot.id: _FortressReservedProjectileState()
+            for robot in match.robots
+            if robot.type in self._fortress_eligible_types
+            and self._projectile_by_type.get(robot.type)
+            == self._fortress_reserve_projectile
+        }
+        team_ids = tuple(team_by_side.values())
+        self._enemy_fortress_occupation = {
+            (robot.id, fortress_team_id): _EnemyFortressOccupationState()
+            for robot in match.robots
+            if robot.type in self._enemy_fortress_eligible_types
+            for fortress_team_id in team_ids
+            if fortress_team_id != robot.team
+        }
+        self._enemy_fortress_death_retention_started = set()
+        self._outposts_destroyed_this_frame = set()
+
+        self._terrain_zones_by_side_and_type = {
+            side: {
+                terrain_type: tuple(
+                    zones_by_id[zone_id]
+                    for zone_id in self._terrain_zone_ids[side][terrain_type]
+                )
+                for terrain_type in (
+                    "road",
+                    "elevated_ground",
+                    "launch_ramp",
+                    "tunnel",
+                )
+            }
+            for side in ("red", "blue")
+        }
+        self._terrain_zone_lookup = {
+            zone.id: (side, terrain_type, index)
+            for side, terrain_by_type in self._terrain_zones_by_side_and_type.items()
+            for terrain_type, zones in terrain_by_type.items()
+            for index, zone in enumerate(zones)
+        }
+        interrupt_zones = {
+            zone.id: zone
+            for terrain_by_type in self._terrain_zones_by_side_and_type.values()
+            for zones in terrain_by_type.values()
+            for zone in zones
+        }
+        for zone in self._field_base_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_outpost_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_trapezoid_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._field_central_zones:
+            interrupt_zones[zone.id] = zone
+        for zone in self._supply_buff_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._assembly_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        for zone in self._fortress_zone_by_team.values():
+            interrupt_zones[zone.id] = zone
+        self._terrain_interrupt_zones_by_id = interrupt_zones
+        self._terrain_crossing_by_robot = {
+            robot.id: _TerrainCrossingState()
+            for robot in match.robots
+            if robot.type != "drone"
+        }
+
+    def _advance_drone_air_support(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+        for robot_id, state in self._drone_air_support_by_robot.items():
+            while (
+                state.next_grant_at <= settlement_end + 1e-9
+                and state.next_grant_at < self._time_limit - 1e-9
+            ):
+                state.free_seconds += self._drone_periodic_grant
+                state.next_grant_at += self._drone_periodic_grant_interval
+
+            if not state.active or dt <= 0:
+                continue
+            state.free_seconds = max(0.0, state.free_seconds - dt)
+            if state.free_seconds <= 1e-9:
+                state.free_seconds = 0.0
+                drone = self._robots_by_id[robot_id]
+                self.pause_drone_air_support(drone)
+
+    def update(self, match: "Match", dt: float) -> None:
+        newly_destroyed = self._consume_events(match)
+        frame_start = match.elapsed_time - dt
+        active_dt = max(
+            0.0, min(dt, self._time_limit - frame_start)
+        )
+        self._advance_drone_air_support(match, active_dt)
+        newly_respawned = self._advance_robot_lifecycles(
+            match, active_dt, newly_destroyed
+        )
+        self._advance_supply_healing(
+            match, active_dt, frame_start, newly_respawned
+        )
+        self._advance_remote_healing(match)
+        self._advance_out_of_combat(active_dt, newly_respawned)
+
+        self._advance_enemy_fortress_occupation(match, dt)
+        self._sync_initialized_fortress_reserves()
+        self._advance_projectile_allowance(match, dt)
+        self._advance_tech_core_attempts(match, dt)
+        self._advance_d4(match, dt)
+        self._advance_economy(match)
+
+        active_rebuild_dt = max(
+            0.0, min(dt, self._rebuild_cutoff - frame_start)
+        )
+        if active_rebuild_dt > 0:
+            self._advance_rebuild(match, active_rebuild_dt)
+
+        if match.elapsed_time >= self._rebuild_cutoff - 1e-9:
+            for state in self._team_states.values():
+                state.rebuild_progress_by_robot.clear()
+
+    def _respawn_progress_required(
+        self,
+        event_time: float,
+        immediate_respawn_count: int,
+    ) -> int:
+        elapsed = min(self._time_limit, max(0.0, event_time))
+        raw_required = (
+            self._respawn_base_progress_required
+            + elapsed / self._respawn_elapsed_seconds_per_progress
+            + immediate_respawn_count * self._respawn_immediate_progress_penalty
+        )
+        return int(math.floor(raw_required + 0.5))
+
+    def _settle_respawn(
+        self,
+        robot: Robot,
+        state: _RobotLifecycleState,
+        *,
+        hp_fraction: float,
+        invincibility_duration: float,
+        weak: bool,
+        minimum_invincibility: float,
+        immediate_power_boost_duration: float = 0.0,
+    ) -> None:
+        robot.alive = True
+        robot.hp = min(
+            robot.max_hp,
+            max(
+                1,
+                int(math.floor(robot.max_hp * hp_fraction + 0.5)),
+            ),
+        )
+        robot.path.clear()
+        state.respawn_progress = 0.0
+        state.respawn_required = None
+        state.weak = weak
+        state.invincible_remaining = invincibility_duration
+        state.minimum_invincible_remaining = minimum_invincibility
+        state.immediate_power_boost_remaining = immediate_power_boost_duration
+        state.disengaged_elapsed = 0.0
+        state.combat_activity_this_frame = False
+        state.healing_rounding_residual = 0.0
+
+    def immediate_respawn_cost(self, match: "Match", robot: Robot) -> int:
+        if self._robots_by_id.get(robot.id) is not robot:
+            raise KeyError(robot.id)
+        elapsed = min(self._time_limit, max(0.0, match.elapsed_time))
+        elapsed_steps = math.ceil(
+            elapsed / self._immediate_respawn_elapsed_interval
+        )
+        return (
+            elapsed_steps * self._immediate_respawn_elapsed_step_coins
+            + self._robot_level(robot.id) * self._immediate_respawn_level_coins
+        )
+
+    def purchase_immediate_respawn(self, match: "Match", robot: Robot) -> bool:
+        state = self._robot_lifecycle_by_robot.get(robot.id)
+        economy = self._economy_by_team.get(robot.team)
+        if (            match.finished
+            or robot.alive
+            or self._robots_by_id.get(robot.id) is not robot
+            or state is None
+            or economy is None
+            or state.respawn_required is None
+        ):
+            return False
+
+        cost = self.immediate_respawn_cost(match, robot)
+        if economy.coins < cost:
+            return False
+
+        economy.coins -= cost
+        state.immediate_respawn_count += 1
+        self._settle_respawn(
+            robot,
+            state,
+            hp_fraction=self._immediate_respawn_hp_fraction,
+            invincibility_duration=self._immediate_respawn_invincibility_duration,
+            weak=False,
+            minimum_invincibility=0.0,
+            immediate_power_boost_duration=self._immediate_respawn_power_duration,
+        )
+        return True
+
+    def _weak_release_zone_detected(self, robot: Robot) -> bool:
+        own_supply = self._supply_buff_zone_by_team.get(robot.team)
+        own_base = self._field_base_zone_by_team.get(robot.team)
+        if (
+            own_supply is not None
+            and own_supply.contains(robot.position)
+        ) or (
+            own_base is not None
+            and own_base.contains(robot.position)
+        ):
+            return True
+
+        return any(
+            self._outpost_buff_eligible(robot, point_team)
+            and zone.contains(robot.position)
+            for point_team, zone in self._field_outpost_zone_by_team.items()
+        )
+
+    def _release_weak_if_detected(
+        self,
+        robot: Robot,
+        state: _RobotLifecycleState,
+    ) -> None:
+        if not state.weak or not self._weak_release_zone_detected(robot):
+            return
+        state.weak = False
+        state.invincible_remaining = min(
+            state.invincible_remaining,
+            state.minimum_invincible_remaining,
+        )
+
+    def _advance_robot_lifecycles(
+        self,
+        match: "Match",
+        dt: float,
+        newly_destroyed: set[str],
+    ) -> set[str]:
+        newly_respawned: set[str] = set()
+        for robot in match.robots:
+            state = self._robot_lifecycle_by_robot.get(robot.id)
+            if state is None:
+                continue
+            if not robot.alive:
+                state.disengaged_elapsed = 0.0
+                state.healing_rounding_residual = 0.0
+                if robot.id in newly_destroyed or state.respawn_required is None:
+                    continue
+
+                supply_zone = self._supply_buff_zone_by_team[robot.team]
+                base = self._base_by_team[robot.team]
+                accelerated = (
+                    supply_zone.contains(robot.position)
+                    or base.hp < self._respawn_accelerated_base_hp_below
+                )
+                rate = (
+                    self._respawn_accelerated_progress_per_second
+                    if accelerated
+                    else self._respawn_progress_per_second
+                )
+                state.respawn_progress += dt * rate
+                if state.respawn_progress + 1e-9 < state.respawn_required:
+                    continue
+
+                self._settle_respawn(
+                    robot,
+                    state,
+                    hp_fraction=self._respawn_hp_fraction,
+                    invincibility_duration=self._respawn_invincibility_duration,
+                    weak=True,
+                    minimum_invincibility=self._weak_release_min_invincibility,
+                )
+                self._release_weak_if_detected(robot, state)
+                newly_respawned.add(robot.id)
+                continue
+
+            state.invincible_remaining = max(
+                0.0, state.invincible_remaining - dt
+            )
+            if state.invincible_remaining <= 1e-9:
+                state.invincible_remaining = 0.0
+            state.minimum_invincible_remaining = max(
+                0.0, state.minimum_invincible_remaining - dt
+            )
+            if state.minimum_invincible_remaining <= 1e-9:
+                state.minimum_invincible_remaining = 0.0
+            state.immediate_power_boost_remaining = max(
+                0.0, state.immediate_power_boost_remaining - dt
+            )
+            if state.immediate_power_boost_remaining <= 1e-9:
+                state.immediate_power_boost_remaining = 0.0
+            self._release_weak_if_detected(robot, state)
+
+        return newly_respawned
+
+    def _advance_supply_healing(
+        self,
+        match: "Match",
+        dt: float,
+        frame_start: float,
+        newly_respawned: set[str],
+    ) -> None:
+        if dt <= 0:
+            return
+
+        for robot in match.robots:
+            state = self._robot_lifecycle_by_robot.get(robot.id)
+            if state is None:
+                continue
+            supply_zone = self._supply_buff_zone_by_team[robot.team]
+            if (
+                robot.id in newly_respawned
+                or not robot.alive
+                or state.weak
+                or not supply_zone.contains(robot.position)
+                or robot.hp >= robot.max_hp
+            ):
+                state.healing_rounding_residual = 0.0
+                continue
+
+            enhanced_dt = 0.0
+            if not state.combat_activity_this_frame:
+                enhanced_start_offset = max(
+                    0.0,
+                    self._resupply_enhanced_after - frame_start,
+                    self._disengaged_after - state.disengaged_elapsed,
+                )
+                enhanced_dt = max(
+                    0.0,
+                    dt - min(dt, enhanced_start_offset),
+                )
+
+            healing_fraction = (
+                dt * self._resupply_heal_fraction_per_second
+                + enhanced_dt
+                * (
+                    self._resupply_enhanced_heal_fraction_per_second
+                    - self._resupply_heal_fraction_per_second
+                )
+            )
+            state.healing_rounding_residual += robot.max_hp * healing_fraction
+            healing_points = max(
+                0,
+                math.floor(state.healing_rounding_residual + 0.5 + 1e-9),
+            )
+            if healing_points <= 0:
+                continue
+
+            robot.hp = min(robot.max_hp, robot.hp + healing_points)
+            if robot.hp >= robot.max_hp:
+                state.healing_rounding_residual = 0.0
+            else:
+                state.healing_rounding_residual -= healing_points
+
+    def _advance_remote_healing(self, match: "Match") -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+        for robot_id, state in self._robot_lifecycle_by_robot.items():
+            effective_at = state.pending_remote_healing_effective_at
+            if effective_at is None or effective_at > settlement_end + 1e-9:
+                continue
+
+            robot = self._robots_by_id[robot_id]
+            if robot.alive and effective_at < self._time_limit - 1e-9:
+                healing_points = int(
+                    math.floor(
+                        robot.max_hp * self._remote_healing_hp_fraction
+                        + 0.5
+                    )
+                )
+                robot.hp = min(robot.max_hp, robot.hp + healing_points)
+            state.pending_remote_healing_effective_at = None
+
+    def _advance_out_of_combat(
+        self,
+        dt: float,
+        newly_respawned: set[str],
+    ) -> None:
+        for robot_id, state in self._robot_lifecycle_by_robot.items():
+            robot = self._robots_by_id[robot_id]
+            if robot_id in newly_respawned or state.combat_activity_this_frame:
+                state.disengaged_elapsed = 0.0
+            elif robot.alive:
+                state.disengaged_elapsed += max(0.0, dt)
+            else:
+                state.disengaged_elapsed = 0.0
+            state.combat_activity_this_frame = False
+
+    def _advance_projectile_allowance(
+        self,
+        match: "Match",
+        dt: float,
+    ) -> None:
+        settlement_end = min(match.elapsed_time, self._time_limit)
+
+        for robot_id, state in self._projectile_allowance_by_robot.items():
+            if not state.pending_remote_deliveries:
+                continue
+            remaining: list[_PendingProjectileDelivery] = []
+            for delivery in state.pending_remote_deliveries:
+                if (
+                    delivery.effective_at < self._time_limit - 1e-9
+                    and delivery.effective_at <= settlement_end + 1e-9
+                ):
+                    state.allowed += delivery.amount
+                else:
+                    remaining.append(delivery)
+            state.pending_remote_deliveries = remaining
+
+        while (
+            self._next_sentry_supply_grant <= settlement_end + 1e-9
+            and self._next_sentry_supply_grant < self._time_limit - 1e-9
+        ):
+            for purchase_state in self._projectile_purchase_by_team.values():
+                purchase_state.pending_sentry_supply += self._sentry_supply_allowance
+            self._next_sentry_supply_grant += self._sentry_supply_interval
+
+        for team_id, purchase_state in self._projectile_purchase_by_team.items():
+            if purchase_state.pending_sentry_supply <= 0:
+                continue
+            sentry = next(
+                (
+                    robot
+                    for robot in match.robots
+                    if robot.team == team_id and robot.type == "sentry"
+                ),
+                None,
+            )
+            supply_zone = self._supply_buff_zone_by_team.get(team_id)
+            if (
+                sentry is None
+                or not sentry.alive
+                or self._is_weak(sentry)
+                or supply_zone is None
+                or not supply_zone.contains(sentry.position)
+            ):
+                continue
+            state = self._projectile_allowance_by_robot[sentry.id]
+            state.allowed += purchase_state.pending_sentry_supply
+            purchase_state.pending_sentry_supply = 0
+
+    def _initial_coins_for_ratings(
+        self,
+        project_document: str,
+        technical_solution: str,
+    ) -> int:
+        return max(
+            0,
+            self._economy_initial_coins
+            + self._economy_rating_modifiers["project_document"][project_document]
+            + self._economy_rating_modifiers["technical_solution"][technical_solution],
+        )
+
+    def _add_tech_core_periodic_gold(
+        self,
+        team_id: str,
+        difficulty: int,
+        *,
+        first_completion: bool,
+    ) -> None:
+        rule = self._tech_core_difficulties[difficulty]
+        amount = (
+            rule.first_periodic_gold_per_10s
+            if first_completion
+            else rule.repeat_periodic_gold_per_10s
+        )
+        if amount is None:
+            raise RuntimeError(
+                f"Tech Core D{difficulty} has no repeat periodic-gold reward"
+            )
+        self._economy_by_team[
+            team_id
+        ].tech_core_periodic_gold_per_10s += amount
+
+    def _periodic_gold_rate(self, team_id: str) -> tuple[int, int, int]:
+        economy_state = self._economy_by_team[team_id]
+        gross = economy_state.tech_core_periodic_gold_per_10s
+        penalty = (
+            self._tech_core_by_team[team_id].d4_priority_failure_gold_penalty
+            if economy_state.d4_priority_penalty_active_from is not None
+            else 0
+        )
+        return gross, penalty, gross - penalty
+
+    def _periodic_gold_net_at(self, team_id: str, tick_time: float) -> int:
+        economy_state = self._economy_by_team[team_id]
+        gross = economy_state.tech_core_periodic_gold_per_10s
+        active_from = economy_state.d4_priority_penalty_active_from
+        penalty = (
+            self._tech_core_by_team[team_id].d4_priority_failure_gold_penalty
+            if active_from is not None and tick_time + 1e-9 >= active_from
+            else 0
+        )
+        return gross - penalty
+
+    def _advance_economy(self, match: "Match") -> None:
+        if match.finished:
+            return
+        settlement_end = min(match.elapsed_time, self._time_limit)
+
+        while self._next_timed_gold_grant_index < len(self._economy_timed_grants):
+            grant_time, amount = self._economy_timed_grants[
+                self._next_timed_gold_grant_index
+            ]
+            if grant_time > settlement_end + 1e-9:
+                break
+            for state in self._economy_by_team.values():
+                state.coins += amount
+            self._next_timed_gold_grant_index += 1
+
+        while (
+            self._next_periodic_gold_tick <= settlement_end + 1e-9
+            and self._next_periodic_gold_tick < self._time_limit - 1e-9
+        ):
+            tick_time = self._next_periodic_gold_tick
+            for team_id, state in self._economy_by_team.items():
+                state.coins = max(
+                    0,
+                    state.coins + self._periodic_gold_net_at(team_id, tick_time),
+                )
+            self._next_periodic_gold_tick += self._economy_periodic_interval
+
+    def _effective_buffer_energy_max(self, robot_id: str) -> float:
+        if robot_id not in self._robots_by_id:
+            raise KeyError(robot_id)
+        return self._chassis_buffer_energy_max
+
+    def _effective_chassis_power_limit(self, robot_id: str) -> float:
+        robot_type = self._robot_types_by_id[robot_id]
+        if robot_type in _EXPERIENCE_ROBOT_TYPES:
+            base_limit = float(
+                self._effective_performance(robot_id).chassis_power_limit
+            )
+        else:
+            base_limit = float(self._chassis_power_limit_by_type[robot_type])
+
+        lifecycle = self._robot_lifecycle_by_robot.get(robot_id)
+        if (
+            lifecycle is not None
+            and lifecycle.immediate_power_boost_remaining > 0
+        ):
+            return min(
+                float(self._immediate_respawn_power_cap),
+                base_limit * self._immediate_respawn_power_multiplier,
+            )
+        return base_limit
+
+    def _synthetic_chassis_power(
+        self,
+        robot: Robot,
+        state: _ChassisPowerState,
+    ) -> float:
+        if not robot.alive or state.power_off_remaining > 0:
+            return self._chassis_stationary_power_demand
+        if robot.path:
+            return (
+                self._effective_chassis_power_limit(robot.id)
+                + self._chassis_moving_over_limit
+            )
+        return self._chassis_stationary_power_demand
+
+    def _effective_heat_parameters(
+        self,
+        robot_id: str,
+    ) -> _EffectiveHeatParameters:
+        robot_type = self._robot_types_by_id[robot_id]
+        projectile_type = self._projectile_by_type.get(robot_type)
+        if projectile_type not in {"17mm", "42mm"}:
+            raise KeyError(robot_id)
+
+        if robot_type in _EXPERIENCE_ROBOT_TYPES:
+            performance = self._effective_performance(robot_id)
+            heat_limit = float(performance.heat_limit)
+            base_cooling_per_second = float(performance.cooling_per_second)
+        elif robot_type == "sentry":
+            heat_limit = self._sentry_heat_limit
+            base_cooling_per_second = self._sentry_cooling_per_second
+        else:
+            raise KeyError(robot_id)
+
+        cooling_candidates = [base_cooling_per_second]
+        robot = self._robots_by_id[robot_id]
+        fortress_bonus = self._fortress_cooling_bonus(robot)
+        if fortress_bonus > 0:
+            cooling_candidates.append(base_cooling_per_second + fortress_bonus)
+
+        terrain_state = self._terrain_crossing_by_robot.get(robot_id)
+        if (
+            terrain_state is not None
+            and terrain_state.tunnel_cooling_remaining > 0
+        ):
+            cooling_candidates.append(
+                base_cooling_per_second
+                * self._terrain_rules["tunnel"].cooling_multiplier
+            )
+
+        energy_multiplier = self._current_large_energy_mechanism_cooling_multiplier(
+            robot.team
+        )
+        if energy_multiplier > 1.0:
+            cooling_candidates.append(base_cooling_per_second * energy_multiplier)
+
+        cooling_per_second = max(cooling_candidates)
+
+        return _EffectiveHeatParameters(
+            projectile_type=projectile_type,
+            heat_limit=heat_limit,
+            cooling_per_second=cooling_per_second,
+            permanent_threshold=(
+                heat_limit
+                + self._shooting_heat_permanent_margin[projectile_type]
+            ),
+        )
+
+    def _effective_performance_for_type(
+        self, robot_type: str, level: int
+    ) -> _EffectivePerformance:
+        if robot_type == "hero":
+            row = self._hero_performance[self._hero_profile][level]
+            return _EffectivePerformance(
+                max_hp=row["max_hp"],
+                chassis_power_limit=row["chassis_power_limit"],
+                heat_limit=row["heat_limit"],
+                cooling_per_second=row["cooling_per_second"],
+            )
+        if robot_type == "infantry":
+            chassis = self._infantry_chassis_performance[
+                self._infantry_chassis_profile
+            ][level]
+            launcher = self._infantry_launcher_performance[
+                self._infantry_launcher_profile
+            ][level]
+            return _EffectivePerformance(
+                max_hp=chassis["max_hp"],
+                chassis_power_limit=chassis["chassis_power_limit"],
+                heat_limit=launcher["heat_limit"],
+                cooling_per_second=launcher["cooling_per_second"],
+            )
+        if robot_type == "drone":
+            row = self._drone_performance[level]
+            # HP/chassis power are not applicable to Drone in V1.4.0.
+            # The values stay internal sentinels and are never exposed as rules.
+            return _EffectivePerformance(
+                max_hp=1,
+                chassis_power_limit=0,
+                heat_limit=row["heat_limit"],
+                cooling_per_second=row["cooling_per_second"],
+            )
+        raise KeyError(robot_type)
+
+    def _effective_performance(self, robot_id: str) -> _EffectivePerformance:
+        state = self._progression_by_robot[robot_id]
+        robot_type = self._robot_types_by_id[robot_id]
+        return self._effective_performance_for_type(robot_type, state.level)
+
+    def _grant_experience(self, robot_id: str, amount: float) -> None:
+        state = self._progression_by_robot.get(robot_id)
+        robot = self._robots_by_id.get(robot_id)
+        if (
+            state is None
+            or robot is None
+            or not math.isfinite(amount)
+            or amount <= 0
+        ):
+            return
+
+        level_cap = self._level_cap_by_team[robot.team]
+        cap_experience = float(self._level_thresholds[level_cap])
+        if state.level >= level_cap or state.experience >= cap_experience:
+            state.level = level_cap
+            state.experience = cap_experience
+            return
+
+        old_level = state.level
+        state.experience = min(cap_experience, state.experience + float(amount))
+        state.level = max(
+            level
+            for level, threshold in self._level_thresholds.items()
+            if level <= level_cap and threshold <= state.experience + 1e-9
+        )
+        if state.level == old_level:
+            return
+
+        performance = self._effective_performance(robot_id)
+        if robot.type in _HP_PERFORMANCE_ROBOT_TYPES:
+            previous_max_hp = robot.max_hp
+            hp_increase = max(0, performance.max_hp - previous_max_hp)
+            robot.max_hp = performance.max_hp
+            if robot.alive:
+                robot.hp = min(robot.max_hp, robot.hp + hp_increase)
+            else:
+                robot.hp = 0
+
+    def _robot_level(self, robot_id: str | None) -> int:
+        if robot_id is None:
+            return 1
+        progression = self._progression_by_robot.get(robot_id)
+        return progression.level if progression is not None else 1
+
+    def _grant_kill_experience(self, event) -> None:
+        if (
+            event.attacker_id not in self._progression_by_robot
+            or event.robot_id not in self._robots_by_id
+            or event.attacker_team_id == event.team_id
+        ):
+            return
+        attacker_level = self._robot_level(event.attacker_id)
+        victim_level = self._robot_level(event.robot_id)
+        level_difference = max(0, victim_level - attacker_level)
+        amount = (
+            self._kill_base_factor
+            * victim_level
+            * (1 + self._kill_level_difference_factor * level_difference)
+        )
+        self._grant_experience(event.attacker_id, amount)
+
+    def _consume_events(self, match: "Match") -> set[str]:
+        newly_destroyed: set[str] = set()
+        self._enemy_fortress_death_retention_started.clear()
+        self._outposts_destroyed_this_frame.clear()
+        structure_by_id = {structure.id: structure for structure in match.structures}
+        for event in match.current_events:
+            is_enemy_damage = (
+                event.attacker_team_id in self.attack_damage_by_team
+                and event.attacker_team_id != event.team_id
+                and event.damage > 0
+            )
+            if (
+                event.type
+                in {MatchEventType.ROBOT_DAMAGED, MatchEventType.STRUCTURE_DAMAGED}
+                and is_enemy_damage
+            ):
+                self.attack_damage_by_team[event.attacker_team_id] += event.damage
+
+            known_experience_source = (
+                is_enemy_damage and event.attacker_id in self._progression_by_robot
+            )
+            if event.type == MatchEventType.ROBOT_DAMAGED:
+                lifecycle = self._robot_lifecycle_by_robot.get(event.robot_id)
+                if lifecycle is not None:
+                    lifecycle.disengaged_elapsed = 0.0
+                    lifecycle.combat_activity_this_frame = True
+                if known_experience_source:
+                    self._grant_experience(
+                        event.attacker_id,
+                        event.damage * self._robot_damage_experience_per_hp,
+                    )
+                continue
+
+            if event.type == MatchEventType.ROBOT_DESTROYED:
+                self._grant_kill_experience(event)
+                lifecycle = self._robot_lifecycle_by_robot.get(event.robot_id)
+                if lifecycle is not None:
+                    lifecycle.disengaged_elapsed = 0.0
+                    lifecycle.combat_activity_this_frame = False
+                    lifecycle.respawn_progress = 0.0
+                    lifecycle.respawn_required = self._respawn_progress_required(
+                        event.time,
+                        lifecycle.immediate_respawn_count,
+                    )
+                    lifecycle.weak = False
+                    lifecycle.invincible_remaining = 0.0
+                    lifecycle.minimum_invincible_remaining = 0.0
+                    lifecycle.immediate_power_boost_remaining = 0.0
+                    lifecycle.pending_remote_healing_effective_at = None
+                    lifecycle.healing_rounding_residual = 0.0
+                    newly_destroyed.add(event.robot_id)
+                for key, occupation in self._enemy_fortress_occupation.items():
+                    if key[0] != event.robot_id:
+                        continue
+                    if (
+                        occupation.occupy_remaining > 0
+                        or occupation.occupation_elapsed > 0
+                        or occupation.retention_remaining > 0
+                    ):
+                        occupation.occupy_remaining = 0.0
+                        occupation.retention_remaining = (
+                            self._enemy_fortress_retention
+                        )
+                        self._enemy_fortress_death_retention_started.add(
+                            key
+                        )
+                fortress_state = self._fortress_state_by_team.get(event.team_id)
+                if (
+                    fortress_state is not None
+                    and fortress_state.owner_robot_id == event.robot_id
+                ):
+                    fortress_state.owner_robot_id = None
+                    fortress_state.release_remaining = 0.0
+                terrain = self._terrain_crossing_by_robot.get(event.robot_id)
+                if terrain is not None:
+                    terrain.standard_defense = 0.0
+                    terrain.standard_defense_remaining = 0.0
+                    terrain.tunnel_defense_remaining = 0.0
+                    terrain.tunnel_cooling_remaining = 0.0
+                    terrain.occupied_rfid_zone_ids.clear()
+                    self._reset_terrain_sequence(terrain)
+                shooting_heat = self._shooting_heat_by_robot.get(event.robot_id)
+                if shooting_heat is not None:
+                    shooting_heat.heat = 0.0
+                    shooting_heat.temporarily_locked = False
+                chassis = self._chassis_power_by_robot.get(event.robot_id)
+                if chassis is not None:
+                    chassis.buffer_energy = self._effective_buffer_energy_max(
+                        event.robot_id
+                    )
+                    chassis.power_off_remaining = 0.0
+                    chassis.blocked_this_frame = False
+                    self._current_synthetic_power_by_robot[event.robot_id] = (
+                        self._chassis_stationary_power_demand
+                    )
+                resource_state = self._engineer_resources_by_id.get(event.robot_id)
+                if resource_state is not None:
+                    resource_state.energy_unit_credits = 0
+                    team_state = self._tech_core_by_team.get(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.active_attempt is not None
+                        and team_state.active_attempt.engineer_id == event.robot_id
+                    ):
+                        self._fail_tech_core_attempt(event.team_id)
+                    if (
+                        team_state is not None
+                        and team_state.d4_attempt is not None
+                        and team_state.d4_attempt.engineer_id == event.robot_id
+                    ):
+                        self._fail_d4_attempt(
+                            event.team_id,
+                            event.time,
+                            "engineer-destroyed",
+                        )
+                continue
+
+            if event.type == MatchEventType.STRUCTURE_DAMAGED:
+                structure = structure_by_id.get(event.structure_id)
+                if structure is None:
+                    continue
+
+                if known_experience_source:
+                    if structure.type == "outpost":
+                        self._grant_experience(
+                            event.attacker_id,
+                            event.damage * self._outpost_damage_experience_per_hp,
+                        )
+                    elif structure.type == "base":
+                        self._grant_experience(
+                            event.attacker_id,
+                            math.ceil(event.damage / self._base_hp_per_experience),
+                        )
+
+                if structure.type != "base":
+                    continue
+                state = self._team_states[structure.team]
+                previous_damage = state.base_damage_lost
+                state.base_damage_lost += event.damage
+                crossed = (
+                    state.base_damage_lost // self._base_damage_threshold
+                    - previous_damage // self._base_damage_threshold
+                )
+                if crossed > 0:
+                    state.outpost_rebuild_opportunities += crossed
+                if structure.hp <= 2000:
+                    state.base_armor_deployed = True
+                continue
+
+            if event.type == MatchEventType.STRUCTURE_DESTROYED:
+                structure = structure_by_id.get(event.structure_id)
+                if structure is None or structure.type != "outpost":
+                    continue
+                state = self._team_states[structure.team]
+                state.outpost_ever_destroyed = True
+                state.rebuild_progress_by_robot.clear()
+                self._outposts_destroyed_this_frame.add(structure.team)
+
+        return newly_destroyed
+
+    def _advance_tech_core_attempts(self, match: "Match", dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id, team_state in self._tech_core_by_team.items():
+            attempt = team_state.active_attempt
+            if attempt is None:
+                continue
+            engineer = self._robots_by_id.get(attempt.engineer_id)
+            if engineer is None or not engineer.alive:
+                self._fail_tech_core_attempt(team_id)
+                continue
+            assembly_zone = self._assembly_zone_by_team[team_id]
+            if (
+                not self._is_weak(engineer)
+                and assembly_zone.contains(engineer.position)
+            ):
+                attempt.outside_zone_elapsed = 0.0
+                continue
+            attempt.outside_zone_elapsed += dt
+            if (
+                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                self._fail_tech_core_attempt(team_id)
+
+    def _fail_tech_core_attempt(self, team_id: str) -> None:
+        team_state = self._tech_core_by_team.get(team_id)
+        if team_state is None or team_state.active_attempt is None:
+            return
+        # The attempt's one Energy Unit credit was reserved at start.
+        # Failure consumes that reservation but preserves any unreserved credit.
+        team_state.active_attempt = None
+
+    def _advance_d4(self, match: "Match", dt: float) -> None:
+        coordinator = self._d4_coordinator
+        if coordinator.pending_team_id is not None:
+            remaining_before = coordinator.priority_buffer_remaining
+            if dt + 1e-9 < remaining_before:
+                coordinator.priority_buffer_remaining = max(
+                    0.0,
+                    remaining_before - dt,
+                )
+                return
+
+            pending_team_id = coordinator.pending_team_id
+            pending_engineer_id = coordinator.pending_engineer_id
+            priority_takeover = coordinator.priority_takeover
+            leftover_dt = max(0.0, dt - remaining_before)
+            activation_time = match.elapsed_time - leftover_dt
+
+            other_team_id = next(
+                team_id
+                for team_id in self._tech_core_by_team
+                if team_id != pending_team_id
+            )
+            if self._tech_core_by_team[other_team_id].active_attempt is not None:
+                self._fail_tech_core_attempt(other_team_id)
+
+            if pending_engineer_id is None:
+                raise RuntimeError("D4 pending request missing engineer id")
+            self._activate_d4(
+                team_id=pending_team_id,
+                engineer_id=pending_engineer_id,
+                activated_at=activation_time,
+                priority_takeover=priority_takeover,
+            )
+            self._advance_active_d4(match, leftover_dt)
+            return
+
+        if coordinator.active_team_id is not None:
+            self._advance_active_d4(match, dt)
+
+    def _advance_active_d4(self, match: "Match", dt: float) -> None:
+        team_id = self._d4_coordinator.active_team_id
+        if team_id is None:
+            return
+        team_state = self._tech_core_by_team[team_id]
+        attempt = team_state.d4_attempt
+        if attempt is None:
+            self._d4_coordinator.active_team_id = None
+            return
+
+        engineer = self._robots_by_id.get(attempt.engineer_id)
+        if engineer is None or not engineer.alive:
+            self._fail_d4_attempt(team_id, match.elapsed_time, "engineer-destroyed")
+            return
+
+        frame_start = match.elapsed_time - max(0.0, dt)
+        failure_candidates: list[tuple[float, str]] = []
+
+        assembly_zone = self._assembly_zone_by_team[team_id]
+        if (
+            not self._is_weak(engineer)
+            and assembly_zone.contains(engineer.position)
+        ):
+            attempt.outside_zone_elapsed = 0.0
+        else:
+            outside_before = attempt.outside_zone_elapsed
+            attempt.outside_zone_elapsed += max(0.0, dt)
+            if (                attempt.outside_zone_elapsed + 1e-9
+                >= self._tech_core_leave_zone_fail_after
+            ):
+                time_to_failure = max(
+                    0.0,
+                    self._tech_core_leave_zone_fail_after - outside_before,
+                )
+                failure_candidates.append(
+                    (frame_start + time_to_failure, "left-assembly")
+                )
+
+        if attempt.first_core_completed_at is not None:
+            pair_deadline = (
+                attempt.first_core_completed_at + self._d4_paired_step_window
+            )
+            if match.elapsed_time > pair_deadline + 1e-9:
+                failure_candidates.append((pair_deadline, "pair-timeout"))
+
+        total_deadline = attempt.activated_at + self._d4_total_window
+        if match.elapsed_time > total_deadline + 1e-9:
+            failure_candidates.append((total_deadline, "total-timeout"))
+
+        if failure_candidates:
+            failure_time, reason = min(failure_candidates, key=lambda item: item[0])
+            self._fail_d4_attempt(team_id, failure_time, reason)
+
+    def _advance_rebuild(self, match: "Match", dt: float) -> None:
+        if dt <= 0:
+            return
+        for team_id in sorted(self._team_states):
+            state = self._team_states[team_id]
+            outpost = self._outpost_by_team[team_id]
+            if outpost.alive or state.outpost_rebuild_opportunities <= 0:
+                state.rebuild_progress_by_robot.clear()
+                continue
+
+            zone = self._rebuild_zone_by_team[team_id]
+            eligible = [
+                robot
+                for robot in match.robots
+                if robot.team == team_id
+                and robot.alive
+                and not self._is_weak(robot)
+                and robot.type in _REBUILD_ROBOT_TYPES
+                and zone.contains(robot.position)
+            ]
+            eligible_ids = {robot.id for robot in eligible}
+            for robot_id in list(state.rebuild_progress_by_robot):
+                if robot_id not in eligible_ids:
+                    del state.rebuild_progress_by_robot[robot_id]
+
+            for robot in sorted(eligible, key=lambda item: item.id):
+                progress = state.rebuild_progress_by_robot.get(robot.id, 0.0) + dt
+                state.rebuild_progress_by_robot[robot.id] = progress
+                if progress + 1e-9 < self._rebuild_duration(robot.type):
+                    continue
+
+                outpost.alive = True
+                outpost.hp = min(self._rebuilt_outpost_hp, outpost.max_hp)
+                state.outpost_rebuild_opportunities -= 1
+                state.rebuild_progress_by_robot.clear()
+                break
+
+    def _rebuild_duration(self, robot_type: str) -> float:
+        if robot_type == "engineer":
+            return self._engineer_rebuild_duration
+        return self._default_rebuild_duration
+
+    def evaluate_result(self, match: "Match") -> MatchResult | None:
+        bases = self._base_by_team
+        if (
+            match.elapsed_time < self.time_limit
+            and all(base.alive for base in bases.values())
+        ):
+            return None
+
+        team_ids = (
+            match.config.scenario.teams["red"].team_id,
+            match.config.scenario.teams["blue"].team_id,
+        )
+        first, second = team_ids
+        base_hp = {team_id: bases[team_id].hp for team_id in team_ids}
+        if base_hp[first] != base_hp[second]:
+            return MatchResult(first if base_hp[first] > base_hp[second] else second)
+
+        first_state = self._team_states[first]
+        second_state = self._team_states[second]
+        if (
+            not first_state.outpost_ever_destroyed
+            and not second_state.outpost_ever_destroyed
+        ):
+            outpost_hp = {
+                team_id: self._outpost_by_team[team_id].hp for team_id in team_ids
+            }
+            if outpost_hp[first] != outpost_hp[second]:
+                return MatchResult(
+                    first if outpost_hp[first] > outpost_hp[second] else second
+                )
+
+        if (
+            first_state.outpost_ever_destroyed
+            != second_state.outpost_ever_destroyed
+        ):
+            return MatchResult(
+                second if first_state.outpost_ever_destroyed else first
+            )
+
+        first_damage = self.attack_damage_by_team[first]
+        second_damage = self.attack_damage_by_team[second]
+        if first_damage != second_damage:
+            return MatchResult(first if first_damage > second_damage else second)
+
+        remaining_hp = {
+            team_id: sum(
+                robot.hp
+                for robot in match.robots
+                if robot.team == team_id and robot.type != "drone"
+            )
+            for team_id in team_ids
+        }
+        if remaining_hp[first] != remaining_hp[second]:
+            return MatchResult(
+                first if remaining_hp[first] > remaining_hp[second] else second
+            )
+        return MatchResult(None)
+
+
+def _parse_level_thresholds(
+    value: Any, document: RuleDocument
+) -> dict[int, float]:
+    field = "experience.level_thresholds"
+    if not isinstance(value, list) or len(value) != 10:
+        raise ConfigError(f"{document.path}: `{field}` 必须包含 Lv1～Lv10 共 10 行")
+
+    parsed: dict[int, float] = {}
+    for index, row in enumerate(value):
+        row_field = f"{field}[{index}]"
+        if not isinstance(row, dict) or set(row) != {"level", "experience"}:
+            raise ConfigError(
+                f"{document.path}: `{row_field}` 必须只包含 level、experience"
+            )
+        level = row.get("level")
+        experience = row.get("experience")
+        if not isinstance(level, int) or isinstance(level, bool) or level <= 0:
+            raise ConfigError(f"{document.path}: `{row_field}.level` 必须是正整数")
+        if level in parsed:
+            raise ConfigError(f"{document.path}: `{field}` 等级 {level} 重复")
+        if (
+            not isinstance(experience, (int, float))
+            or isinstance(experience, bool)
+            or not math.isfinite(experience)
+            or experience < 0
+        ):
+            raise ConfigError(
+                f"{document.path}: `{row_field}.experience` 必须是非负数字"
+            )
+        parsed[level] = float(experience)
+
+    if set(parsed) != set(range(1, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须完整覆盖 Lv1～Lv10")
+    if parsed[1] != 0:
+        raise ConfigError(f"{document.path}: `{field}` Lv1 必须从 0 XP 开始")
+    if any(parsed[level] <= parsed[level - 1] for level in range(2, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须随等级严格递增")
+    return parsed
+
+
+def _parse_performance_rows(
+    value: Any,
+    stat_fields: tuple[str, ...],
+    document: RuleDocument,
+    field: str,
+) -> dict[int, dict[str, int]]:
+    if not isinstance(value, list) or len(value) != 10:
+        raise ConfigError(f"{document.path}: `{field}` 必须包含 Lv1～Lv10 共 10 行")
+
+    parsed: dict[int, dict[str, int]] = {}
+    expected_keys = {"level", *stat_fields}
+    for index, row in enumerate(value):
+        row_field = f"{field}[{index}]"
+        if not isinstance(row, dict) or set(row) != expected_keys:
+            raise ConfigError(
+                f"{document.path}: `{row_field}` 字段不完整或包含未知字段"
+            )
+        level = row.get("level")
+        if not isinstance(level, int) or isinstance(level, bool) or level <= 0:
+            raise ConfigError(f"{document.path}: `{row_field}.level` 必须是正整数")
+        if level in parsed:
+            raise ConfigError(f"{document.path}: `{field}` 等级 {level} 重复")
+
+        stats: dict[str, int] = {}
+        for stat in stat_fields:
+            value_at_level = row.get(stat)
+            if (
+                not isinstance(value_at_level, int)
+                or isinstance(value_at_level, bool)
+                or value_at_level <= 0
+            ):
+                raise ConfigError(
+                    f"{document.path}: `{row_field}.{stat}` 必须是正整数"
+                )
+            stats[stat] = value_at_level
+        parsed[level] = stats
+
+    if set(parsed) != set(range(1, 11)):
+        raise ConfigError(f"{document.path}: `{field}` 必须完整覆盖 Lv1～Lv10")
+    return parsed
+
+
+def _mapping(
+    data: Mapping[str, Any], key: str, document: RuleDocument
+) -> Mapping[str, Any]:
+    value = data.get(key)
+    if not isinstance(value, dict):
+        raise ConfigError(f"{document.path}: `{key}` 必须是 YAML 字典")
+    return value
+
+
+def _string(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{document.path}: `{field}` 必须是非空字符串")
+    return value.strip()
+
+
+def _nonnegative_number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负数字")
+    return float(value)
+
+
+def _fraction(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 < value <= 1
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须在 (0, 1] 范围内")
+    return float(value)
+
+
+def _number(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> float:
+    value = data.get(key)
+    valid = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+    if not valid:
+        raise ConfigError(f"{document.path}: `{field}` 必须是大于 0 的数字")
+    return float(value)
+
+
+def _positive_integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是正整数")
+    return value
+
+
+def _integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ConfigError(f"{document.path}: `{field}` 必须是整数")
+    return value
+
+
+def _nonnegative_integer(
+    data: Mapping[str, Any],
+    key: str,
+    document: RuleDocument,
+    field: str,
+) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{document.path}: `{field}` 必须是非负整数")
+    return value
+
+
+if TYPE_CHECKING:
+    from tarsgo_simulator.core.match import Match
