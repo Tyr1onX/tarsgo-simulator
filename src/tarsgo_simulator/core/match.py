@@ -16,8 +16,11 @@ from tarsgo_simulator.rules.registry import create_ruleset
 
 
 _AI_REPLAN_INTERVAL = 0.5
-_RMUC_AI_REPLAN_INTERVAL = 1.0
+_RMUC_AI_REPLAN_INTERVAL = 0.75
 _RMUC_AI_SEED = 2026
+_RMUC_AI_SCORE_JITTER = 0.07
+_RMUC_AI_STICKY_SECONDS = 2.25
+_RMUC_AI_SWITCH_MARGIN = 0.45
 _RMUC_RULE_ID = "rmuc-2026-region-v1.4.0"
 _RMUC_ROBOT_NAMES = {
     "hero": "英雄",
@@ -118,6 +121,16 @@ class Match:
         }
         self._ai_intents = {
             robot.id: "等待决策"
+            for robot in self.robots
+            if self._ai_controls(robot)
+        }
+        self._ai_target_keys = {
+            robot.id: None
+            for robot in self.robots
+            if self._ai_controls(robot)
+        }
+        self._ai_sticky_until = {
+            robot.id: 0.0
             for robot in self.robots
             if self._ai_controls(robot)
         }
@@ -430,34 +443,101 @@ class Match:
             zone.y + zone.height * (0.5 + dy),
         )
 
+    def _remember_ai_decision(
+        self,
+        robot: Robot,
+        target_key: str | None,
+        *,
+        sticky: bool = True,
+    ) -> None:
+        previous = self._ai_target_keys.get(robot.id)
+        self._ai_target_keys[robot.id] = target_key
+        if not sticky or target_key is None:
+            self._ai_sticky_until[robot.id] = self.elapsed_time
+        elif target_key != previous:
+            self._ai_sticky_until[robot.id] = (
+                self.elapsed_time + _RMUC_AI_STICKY_SECONDS
+            )
+
     def _set_ai_goal(
         self,
         robot: Robot,
         intent: str,
         goal: tuple[float, float],
+        *,
+        target_key: str | None = None,
+        sticky: bool = True,
     ) -> None:
         self._ai_intents[robot.id] = intent
+        self._remember_ai_decision(robot, target_key, sticky=sticky)
         if math.dist(robot.position, goal) <= self.map.collision_radius:
             robot.path.clear()
             return
         self._set_robot_destination(robot, goal)
 
-    def _weighted_ai_choice(
+    def _ai_target_occupancy(self, robot: Robot, target_key: str) -> int:
+        return sum(
+            1
+            for teammate in self.robots
+            if (
+                teammate.id != robot.id
+                and teammate.team == robot.team
+                and teammate.alive
+                and self._ai_target_keys.get(teammate.id) == target_key
+            )
+        )
+
+    def _occupancy_penalty(self, target_key: str, count: int) -> float:
+        if count <= 0:
+            return 0.0
+        if target_key.startswith("zone:fortress"):
+            return 1.20 * count
+        if target_key.startswith("zone:central"):
+            return 0.90 * count
+        if target_key.startswith("support:"):
+            return 0.85 * count
+        if target_key.startswith("robot:"):
+            return 0.55 * count
+        if target_key.startswith("structure:"):
+            return 0.40 * count
+        return 0.45 * count
+
+    def _choose_utility_candidate(
         self,
         robot: Robot,
-        candidates: list[tuple[str, tuple[float, float], float]],
-    ) -> tuple[str, tuple[float, float]] | None:
+        candidates: list[tuple[str, str, tuple[float, float], float]],
+    ) -> tuple[str, str, tuple[float, float], float] | None:
         if not candidates:
             return None
-        total = math.fsum(weight for _intent, _goal, weight in candidates)
-        pick = self._rmuc_ai_rng[robot.id].random() * total
-        running = 0.0
-        for intent, goal, weight in candidates:
-            running += weight
-            if pick <= running:
-                return intent, goal
-        intent, goal, _weight = candidates[-1]
-        return intent, goal
+
+        rng = self._rmuc_ai_rng[robot.id]
+        scored: list[
+            tuple[float, str, str, tuple[float, float], float]
+        ] = []
+        for target_key, intent, goal, base_score in candidates:
+            occupancy = self._ai_target_occupancy(robot, target_key)
+            score = (
+                base_score
+                - self._occupancy_penalty(target_key, occupancy)
+                + (rng.random() * 2.0 - 1.0) * _RMUC_AI_SCORE_JITTER
+            )
+            scored.append((score, target_key, intent, goal, base_score))
+
+        scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+        best = scored[0]
+        current_key = self._ai_target_keys.get(robot.id)
+        sticky_active = self.elapsed_time < self._ai_sticky_until.get(robot.id, 0.0)
+        if sticky_active and current_key is not None and best[1] != current_key:
+            current = next(
+                (item for item in scored if item[1] == current_key),
+                None,
+            )
+            if current is not None and best[0] < current[0] + _RMUC_AI_SWITCH_MARGIN:
+                best = current
+
+        score, target_key, intent, goal, base_score = best
+        del score
+        return target_key, intent, goal, base_score
 
     def _rmuc_engineer_step(self, robot: Robot, display_state) -> bool:
         side = self._team_side(robot.team)
@@ -496,6 +576,7 @@ class Match:
                 robot,
                 "装配科技核心",
                 self._zone_goal(assembly_zone, robot),
+                target_key=f"zone:assembly:{side}",
             )
             if phase == "active" and current_step > 0 and assembly_zone.contains(robot.position):
                 confirm = getattr(self.ruleset, "confirm_d4_step", None)
@@ -509,6 +590,7 @@ class Match:
                 robot,
                 "装配科技核心",
                 self._zone_goal(assembly_zone, robot),
+                target_key=f"zone:assembly:{side}",
             )
             if assembly_zone.contains(robot.position):
                 confirm = getattr(self.ruleset, "confirm_tech_core_assembly", None)
@@ -525,6 +607,7 @@ class Match:
                 robot,
                 "获取能量单元",
                 self._zone_goal(resource_zone, robot),
+                target_key=f"zone:resource:{side}",
             )
             if resource_zone.contains(robot.position):
                 pickup = getattr(self.ruleset, "pickup_energy_unit", None)
@@ -536,6 +619,7 @@ class Match:
             robot,
             "装配科技核心",
             self._zone_goal(assembly_zone, robot),
+            target_key=f"zone:assembly:{side}",
         )
         if assembly_zone.contains(robot.position):
             start = getattr(self.ruleset, "start_tech_core_assembly", None)
@@ -545,42 +629,89 @@ class Match:
                     confirm(self, robot)
         return True
 
-    def _rmuc_ai_step(self, robot: Robot, display_state) -> None:
-        if not robot.alive:
-            robot.path.clear()
-            self._ai_intents[robot.id] = "等待复活"
-            return
+    def _support_goal(
+        self,
+        engineer: Robot,
+        protector: Robot,
+    ) -> tuple[float, float]:
+        combat_peers = sorted(
+            (
+                item
+                for item in self.robots
+                if (
+                    item.team == protector.team
+                    and item.type != "engineer"
+                    and item.alive
+                )
+            ),
+            key=lambda item: (item.type, item.id),
+        )
+        slot = combat_peers.index(protector) if protector in combat_peers else 0
+        angles = (math.pi, math.pi / 2, -math.pi / 2, 0.0, 3 * math.pi / 4)
+        angle = angles[slot % len(angles)]
+        if self._team_side(protector.team) == "blue":
+            angle = math.pi - angle
+        distance = max(70.0, self.map.collision_radius * 3.5)
+        goal = (
+            min(
+                self.map.width,
+                max(0.0, engineer.position[0] + math.cos(angle) * distance),
+            ),
+            min(
+                self.map.height,
+                max(0.0, engineer.position[1] + math.sin(angle) * distance),
+            ),
+        )
+        return goal if self.map.is_passable(goal) else engineer.position
 
+    def _defense_goal(
+        self,
+        robot: Robot,
+        structure: Structure,
+    ) -> tuple[float, float]:
         side = self._team_side(robot.team)
+        zone = self._zone(
+            f"{side}-outpost-buff"
+            if structure.type == "outpost"
+            else f"{side}-supply-buff"
+        )
+        return (
+            self._zone_goal(zone, robot)
+            if zone is not None
+            else structure.position
+        )
+
+    def _rmuc_tactical_candidates(
+        self,
+        robot: Robot,
+        display_state,
+    ) -> list[tuple[str, str, tuple[float, float], float]]:
+        side = self._team_side(robot.team)
+        field_scale = max(self.map.width, self.map.height)
+        candidates: list[tuple[str, str, tuple[float, float], float]] = []
+
+        hp_ratio = robot.hp / robot.max_hp if robot.max_hp else 0.0
         supply_zone = self._zone(f"{side}-supply-buff")
-        if supply_zone is None:
-            return
-        supply_goal = self._zone_goal(supply_zone, robot)
+        if supply_zone is not None:
+            supply_goal = self._zone_goal(supply_zone, robot)
+            if hp_ratio <= 0.45:
+                candidates.append(
+                    (
+                        f"zone:supply:{side}",
+                        "回撤补给",
+                        supply_goal,
+                        3.35 + max(0.0, 0.45 - hp_ratio) * 6.0,
+                    )
+                )
+            candidates.append(
+                (
+                    f"zone:supply:{side}",
+                    "前往补给区",
+                    supply_goal,
+                    0.30,
+                )
+            )
 
-        if robot.hp / robot.max_hp <= 0.30:
-            self._set_ai_goal(robot, "回撤", supply_goal)
-            return
-
-        if robot.type == "engineer" and self._rmuc_engineer_step(robot, display_state):
-            return
-
-        projectiles = {
-            robot_id: count
-            for robot_id, _projectile, count in display_state.robot_projectiles
-        }
-        ammo = projectiles.get(robot.id)
-        low_ammo = ammo is not None and ammo <= (0 if robot.type == "hero" else 8)
-        if robot.type in {"hero", "infantry", "sentry"} and low_ammo:
-            if supply_zone.contains(robot.position):
-                exchange = getattr(self.ruleset, "exchange_projectiles", None)
-                purchased = bool(callable(exchange) and exchange(self, robot))
-                robot.path.clear()
-                self._ai_intents[robot.id] = "补充弹量" if purchased else "等待补给"
-            else:
-                self._set_ai_goal(robot, "前往补给区", supply_goal)
-            return
-
-        candidates: list[tuple[str, tuple[float, float], float]] = []
         enemy_robots = sorted(
             (
                 target
@@ -589,46 +720,186 @@ class Match:
             ),
             key=lambda target: (target.type, target.id),
         )
-        role_weight = {"hero": 1.35, "engineer": 1.0, "infantry": 1.2, "sentry": 0.9}
-        field_scale = max(self.map.width, self.map.height)
+        role_attack = {
+            "hero": 1.05,
+            "infantry": 1.25,
+            "sentry": 0.85,
+        }.get(robot.type, 0.10)
+        target_value = {
+            "hero": 0.70,
+            "engineer": 0.58,
+            "infantry": 0.52,
+            "sentry": 0.44,
+        }
         for target in enemy_robots:
             distance = math.dist(robot.position, target.position)
-            distance_weight = max(0.45, 1.35 - distance / field_scale)
-            name = _RMUC_ROBOT_NAMES.get(target.type, target.type)
+            distance_score = max(0.0, 0.78 * (1.0 - distance / field_scale))
+            target_hp_ratio = (
+                target.hp / target.max_hp if target.max_hp else 0.0
+            )
+            finish_bonus = 0.0
+            intent = f"追击敌方{_RMUC_ROBOT_NAMES.get(target.type, target.type)}"
+            if target_hp_ratio <= 0.30:
+                finish_bonus = 1.15 + (0.30 - target_hp_ratio) * 2.0
+                intent = "集火残血目标"
+            elif target_hp_ratio <= 0.45:
+                finish_bonus = (0.45 - target_hp_ratio) * 2.4
             candidates.append(
                 (
-                    f"追击敌方{name}",
+                    f"robot:{target.id}",
+                    intent,
                     target.position,
-                    role_weight.get(target.type, 1.0) * distance_weight,
+                    role_attack
+                    + target_value.get(target.type, 0.45)
+                    + distance_score
+                    + finish_bonus,
                 )
             )
 
-        enemy_structures = sorted(
+        enemy_structures = [
+            structure
+            for structure in self.structures
+            if structure.team != robot.team
+        ]
+        enemy_outpost = next(
+            (
+                structure
+                for structure in enemy_structures
+                if structure.type == "outpost"
+            ),
+            None,
+        )
+        outpost_alive = bool(enemy_outpost is not None and enemy_outpost.alive)
+        structure_role_score = {
+            "hero": {"outpost": 3.20, "base": 3.45},
+            "infantry": {"outpost": 1.85, "base": 1.95},
+            "sentry": {"outpost": 1.15, "base": 1.10},
+        }.get(robot.type, {"outpost": 0.10, "base": 0.10})
+        for structure in sorted(
+            enemy_structures,
+            key=lambda item: (item.type, item.id),
+        ):
+            if not structure.alive or not self.ruleset.can_target(structure):
+                continue
+            if structure.type == "base" and outpost_alive:
+                score = 0.35
+            else:
+                score = structure_role_score.get(structure.type, 0.10)
+                distance = math.dist(robot.position, structure.position)
+                score += max(0.0, 0.35 * (1.0 - distance / field_scale))
+            intent = (
+                "进攻前哨站"
+                if structure.type == "outpost"
+                else "进攻基地"
+            )
+            candidates.append(
+                (
+                    f"structure:{structure.id}",
+                    intent,
+                    structure.position,
+                    score,
+                )
+            )
+
+        own_structures = sorted(
             (
                 structure
                 for structure in self.structures
-                if structure.alive
-                and structure.team != robot.team
-                and self.ruleset.can_target(structure)
+                if structure.team == robot.team and structure.alive
             ),
-            key=lambda structure: (structure.type, structure.id),
+            key=lambda item: (item.type, item.id),
         )
-        for structure in enemy_structures:
+        role_defense = {
+            "hero": 0.35,
+            "infantry": 0.90,
+            "sentry": 1.55,
+        }.get(robot.type, 0.0)
+        if role_defense > 0:
+            for structure in own_structures:
+                hp_fraction = (
+                    structure.hp / structure.max_hp
+                    if structure.max_hp
+                    else 0.0
+                )
+                nearest_enemy = min(
+                    (
+                        math.dist(structure.position, enemy.position)
+                        for enemy in enemy_robots
+                    ),
+                    default=field_scale,
+                )
+                threatened = hp_fraction <= 0.70 or nearest_enemy <= 460.0
+                if not threatened:
+                    continue
+                threat_score = (
+                    max(0.0, 0.70 - hp_fraction) * 2.2
+                    + max(0.0, 1.20 - nearest_enemy / 460.0)
+                )
+                candidates.append(
+                    (
+                        f"defense:{structure.id}",
+                        (
+                            "防守前哨站"
+                            if structure.type == "outpost"
+                            else "防守基地"
+                        ),
+                        self._defense_goal(robot, structure),
+                        role_defense + threat_score,
+                    )
+                )
+
+        engineer = next(
+            (
+                teammate
+                for teammate in self.robots
+                if (
+                    teammate.team == robot.team
+                    and teammate.type == "engineer"
+                    and teammate.alive
+                )
+            ),
+            None,
+        )
+        if (
+            engineer is not None
+            and robot.type != "engineer"
+            and self._ai_intents.get(engineer.id) == "装配科技核心"
+        ):
+            support_score = {
+                "hero": 1.35,
+                "infantry": 1.95,
+                "sentry": 1.30,
+            }.get(robot.type, 0.0)
+            engineer_hp_ratio = (
+                engineer.hp / engineer.max_hp
+                if engineer.max_hp
+                else 0.0
+            )
+            support_score += max(0.0, 0.55 - engineer_hp_ratio) * 1.5
             candidates.append(
                 (
-                    "进攻敌方前哨站" if structure.type == "outpost" else "进攻敌方基地",
-                    structure.position,
-                    0.95 if structure.type == "outpost" else 0.55,
+                    f"support:{engineer.id}",
+                    "保护工程",
+                    self._support_goal(engineer, robot),
+                    support_score,
                 )
             )
 
         central = self._zone(f"{side}-central-elevated-buff")
-        if central is not None:
-            candidates.append(("前往中央区域", self._zone_goal(central, robot), 1.1))
-        for suffix in ("trapezoid-buff", "outpost-buff"):
-            zone = self._zone(f"{side}-{suffix}")
-            if zone is not None:
-                candidates.append(("前往防御增益区", self._zone_goal(zone, robot), 0.55))
+        central_score = {
+            "hero": 0.65,
+            "infantry": 1.35,
+            "sentry": 0.95,
+        }.get(robot.type, 0.0)
+        if central is not None and central_score > 0:
+            candidates.append(
+                (
+                    f"zone:central:{side}",
+                    "前往中央区域",
+                    self._zone_goal(central, robot),
+                    central_score,
+                )
+            )
 
         if robot.type in {"infantry", "sentry"}:
             own_outpost = next(
@@ -639,32 +910,137 @@ class Match:
                 ),
                 None,
             )
-            structure_status = dict(
-                (structure_id, status)
+            structure_status = {
+                structure_id: status
                 for structure_id, _hp, _max_hp, status
                 in display_state.structure_statuses
-            )
+            }
             fortress_ready = own_outpost is not None and (
-                not own_outpost.alive or "REBUILT" in structure_status.get(own_outpost.id, "")
+                not own_outpost.alive
+                or "REBUILT" in structure_status.get(own_outpost.id, "")
             )
             fortress = self._zone(f"{side}-fortress-buff")
             if fortress_ready and fortress is not None:
-                candidates.append(("占领堡垒", self._zone_goal(fortress, robot), 1.7))
+                fortress_score = (
+                    2.35 if robot.type == "infantry" else 2.65
+                )
+                candidates.append(
+                    (
+                        f"zone:fortress:{side}",
+                        "占领堡垒",
+                        self._zone_goal(fortress, robot),
+                        fortress_score,
+                    )
+                )
 
-        candidates.append(("前往补给区", supply_goal, 0.25))
-        choice = self._weighted_ai_choice(robot, candidates)
+        for suffix in ("trapezoid-buff", "outpost-buff"):
+            zone = self._zone(f"{side}-{suffix}")
+            if zone is not None and robot.type in {"infantry", "sentry"}:
+                candidates.append(
+                    (
+                        f"zone:{suffix}:{side}",
+                        "前往防御增益区",
+                        self._zone_goal(zone, robot),
+                        0.58 if robot.type == "infantry" else 0.78,
+                    )
+                )
+
+        return candidates
+
+    def _rmuc_ai_step(self, robot: Robot, display_state) -> None:
+        if not robot.alive:
+            robot.path.clear()
+            self._ai_intents[robot.id] = "等待复活"
+            self._remember_ai_decision(robot, None, sticky=False)
+            return
+
+        side = self._team_side(robot.team)
+        supply_zone = self._zone(f"{side}-supply-buff")
+        if supply_zone is None:
+            robot.path.clear()
+            self._ai_intents[robot.id] = "待机"
+            self._remember_ai_decision(robot, None, sticky=False)
+            return
+        supply_goal = self._zone_goal(supply_zone, robot)
+        hp_ratio = robot.hp / robot.max_hp if robot.max_hp else 0.0
+
+        if hp_ratio <= 0.28 or (robot.type == "engineer" and hp_ratio <= 0.40):
+            self._set_ai_goal(
+                robot,
+                "回撤补给",
+                supply_goal,
+                target_key=f"zone:supply:{side}",
+                sticky=False,
+            )
+            return
+
+        if robot.type == "engineer":
+            if self._rmuc_engineer_step(robot, display_state):
+                return
+            self._set_ai_goal(
+                robot,
+                "后方待命",
+                supply_goal,
+                target_key=f"zone:supply:{side}",
+            )
+            return
+
+        projectiles = {
+            robot_id: count
+            for robot_id, _projectile, count in display_state.robot_projectiles
+        }
+        ammo = projectiles.get(robot.id)
+        low_ammo = ammo is not None and ammo <= (0 if robot.type == "hero" else 8)
+        if low_ammo:
+            if supply_zone.contains(robot.position):
+                exchange = getattr(self.ruleset, "exchange_projectiles", None)
+                purchased = bool(callable(exchange) and exchange(self, robot))
+                robot.path.clear()
+                self._ai_intents[robot.id] = (
+                    "补充弹量" if purchased else "等待补给"
+                )
+                self._remember_ai_decision(
+                    robot,
+                    f"zone:supply:{side}",
+                    sticky=False,
+                )
+            else:
+                self._set_ai_goal(
+                    robot,
+                    "前往补给区",
+                    supply_goal,
+                    target_key=f"zone:supply:{side}",
+                    sticky=False,
+                )
+            return
+
+        candidates = self._rmuc_tactical_candidates(robot, display_state)
+        choice = self._choose_utility_candidate(robot, candidates)
         if choice is None:
             robot.path.clear()
             self._ai_intents[robot.id] = "待机"
+            self._remember_ai_decision(robot, None, sticky=False)
             return
-        intent, goal = choice
-        if intent.startswith("追击敌方"):
+
+        target_key, intent, goal, _score = choice
+        target_is_attackable = target_key.startswith(("robot:", "structure:"))
+        if target_is_attackable:
             distance = math.dist(robot.position, goal)
-            if distance <= robot.attack_range and self.map.has_line_of_sight(robot.position, goal):
+            if (
+                distance <= robot.attack_range
+                and self.map.has_line_of_sight(robot.position, goal)
+            ):
                 robot.path.clear()
                 self._ai_intents[robot.id] = intent
+                self._remember_ai_decision(robot, target_key)
                 return
-        self._set_ai_goal(robot, intent, goal)
+
+        self._set_ai_goal(
+            robot,
+            intent,
+            goal,
+            target_key=target_key,
+        )
 
     def _update_ai(self, dt: float) -> None:
         if self._rmuc_spectator_ai:
