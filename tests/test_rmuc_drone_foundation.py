@@ -77,6 +77,7 @@ def test_drone_official_launcher_allowance_and_free_air_support_cycle() -> None:
     drone.position = (helipad[0] + 1.0, helipad[1])
     assert rules.can_attack(drone)
 
+    match.elapsed_time = 10.0
     rules._advance_drone_air_support(match, 10.0)
     assert rules.drone_air_support_available(drone.id) == pytest.approx(20.0)
 

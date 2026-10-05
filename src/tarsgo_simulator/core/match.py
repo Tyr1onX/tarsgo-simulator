@@ -983,6 +983,7 @@ class Match:
                 robot.id
             )
         )
+        team_coins = dict(display_state.coins).get(robot.team, 0)
 
         if not active:
             robot.path.clear()
@@ -990,14 +991,27 @@ class Match:
                 self._ai_intents[robot.id] = "空中弹量耗尽"
                 self._remember_ai_decision(robot, None, sticky=False)
                 return
-            if available <= 1e-9:
+            if available <= 1e-9 and team_coins <= 0:
                 self._ai_intents[robot.id] = "等待空中支援"
                 self._remember_ai_decision(robot, None, sticky=False)
                 return
             start = getattr(self.ruleset, "start_drone_air_support", None)
             started = bool(callable(start) and start(self, robot))
-            self._ai_intents[robot.id] = (                "发起空中支援" if started else "等待空中支援"
+            self._ai_intents[robot.id] = (
+                "金币续航空中支援"
+                if started and available <= 1e-9
+                else "发起空中支援"
+                if started
+                else "等待空中支援"
             )
+            self._remember_ai_decision(robot, None, sticky=False)
+            return
+
+        if allowance <= 0:
+            pause = getattr(self.ruleset, "pause_drone_air_support", None)
+            if callable(pause):
+                pause(robot)
+            self._ai_intents[robot.id] = "空中弹量耗尽"
             self._remember_ai_decision(robot, None, sticky=False)
             return
 

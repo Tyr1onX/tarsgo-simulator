@@ -36,7 +36,7 @@ class _RobotProgressionState:
 
 @dataclass
 class _DroneAirSupportState:
-    free_seconds: float
+    available_seconds: float
     active: bool = False
     next_grant_at: float = 60.0
 
@@ -306,6 +306,7 @@ class RMUC2026RegionalRules:
             "initial_free_air_support_seconds",
             "periodic_free_grant_interval_seconds",
             "periodic_free_grant_seconds",
+            "paid_cost_per_second",
             "damage_applicable",
             "recovery_and_respawn",
             "chassis_power_overlimit",
@@ -338,11 +339,18 @@ class RMUC2026RegionalRules:
             document,
             "drone_foundation.periodic_free_grant_seconds",
         )
+        self._drone_paid_cost_per_second = _positive_integer(
+            drone,
+            "paid_cost_per_second",
+            document,
+            "drone_foundation.paid_cost_per_second",
+        )
         if (
             self._drone_projectile_muzzle_velocity_limit_mps != 25
             or self._drone_initial_free_air_support != 30
             or self._drone_periodic_grant_interval != 60
             or self._drone_periodic_grant != 20
+            or self._drone_paid_cost_per_second != 1
             or drone.get("damage_applicable") is not False
             or drone.get("recovery_and_respawn") is not False
             or drone.get("chassis_power_overlimit") is not False
@@ -2571,7 +2579,7 @@ class RMUC2026RegionalRules:
                 (
                     robot_id,
                     state.active,
-                    state.free_seconds,
+                    state.available_seconds,
                 )
                 for robot_id, state in sorted(
                     self._drone_air_support_by_robot.items()
@@ -2603,7 +2611,19 @@ class RMUC2026RegionalRules:
 
     def drone_air_support_available(self, robot_id: str) -> float:
         state = self._drone_air_support_by_robot.get(robot_id)
-        return state.free_seconds if state is not None else 0.0
+        return state.available_seconds if state is not None else 0.0
+
+    def _purchase_drone_air_support_second(
+        self,
+        drone: Robot,
+        state: _DroneAirSupportState,
+    ) -> bool:
+        economy = self._economy_by_team.get(drone.team)
+        if economy is None or economy.coins < self._drone_paid_cost_per_second:
+            return False
+        economy.coins -= self._drone_paid_cost_per_second
+        state.available_seconds += 1.0
+        return True
 
     def start_drone_air_support(self, match: "Match", drone: Robot) -> bool:
         state = self._drone_air_support_by_robot.get(drone.id)
@@ -2613,7 +2633,11 @@ class RMUC2026RegionalRules:
             or self._robots_by_id.get(drone.id) is not drone
             or state is None
             or state.active
-            or state.free_seconds <= 1e-9
+        ):
+            return False
+        if (
+            state.available_seconds <= 1e-9
+            and not self._purchase_drone_air_support_second(drone, state)
         ):
             return False
         state.active = True
@@ -4444,7 +4468,7 @@ class RMUC2026RegionalRules:
         }
         self._drone_air_support_by_robot = {
             robot.id: _DroneAirSupportState(
-                free_seconds=self._drone_initial_free_air_support,
+                available_seconds=self._drone_initial_free_air_support,
                 next_grant_at=self._drone_periodic_grant_interval,
             )
             for robot in match.robots
@@ -4681,26 +4705,66 @@ class RMUC2026RegionalRules:
             if robot.type != "drone"
         }
 
+    def _consume_drone_air_support_time(
+        self,
+        drone: Robot,
+        state: _DroneAirSupportState,
+        duration: float,
+    ) -> None:
+        remaining = max(0.0, duration)
+        while state.active and remaining > 1e-9:
+            if (
+                state.available_seconds <= 1e-9
+                and not self._purchase_drone_air_support_second(drone, state)
+            ):
+                state.available_seconds = 0.0
+                self.pause_drone_air_support(drone)
+                return
+            consumed = min(remaining, state.available_seconds)
+            state.available_seconds -= consumed
+            remaining -= consumed
+            if state.available_seconds <= 1e-9:
+                state.available_seconds = 0.0
+
     def _advance_drone_air_support(
         self,
         match: "Match",
         dt: float,
     ) -> None:
         settlement_end = min(match.elapsed_time, self._time_limit)
+        settlement_start = max(0.0, settlement_end - max(0.0, dt))
         for robot_id, state in self._drone_air_support_by_robot.items():
+            drone = self._robots_by_id[robot_id]
+            cursor = settlement_start
+            while cursor < settlement_end - 1e-9:
+                segment_end = min(settlement_end, state.next_grant_at)
+                if state.active and segment_end > cursor:
+                    self._consume_drone_air_support_time(
+                        drone,
+                        state,
+                        segment_end - cursor,
+                    )
+                cursor = segment_end
+                if (
+                    state.next_grant_at <= cursor + 1e-9
+                    and state.next_grant_at < self._time_limit - 1e-9
+                ):
+                    state.available_seconds += self._drone_periodic_grant
+                    state.next_grant_at += self._drone_periodic_grant_interval
+
             while (
                 state.next_grant_at <= settlement_end + 1e-9
                 and state.next_grant_at < self._time_limit - 1e-9
             ):
-                state.free_seconds += self._drone_periodic_grant
+                state.available_seconds += self._drone_periodic_grant
                 state.next_grant_at += self._drone_periodic_grant_interval
 
-            if not state.active or dt <= 0:
-                continue
-            state.free_seconds = max(0.0, state.free_seconds - dt)
-            if state.free_seconds <= 1e-9:
-                state.free_seconds = 0.0
-                drone = self._robots_by_id[robot_id]
+            if (
+                state.active
+                and state.available_seconds <= 1e-9
+                and settlement_end < self._time_limit - 1e-9
+                and not self._purchase_drone_air_support_second(drone, state)
+            ):
                 self.pause_drone_air_support(drone)
 
     def update(self, match: "Match", dt: float) -> None:
