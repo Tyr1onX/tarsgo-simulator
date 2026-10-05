@@ -143,6 +143,12 @@ class Match:
             if self._ai_controls(robot)
         }
         self._rmuc_ai_rng = self._build_rmuc_ai_rng()
+        self._rmuc_radar_ai_elapsed = {
+            team_id: 0.0 for team_id in sorted({robot.team for robot in self.robots})
+        }
+        self._rmuc_radar_ai_laser_active = {
+            team_id: False for team_id in self._rmuc_radar_ai_elapsed
+        }
         self.ruleset.reset(self)
 
     @property
@@ -420,6 +426,9 @@ class Match:
                     result[robot.id] = random.Random(
                         f"{_RMUC_AI_SEED}:{robot_type}:{index}"
                     )
+            result[f"radar:{team_id}"] = random.Random(
+                f"{_RMUC_AI_SEED}:radar"
+            )
         return result
 
     def _team_side(self, team_id: str) -> str:
@@ -1204,11 +1213,84 @@ class Match:
             target_key=target_key,
         )
 
+    def _update_rmuc_radar_ai(self, dt: float, display_state) -> None:
+        set_laser = getattr(self.ruleset, "set_radar_anti_drone_laser", None)
+        if not callable(set_laser):
+            return
+
+        support_by_robot = {
+            robot_id: active
+            for robot_id, active, _remaining in display_state.drone_air_support
+        }
+        anti_drone = {
+            robot_id: (
+                source_team_id,
+                lock_remaining,
+                remaining_uses,
+            )
+            for (
+                robot_id,
+                source_team_id,
+                _progress,
+                _threshold,
+                lock_remaining,
+                _activations,
+                remaining_uses,
+                _illuminated,
+            ) in display_state.radar_anti_drone
+        }
+        drones = {
+            robot.team: robot
+            for robot in self.robots
+            if robot.type == "drone"
+        }
+
+        for source_team_id in sorted(self._rmuc_radar_ai_elapsed):
+            target = next(
+                (
+                    drone
+                    for team_id, drone in sorted(drones.items())
+                    if team_id != source_team_id
+                ),
+                None,
+            )
+            state = anti_drone.get(target.id) if target is not None else None
+            eligible = bool(
+                target is not None
+                and state is not None
+                and state[0] == source_team_id
+                and support_by_robot.get(target.id, False)
+                and state[1] <= 1e-9
+                and state[2] > 0
+            )
+
+            elapsed = self._rmuc_radar_ai_elapsed[source_team_id] + dt
+            if not eligible:
+                self._rmuc_radar_ai_laser_active[source_team_id] = False
+                elapsed = 0.0
+            elif elapsed >= _RMUC_AI_REPLAN_INTERVAL:
+                ticks = int(elapsed // _RMUC_AI_REPLAN_INTERVAL)
+                elapsed %= _RMUC_AI_REPLAN_INTERVAL
+                rng = self._rmuc_ai_rng[f"radar:{source_team_id}"]
+                for _ in range(ticks):
+                    self._rmuc_radar_ai_laser_active[source_team_id] = (
+                        rng.random() < 0.80
+                    )
+
+            self._rmuc_radar_ai_elapsed[source_team_id] = elapsed
+            if target is not None:
+                set_laser(
+                    source_team_id,
+                    target,
+                    self._rmuc_radar_ai_laser_active[source_team_id] and eligible,
+                )
+
     def _update_ai(self, dt: float) -> None:
         if self._rmuc_spectator_ai:
             display_state = self.ruleset.display_state
             if display_state is None:
                 return
+            self._update_rmuc_radar_ai(dt, display_state)
             for robot in sorted(self.robots, key=lambda item: item.id):
                 elapsed = self._ai_replan_elapsed[robot.id] + dt
                 if not robot.alive:

@@ -684,6 +684,23 @@ def _selected_unit_lines(
         if display_state is not None
         else {}
     )
+    radar_anti_drone = (
+        {
+            robot_id: (progress, threshold, lock_remaining, remaining_uses, illuminated)
+            for (
+                robot_id,
+                _source_team_id,
+                progress,
+                threshold,
+                lock_remaining,
+                _activations,
+                remaining_uses,
+                illuminated,
+            ) in display_state.radar_anti_drone
+        }
+        if display_state is not None
+        else {}
+    )
 
     title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
     progression_state = progression.get(robot.id)
@@ -700,6 +717,19 @@ def _selected_unit_lines(
             coins = dict(display_state.coins).get(robot.team, 0)
             lines.append(
                 f"空中支援  {'执行中' if active else '停机坪'} · {remaining:.1f}s · 金币 {coins}"
+            )
+        anti_drone = radar_anti_drone.get(robot.id)
+        if anti_drone is not None:
+            progress, threshold, lock_remaining, remaining_uses, illuminated = anti_drone
+            lock_text = (
+                f"锁定 {lock_remaining:.1f}s"
+                if lock_remaining > 0
+                else "瞄准中"
+                if illuminated
+                else "待机"
+            )
+            lines.append(
+                f"雷达反制  {lock_text} · P {progress:g}/{threshold:g} · 剩余 {remaining_uses}"
             )
     else:
         lines.append(f"生命      {robot.hp} / {robot.max_hp}")
@@ -1117,6 +1147,19 @@ def _draw_selected_unit_card(
         robot_id: (active, remaining)
         for robot_id, active, remaining in display_state.drone_air_support
     }
+    radar_anti_drone = {
+        robot_id: (progress, threshold, lock_remaining, remaining_uses, illuminated)
+        for (
+            robot_id,
+            _source_team_id,
+            progress,
+            threshold,
+            lock_remaining,
+            _activations,
+            remaining_uses,
+            illuminated,
+        ) in display_state.radar_anti_drone
+    }
 
     team_color = _rmuc_team_color(match, robot.team)
     pygame.draw.rect(
@@ -1164,6 +1207,25 @@ def _draw_selected_unit_card(
             (x, y),
         )
         y += 25
+        anti_drone = radar_anti_drone.get(robot.id)
+        if anti_drone is not None:
+            progress, threshold, lock_remaining, remaining_uses, illuminated = anti_drone
+            state_text = (
+                f"锁定 {lock_remaining:.1f}s"
+                if lock_remaining > 0
+                else "瞄准中"
+                if illuminated
+                else "待机"
+            )
+            radar_text = (
+                f"雷达反制 · {state_text} · P {progress:g}/{threshold:g} · "
+                f"剩余 {remaining_uses}"
+            )
+            screen.blit(
+                small_font.render(radar_text, True, MUTED_COLOR),
+                (x, y),
+            )
+            y += 25
     else:
         hp_label = small_font.render(
             f"HP  {robot.hp} / {robot.max_hp}",
