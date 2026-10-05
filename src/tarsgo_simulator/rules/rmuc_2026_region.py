@@ -23,7 +23,9 @@ _GROUND_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
 _REBUILD_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
 _EXPERIENCE_ROBOT_TYPES = {"hero", "infantry", "drone"}
 _HP_PERFORMANCE_ROBOT_TYPES = {"hero", "infantry"}
-_RADAR_VULNERABILITY_ROBOT_TYPES = set(_RMUC_ROBOT_TYPES)
+# V1.4.0 Radar marking can track Drone, but the vulnerability effect itself
+# is explicitly limited to ground robots.
+_RADAR_VULNERABILITY_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
 
 
 @dataclass

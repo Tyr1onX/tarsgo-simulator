@@ -216,15 +216,15 @@ def test_large_energy_mechanism_applies_team_attack_defense_and_cooling_to_drone
     assert match.apply_damage(drone, 20, source_team_id=BLUE) == 0
 
 
-def test_radar_vulnerability_can_mark_drone_but_still_cannot_create_hp_loss() -> None:
+def test_radar_vulnerability_effect_is_ground_only_for_drone() -> None:
     match = _match()
     rules = match.ruleset
     drone = _robot(match, "tarsgo-drone")
 
     assert rules.start_drone_air_support(match, drone)
-    assert rules.set_radar_vulnerability(BLUE, drone, 0.15)
-    assert rules._current_radar_vulnerability(drone) == pytest.approx(0.15)
-    assert rules._effective_vulnerability(drone) == pytest.approx(0.15)
+    assert not rules.set_radar_vulnerability(BLUE, drone, 0.15)
+    assert rules._current_radar_vulnerability(drone) == 0.0
+    assert rules._effective_vulnerability(drone) == 0.0
     assert match.apply_damage(drone, 20, source_team_id=BLUE) == 0
 
 
