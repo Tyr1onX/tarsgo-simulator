@@ -21,6 +21,7 @@ _RMUC_AI_SEED = 2026
 _RMUC_AI_SCORE_JITTER = 0.07
 _RMUC_AI_STICKY_SECONDS = 2.25
 _RMUC_AI_SWITCH_MARGIN = 0.45
+_RMUC_AI_STRATEGY_STICKY_SECONDS = 4.0
 _RMUC_RULE_ID = "rmuc-2026-region-v1.4.0"
 _RMUC_ROBOT_NAMES = {
     "hero": "英雄",
@@ -143,6 +144,20 @@ class Match:
             if self._ai_controls(robot)
         }
         self._rmuc_ai_rng = self._build_rmuc_ai_rng()
+        self._rmuc_ai_team_strategies = (
+            {
+                team_id: (
+                    "assault" if self._team_side(team_id) == "red" else "control"
+                )
+                for team_id in sorted({robot.team for robot in self.robots})
+            }
+            if self._rmuc_spectator_ai
+            else {}
+        )
+        self._rmuc_ai_strategy_changed_at = {
+            team_id: self.elapsed_time
+            for team_id in self._rmuc_ai_team_strategies
+        }
         self._rmuc_radar_ai_elapsed = {
             team_id: 0.0 for team_id in sorted({robot.team for robot in self.robots})
         }
@@ -164,6 +179,24 @@ class Match:
 
     def ai_intent(self, robot_id: str) -> str | None:
         return self._ai_intents.get(robot_id)
+
+    def ai_team_strategy(self, team_id: str) -> str | None:
+        """Return the spectator AI's current team-level strategy label."""
+        if not self._rmuc_spectator_ai:
+            return None
+        strategy = self._rmuc_ai_team_strategies.get(team_id)
+        if strategy is None:
+            return None
+        flavor = "主攻" if self._team_side(team_id) == "red" else "控场"
+        labels = {
+            "assault": "快速主攻",
+            "control": "区域控制",
+            "tech": f"科技推进 · {flavor}",
+            "focus": f"集火 · {flavor}",
+            "defend": f"防守 · {flavor}",
+            "return": "紧急回防",
+        }
+        return labels.get(strategy, labels["assault"])
 
     def _ai_controls(self, robot: Robot) -> bool:
         return self._rmuc_spectator_ai or not self.is_player_controlled(robot.id)
@@ -519,7 +552,7 @@ class Match:
         if target_key.startswith("zone:fortress"):
             return 1.20 * count
         if target_key.startswith("zone:central"):
-            return 0.90 * count
+            return 1.00 * count
         if target_key.startswith("support:"):
             return 0.85 * count
         if target_key.startswith("robot:"):
@@ -527,6 +560,196 @@ class Match:
         if target_key.startswith("structure:"):
             return 0.40 * count
         return 0.45 * count
+
+    def _desired_rmuc_team_strategy(self, team_id: str) -> str:
+        side = self._team_side(team_id)
+        own_structures = [
+            structure
+            for structure in self.structures
+            if structure.team == team_id and structure.type in {"base", "outpost"}
+        ]
+        enemies = [
+            robot
+            for robot in self.robots
+            if robot.alive and robot.team != team_id and robot.type != "drone"
+        ]
+        field_scale = max(self.map.width, self.map.height)
+        pressure = {
+            structure.type: (
+                structure,
+                structure.hp / structure.max_hp if structure.max_hp else 0.0,
+                min(
+                    (math.dist(structure.position, enemy.position) for enemy in enemies),
+                    default=field_scale,
+                ),
+            )
+            for structure in own_structures
+        }
+        base = pressure.get("base")
+        outpost = pressure.get("outpost")
+        if (
+            base is not None
+            and base[0].alive
+            and (
+                base[1] <= 0.30
+                or (base[1] <= 0.55 and base[2] <= 320.0)
+            )
+        ) or (
+            outpost is not None
+            and outpost[0].alive
+            and (
+                outpost[1] <= 0.18
+                or (outpost[1] <= 0.35 and outpost[2] <= 220.0)
+            )
+        ):
+            return "return"
+
+        if any(
+            structure.alive
+            and (
+                hp_ratio <= (0.45 if structure.type == "outpost" else 0.65)
+                or (hp_ratio <= 0.78 and nearest_enemy <= 380.0)
+            )
+            for structure, hp_ratio, nearest_enemy in pressure.values()
+        ):
+            return "defend"
+
+        if any(
+            (robot.hp / robot.max_hp if robot.max_hp else 0.0) <= 0.25
+            and self.ruleset.can_target(robot)
+            for robot in enemies
+        ):
+            return "focus"
+
+        engineer_alive = any(
+            robot.alive and robot.team == team_id and robot.type == "engineer"
+            for robot in self.robots
+        )
+        display_state = self.ruleset.display_state
+        if engineer_alive and display_state is not None:
+            core = next(
+                (
+                    (d1, d2, d3, d4, active)
+                    for owner, _cap, d1, d2, d3, d4, active, _outside
+                    in display_state.tech_core_status
+                    if owner == team_id
+                ),
+                None,
+            )
+            if core is not None and (
+                core[4] is not None or any(value == 0 for value in core[:4])
+            ):
+                return "tech"
+
+        side_default = "assault" if side == "red" else "control"
+        return side_default
+
+    def _refresh_rmuc_team_strategies(self) -> None:
+        if not self._rmuc_spectator_ai:
+            return
+        for team_id in sorted(self._rmuc_ai_team_strategies):
+            desired = self._desired_rmuc_team_strategy(team_id)
+            current = self._rmuc_ai_team_strategies[team_id]
+            if desired == current:
+                continue
+            changed_at = self._rmuc_ai_strategy_changed_at[team_id]
+            if (
+                desired != "return"
+                and self.elapsed_time - changed_at < _RMUC_AI_STRATEGY_STICKY_SECONDS
+            ):
+                continue
+            self._rmuc_ai_team_strategies[team_id] = desired
+            self._rmuc_ai_strategy_changed_at[team_id] = self.elapsed_time
+
+    def _rmuc_candidate_bonus(self, robot: Robot, target_key: str) -> float:
+        side = self._team_side(robot.team)
+        strategy = self._rmuc_ai_team_strategies.get(
+            robot.team,
+            "assault" if side == "red" else "control",
+        )
+        bonus = 0.0
+        is_structure = target_key.startswith("structure:")
+        is_enemy_robot = target_key.startswith("robot:")
+        is_defense = target_key.startswith("defense:")
+        is_support = target_key.startswith("support:")
+        is_control_zone = target_key.startswith(
+            (
+                "zone:central:",
+                "zone:fortress:",
+                "zone:trapezoid-buff:",
+                "zone:outpost-buff:",
+            )
+        )
+
+        if strategy == "focus" and is_enemy_robot:
+            target_id = target_key.removeprefix("robot:")
+            target = next(
+                (item for item in self.robots if item.id == target_id),
+                None,
+            )
+            if (
+                target is not None
+                and target.max_hp
+                and target.hp / target.max_hp <= 0.45
+            ):
+                bonus += 0.85
+        elif strategy == "tech" and is_support:
+            bonus += 0.72
+        elif strategy == "defend" and is_defense:
+            bonus += 1.35
+        elif strategy == "return" and is_defense:
+            bonus += 3.4
+
+        if strategy == "return":
+            if is_structure or is_enemy_robot:
+                bonus -= 0.85
+        elif strategy == "defend" and is_structure:
+            bonus -= 0.12
+
+        # Both sides use the same candidates with a small style-weight shift.
+        if side == "red":
+            if is_structure or is_enemy_robot:
+                bonus += 0.42
+            elif target_key.startswith("zone:central:"):
+                bonus -= 0.12
+        else:
+            if is_control_zone or is_defense:
+                bonus += 0.42
+            elif is_structure:
+                bonus -= 0.18
+
+        peers = sorted(
+            (
+                item
+                for item in self.robots
+                if item.team == robot.team and item.type == robot.type
+            ),
+            key=lambda item: item.id,
+        )
+        role_index = peers.index(robot) + 1 if robot in peers else 1
+        if robot.type == "hero":
+            bonus += 0.28 if is_structure else 0.0
+        elif robot.type == "infantry":
+            if role_index == 1:
+                bonus += 0.28 if (is_enemy_robot or is_structure) else 0.0
+                if is_control_zone:
+                    bonus -= 0.12
+            else:
+                bonus += 0.35 if (is_control_zone or is_defense) else 0.0
+                bonus += 0.22 if is_support else 0.0
+                if is_enemy_robot:
+                    bonus -= 0.28
+                elif is_structure:
+                    bonus -= 0.18
+        elif robot.type == "sentry":
+            bonus += (
+                0.36
+                if is_defense or target_key.startswith("zone:fortress:")
+                else 0.0
+            )
+            if is_structure:
+                bonus -= 0.24
+        return bonus
 
     def _choose_utility_candidate(
         self,
@@ -544,6 +767,7 @@ class Match:
             occupancy = self._ai_target_occupancy(robot, target_key)
             score = (
                 base_score
+                + self._rmuc_candidate_bonus(robot, target_key)
                 - self._occupancy_penalty(target_key, occupancy)
                 + (rng.random() * 2.0 - 1.0) * _RMUC_AI_SCORE_JITTER
             )
@@ -1290,6 +1514,7 @@ class Match:
             display_state = self.ruleset.display_state
             if display_state is None:
                 return
+            self._refresh_rmuc_team_strategies()
             self._update_rmuc_radar_ai(dt, display_state)
             for robot in sorted(self.robots, key=lambda item: item.id):
                 elapsed = self._ai_replan_elapsed[robot.id] + dt
