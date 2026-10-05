@@ -697,8 +697,9 @@ def _selected_unit_lines(
         support = drone_support.get(robot.id)
         if support is not None:
             active, remaining = support
+            coins = dict(display_state.coins).get(robot.team, 0)
             lines.append(
-                f"空中支援  {'执行中' if active else '停机坪'} · {remaining:.1f}s"
+                f"空中支援  {'执行中' if active else '停机坪'} · {remaining:.1f}s · 金币 {coins}"
             )
     else:
         lines.append(f"生命      {robot.hp} / {robot.max_hp}")
@@ -1153,8 +1154,10 @@ def _draw_selected_unit_card(
 
     if robot.type == "drone":
         active, remaining = drone_support.get(robot.id, (False, 0.0))
+        coins = dict(display_state.coins).get(robot.team, 0)
         support_text = (
-            f"空中支援 · {'执行中' if active else '停机坪'} · {remaining:.1f}s"
+            f"空中支援 · {'执行中' if active else '停机坪'} · "
+            f"{remaining:.1f}s · 金币 {coins}"
         )
         screen.blit(
             small_font.render(support_text, True, SHIELD_COLOR if active else MUTED_COLOR),
@@ -1994,8 +1997,7 @@ def _draw_virtual_shield(
         (*SHIELD_COLOR, 86),
         glow_center,
         glow_radius,
-        width=2,
-    )
+        width=2,    )
     screen.blit(        glow,
         (
             center[0] - glow_center[0],
