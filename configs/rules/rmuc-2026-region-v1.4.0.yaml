@@ -67,6 +67,17 @@ drone_foundation:
   chassis_power_overlimit: false
   capturable_buff_points: false
 
+# V1.4.0 §5.6.3 Radar anti-Drone laser countermeasure. The physical shrinking
+# detection area / active-light geometry is not modeled; the official P0
+# thresholds preserve the calculable difficulty increase.
+radar_anti_drone:
+  progress_max: 100
+  thresholds: [50, 100, 100]
+  detection_period_seconds: 0.1
+  decay_per_second: 0.5
+  lock_duration_seconds: 45
+  max_locks_per_match: 3
+
 remote_healing:
   eligible_types: [hero, infantry, sentry]
   effective_delay: 6
