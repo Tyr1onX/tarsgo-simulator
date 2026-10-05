@@ -34,11 +34,11 @@ class ProjectileVisualProfile:
 
 
 ROBOT_VISUAL_PROFILES = {
-    "hero": RobotVisualProfile(38, 26, 10, 30, 6),
-    "engineer": RobotVisualProfile(30, 30, 0, 0, 0, tool_arm_length=20),
-    "infantry": RobotVisualProfile(27, 20, 7, 23, 3),
-    "sentry": RobotVisualProfile(42, 24, 9, 26, 4),
-    "drone": RobotVisualProfile(32, 22, 7, 24, 3),
+    "hero": RobotVisualProfile(46, 28, 10, 31, 8),
+    "engineer": RobotVisualProfile(38, 28, 0, 0, 0, tool_arm_length=27),
+    "infantry": RobotVisualProfile(28, 20, 6, 19, 2),
+    "sentry": RobotVisualProfile(52, 30, 11, 25, 4),
+    "drone": RobotVisualProfile(40, 28, 0, 0, 0),
 }
 
 PROJECTILE_VISUAL_PROFILES = {

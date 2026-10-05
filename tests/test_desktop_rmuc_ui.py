@@ -23,6 +23,7 @@ def _cleanup_desktop_imports():
     if pygame is not None:
         pygame.quit()
     sys.modules.pop("tarsgo_simulator.desktop.app", None)
+    sys.modules.pop("tarsgo_simulator.desktop.icon", None)
     for module_name in list(sys.modules):
         if module_name == "pygame" or module_name.startswith("pygame."):
             sys.modules.pop(module_name, None)
@@ -181,6 +182,60 @@ def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
             if body_index != index
         )
         placed.append(label_rect)
+
+
+def test_normal_rmuc_map_omits_robot_codes_and_debug_restores_them() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.init()
+    match = _match()
+    labels = app._rmuc_robot_labels(match)
+
+    class RecordingFont:
+        def __init__(self, font):
+            self.font = font
+            self.rendered = []
+
+        def __getattr__(self, name):
+            return getattr(self.font, name)
+
+        def render(self, text, *args, **kwargs):
+            self.rendered.append(text)
+            return self.font.render(text, *args, **kwargs)
+
+    player_team = match.config.scenario.player_team
+    opponent_team = next(
+        team.team_id
+        for team in match.config.scenario.teams.values()
+        if team.team_id != player_team
+    )
+
+    def render_labels(debug_geometry: bool) -> list[str]:
+        recorder = RecordingFont(app.ui_font(12))
+        visual_state = app.CombatVisualState()
+        visual_state.reset(match)
+        app._draw(
+            pygame.Surface(app.WINDOW_SIZE),
+            app.ui_font(25),
+            app.ui_font(18),
+            match,
+            player_team,
+            opponent_team,
+            set(),
+            None,
+            app._viewport_for_match(match),
+            debug_geometry=debug_geometry,
+            visual_state=visual_state,
+            hud_font=recorder,
+        )
+        return [text for text in recorder.rendered if text in set(labels.values())]
+
+    normal_labels = render_labels(False)
+    debug_labels = render_labels(True)
+
+    assert len(debug_labels) - len(normal_labels) == sum(
+        robot.alive for robot in match.robots
+    )
 
 
 def test_team_system_text_is_fitted_to_panel_width() -> None:

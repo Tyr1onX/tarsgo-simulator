@@ -20,9 +20,11 @@ jobs:
           - os: windows-latest
             platform: windows
             data_separator: ";"
+            icon_format: ico
           - os: macos-latest
             platform: macos
             data_separator: ":"
+            icon_format: icns
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -35,8 +37,10 @@ jobs:
             requirements-dev.txt
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Generate application icons
+        run: python -m tarsgo_simulator.desktop.icon --output-dir build/app-icons
       - name: Build application
-        run: python -m PyInstaller --noconfirm --clean --windowed --name "TARS-Go-Simulator" --add-data "configs${{ matrix.data_separator }}configs" run_game.py
+        run: python -m PyInstaller --noconfirm --clean --windowed --name "TARS-Go-Simulator" --icon "build/app-icons/tarsgo.${{ matrix.icon_format }}" --add-data "configs${{ matrix.data_separator }}configs" run_game.py
       - name: Package macOS app
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent "dist/TARS-Go-Simulator.app" "TARS-Go-Simulator-macos.zip"
