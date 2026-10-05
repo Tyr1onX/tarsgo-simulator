@@ -164,6 +164,16 @@ class _RadarDoubleVulnerabilityState:
 
 
 @dataclass
+class _RadarAntiDroneState:
+    progress: float = 0.0
+    continuous_elapsed: float = 0.0
+    consecutive_ticks: int = 0
+    illuminated_by_team_id: str | None = None
+    lock_remaining: float = 0.0
+    activations: int = 0
+
+
+@dataclass
 class _RobotLifecycleState:
     disengaged_elapsed: float
     combat_activity_this_frame: bool = False
@@ -359,6 +369,39 @@ class RMUC2026RegionalRules:
             raise ConfigError(
                 f"{document.path}: drone_foundation 必须匹配 RMUC 2026 Regional V1.4.0"
             )
+
+        radar_anti_drone = _mapping(
+            document.data, "radar_anti_drone", document
+        )
+        if set(radar_anti_drone) != {
+            "progress_max",
+            "thresholds",
+            "detection_period_seconds",
+            "decay_per_second",
+            "lock_duration_seconds",
+            "max_locks_per_match",
+        }:
+            raise ConfigError(
+                f"{document.path}: radar_anti_drone 字段不完整或包含未知字段"
+            )
+        thresholds = radar_anti_drone.get("thresholds")
+        if (
+            radar_anti_drone.get("progress_max") != 100
+            or thresholds != [50, 100, 100]
+            or radar_anti_drone.get("detection_period_seconds") != 0.1
+            or radar_anti_drone.get("decay_per_second") != 0.5
+            or radar_anti_drone.get("lock_duration_seconds") != 45
+            or radar_anti_drone.get("max_locks_per_match") != 3
+        ):
+            raise ConfigError(
+                f"{document.path}: radar_anti_drone 必须匹配 RMUC 2026 Regional V1.4.0"
+            )
+        self._radar_anti_drone_progress_max = 100.0
+        self._radar_anti_drone_thresholds = (50.0, 100.0, 100.0)
+        self._radar_anti_drone_detection_period = 0.1
+        self._radar_anti_drone_decay_per_second = 0.5
+        self._radar_anti_drone_lock_duration = 45.0
+        self._radar_anti_drone_max_locks = 3
 
         economy = _mapping(document.data, "economy", document)
         if set(economy) != {
@@ -2293,6 +2336,7 @@ class RMUC2026RegionalRules:
         self._radar_double_vulnerability_by_team: dict[
             str, _RadarDoubleVulnerabilityState
         ] = {}
+        self._radar_anti_drone_by_robot: dict[str, _RadarAntiDroneState] = {}
         self._team_states: dict[str, _TeamStructureState] = {}
         self._base_by_team: dict[str, Structure] = {}
         self._outpost_by_team: dict[str, Structure] = {}
@@ -2585,6 +2629,25 @@ class RMUC2026RegionalRules:
                     self._drone_air_support_by_robot.items()
                 )
             ),
+            radar_anti_drone=tuple(
+                (
+                    robot_id,
+                    next(
+                        team_id
+                        for team_id in sorted(self._economy_by_team)
+                        if team_id != self._robots_by_id[robot_id].team
+                    ),
+                    state.progress,
+                    self._radar_anti_drone_threshold(state),
+                    state.lock_remaining,
+                    state.activations,
+                    self._radar_anti_drone_max_locks - state.activations,
+                    state.illuminated_by_team_id is not None,
+                )
+                for robot_id, state in sorted(
+                    self._radar_anti_drone_by_robot.items()
+                )
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:
@@ -2612,6 +2675,55 @@ class RMUC2026RegionalRules:
     def drone_air_support_available(self, robot_id: str) -> float:
         state = self._drone_air_support_by_robot.get(robot_id)
         return state.available_seconds if state is not None else 0.0
+
+    def _radar_anti_drone_threshold(
+        self, state: _RadarAntiDroneState
+    ) -> float:
+        index = min(state.activations, self._radar_anti_drone_max_locks - 1)
+        return self._radar_anti_drone_thresholds[index]
+
+    def radar_anti_drone_locked(self, robot_id: str) -> bool:
+        state = self._radar_anti_drone_by_robot.get(robot_id)
+        return state is not None and state.lock_remaining > 1e-9
+
+    def set_radar_anti_drone_laser(
+        self,
+        source_team_id: str,
+        target: Robot,
+        illuminated: bool,
+    ) -> bool:
+        state = self._radar_anti_drone_by_robot.get(target.id)
+        if (
+            target.type != "drone"
+            or self._robots_by_id.get(target.id) is not target
+            or state is None
+            or source_team_id not in self._economy_by_team
+            or source_team_id == target.team
+        ):
+            return False
+
+        if not illuminated:
+            if (
+                state.illuminated_by_team_id is not None
+                and state.illuminated_by_team_id != source_team_id
+            ):
+                return False
+            state.illuminated_by_team_id = None
+            state.continuous_elapsed = 0.0
+            state.consecutive_ticks = 0
+            return True
+
+        if (
+            state.activations >= self._radar_anti_drone_max_locks
+            or not self.drone_air_support_active(target.id)
+        ):
+            state.illuminated_by_team_id = None
+            state.continuous_elapsed = 0.0
+            state.consecutive_ticks = 0
+            return False
+
+        state.illuminated_by_team_id = source_team_id
+        return True
 
     def _purchase_drone_air_support_second(
         self,
@@ -2701,6 +2813,10 @@ class RMUC2026RegionalRules:
             and shooting_heat is not None
             and not shooting_heat.temporarily_locked
             and not shooting_heat.permanently_locked
+            and (
+                robot.type != "drone"
+                or not self.radar_anti_drone_locked(robot.id)
+            )
         )
 
     def can_target(self, target: DamageableTarget) -> bool:
@@ -4301,6 +4417,7 @@ class RMUC2026RegionalRules:
         self._advance_attack_buffs(frame_dt)
         self._advance_large_energy_mechanism_buffs(frame_dt)
         self._advance_radar_double_vulnerability(frame_dt)
+        self._advance_radar_anti_drone(frame_dt)
         self._advance_field_defense_occupancy(match, frame_dt)
         self._advance_fortress_occupancy(frame_dt)
         self._refresh_enemy_fortress_occupancy(match, frame_dt)
@@ -4371,6 +4488,69 @@ class RMUC2026RegionalRules:
             if state.remaining <= 1e-9:
                 state.remaining = 0.0
 
+    def _advance_radar_anti_drone(self, dt: float) -> None:
+        if dt <= 0:
+            return
+
+        for robot_id, state in self._radar_anti_drone_by_robot.items():
+            if state.lock_remaining > 0:
+                state.lock_remaining = max(0.0, state.lock_remaining - dt)
+                if state.lock_remaining <= 1e-9:
+                    state.lock_remaining = 0.0
+
+            if state.activations >= self._radar_anti_drone_max_locks:
+                state.progress = 0.0
+                state.continuous_elapsed = 0.0
+                state.consecutive_ticks = 0
+                state.illuminated_by_team_id = None
+                continue
+
+            drone = self._robots_by_id[robot_id]
+            illuminated = (
+                state.illuminated_by_team_id is not None
+                and state.illuminated_by_team_id != drone.team
+                and self.drone_air_support_active(robot_id)
+            )
+            if not illuminated:
+                state.illuminated_by_team_id = None
+                state.continuous_elapsed = 0.0
+                state.consecutive_ticks = 0
+                state.progress = max(
+                    0.0,
+                    state.progress - self._radar_anti_drone_decay_per_second * dt,
+                )
+                continue
+
+            state.continuous_elapsed += dt
+            ticks = math.floor(
+                state.continuous_elapsed / self._radar_anti_drone_detection_period
+                + 1e-9
+            )
+            if ticks <= 0:
+                continue
+            state.continuous_elapsed = max(
+                0.0,
+                state.continuous_elapsed
+                - ticks * self._radar_anti_drone_detection_period,
+            )
+
+            for _ in range(ticks):
+                state.consecutive_ticks += 1
+                state.progress = min(
+                    self._radar_anti_drone_progress_max,
+                    state.progress + state.consecutive_ticks,
+                )
+                if state.progress + 1e-9 < self._radar_anti_drone_threshold(state):
+                    continue
+                state.progress = 0.0
+                state.activations += 1
+                state.lock_remaining = self._radar_anti_drone_lock_duration
+                if state.activations >= self._radar_anti_drone_max_locks:
+                    state.continuous_elapsed = 0.0
+                    state.consecutive_ticks = 0
+                    state.illuminated_by_team_id = None
+                    break
+
     def reset(self, match: "Match") -> None:
         expected_roster = {
             "hero": 1,
@@ -4423,6 +4603,11 @@ class RMUC2026RegionalRules:
         self._radar_double_vulnerability_by_team = {
             team_id: _RadarDoubleVulnerabilityState()
             for team_id in team_by_side.values()
+        }
+        self._radar_anti_drone_by_robot = {
+            robot.id: _RadarAntiDroneState()
+            for robot in match.robots
+            if robot.type == "drone"
         }
         self._team_states = {
             team_id: _TeamStructureState() for team_id in team_by_side.values()
