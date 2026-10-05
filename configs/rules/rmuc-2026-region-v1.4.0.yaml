@@ -61,6 +61,7 @@ drone_foundation:
   initial_free_air_support_seconds: 30
   periodic_free_grant_interval_seconds: 60
   periodic_free_grant_seconds: 20
+  paid_cost_per_second: 1
   damage_applicable: false
   recovery_and_respawn: false
   chassis_power_overlimit: false
