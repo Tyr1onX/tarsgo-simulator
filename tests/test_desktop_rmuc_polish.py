@@ -396,6 +396,7 @@ def test_selected_single_unit_panel_renders_context(
     app._draw_selected_unit_card(
         screen,
         small_font,
+        app.ui_font(12),
         match,
         {robot.id},
         labels,
@@ -424,6 +425,7 @@ def test_multi_select_panel_renders_without_squad_state() -> None:
     app._draw_selected_unit_card(
         screen,
         small_font,
+        app.ui_font(12),
         match,
         selected,
         labels,
