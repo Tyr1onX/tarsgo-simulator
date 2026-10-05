@@ -139,6 +139,7 @@ def test_drone_progression_and_heat_use_official_level_table_without_hp_growth()
     internal_hp = (drone.hp, drone.max_hp)
 
     assert rules.start_drone_air_support(match, drone)
+    drone.position = (drone.position[0] + 1.0, drone.position[1])
     rules.on_attack_committed(drone)
 
     progression = rules._progression_by_robot[drone.id]
