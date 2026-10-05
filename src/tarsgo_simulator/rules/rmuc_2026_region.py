@@ -2658,6 +2658,14 @@ class RMUC2026RegionalRules:
                     self._radar_anti_drone_by_robot.items()
                 )
             ),
+            energy_mechanism_effect_timers=tuple(
+                (team_id, buff.mechanism, buff.remaining)
+                for team_id, buffs in sorted(
+                    self._energy_mechanism_buffs_by_team.items()
+                )
+                for buff in buffs
+                if buff.remaining > 0
+            ),
         )
 
     def robot_parameters(self, robot_type: str) -> RobotParameters:

@@ -66,6 +66,7 @@ class RuleSetDisplayState:
     radar_anti_drone: tuple[
         tuple[str, str, float, float, float, int, int, bool], ...
     ] = ()
+    energy_mechanism_effect_timers: tuple[tuple[str, str, float], ...] = ()
 
 
 class RuleSet(Protocol):
