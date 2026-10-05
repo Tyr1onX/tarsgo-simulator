@@ -80,7 +80,7 @@ def test_large_energy_mechanism_average_ring_score_tiers(
 
     assert match.ruleset.activate_large_energy_mechanism_buff(RED, score, 5)
 
-    buff = match.ruleset._large_energy_mechanism_buffs_by_team[RED][0]
+    buff = match.ruleset._energy_mechanism_buffs_by_team[RED][0]
     assert match.ruleset._effective_attack_multiplier(RED) == pytest.approx(attack)
     assert buff.defense == pytest.approx(defense)
     assert buff.cooling_multiplier == pytest.approx(cooling)
@@ -100,7 +100,7 @@ def test_large_energy_mechanism_lit_arm_count_controls_duration(
         RED, 9.5, lit_arm_count
     )
 
-    energy = match.ruleset._large_energy_mechanism_buffs_by_team[RED][0]
+    energy = match.ruleset._energy_mechanism_buffs_by_team[RED][0]
     attack = match.ruleset._attack_buffs_by_team[RED][-1]
     assert energy.remaining == pytest.approx(duration)
     assert attack.remaining == pytest.approx(duration)
@@ -128,7 +128,7 @@ def test_invalid_large_energy_mechanism_result_is_atomic(
         RED, score, lit_arm_count
     )
 
-    assert match.ruleset._large_energy_mechanism_buffs_by_team[RED] == []
+    assert match.ruleset._energy_mechanism_buffs_by_team[RED] == []
     assert match.ruleset._attack_buffs_by_team[RED] == []
     assert match.ruleset._effective_attack_multiplier(RED) == 1.0
 
@@ -142,7 +142,7 @@ def test_unknown_team_cannot_receive_large_energy_mechanism_buff() -> None:
 
     assert all(
         buffs == []
-        for buffs in match.ruleset._large_energy_mechanism_buffs_by_team.values()
+        for buffs in match.ruleset._energy_mechanism_buffs_by_team.values()
     )
 
 
@@ -211,12 +211,12 @@ def test_same_team_large_energy_mechanism_cannot_reactivate_until_window_ends() 
     attack_count = len(rules._attack_buffs_by_team[RED])
     assert not rules.activate_large_energy_mechanism_buff(RED, 9.5, 10)
     assert len(rules._attack_buffs_by_team[RED]) == attack_count
-    assert len(rules._large_energy_mechanism_buffs_by_team[RED]) == 1
+    assert len(rules._energy_mechanism_buffs_by_team[RED]) == 1
     assert _team_experience(match, RED) == first_activation_experience
 
     match.update(30.0)
 
-    assert rules._large_energy_mechanism_buffs_by_team[RED] == []
+    assert rules._energy_mechanism_buffs_by_team[RED] == []
     if not rules.drone_air_support_active(drone.id):
         assert rules.start_drone_air_support(match, drone)
     assert rules.activate_large_energy_mechanism_buff(RED, 9.5, 10)
@@ -443,7 +443,7 @@ def test_large_dt_expires_attack_defense_and_cooling_together() -> None:
 
     match.update(30.0)
 
-    assert match.ruleset._large_energy_mechanism_buffs_by_team[RED] == []
+    assert match.ruleset._energy_mechanism_buffs_by_team[RED] == []
     assert match.ruleset._effective_attack_multiplier(RED) == 1.0
     assert match.ruleset._current_large_energy_mechanism_defense(RED) == 0.0
     assert match.ruleset._effective_heat_parameters(
@@ -458,7 +458,7 @@ def test_match_reset_clears_large_energy_mechanism_and_attack_state() -> None:
 
     match.reset()
 
-    assert match.ruleset._large_energy_mechanism_buffs_by_team == {
+    assert match.ruleset._energy_mechanism_buffs_by_team == {
         RED: [],
         BLUE: [],
     }

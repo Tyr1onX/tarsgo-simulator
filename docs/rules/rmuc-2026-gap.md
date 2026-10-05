@@ -76,6 +76,13 @@ Regional V1.4.0 manual.
 - successful Large Energy Mechanism activation awards one 750-point Experience
   pool, split evenly among living Hero, Infantry, and Drone teammates through
   the existing progression state;
+- Small Energy Mechanism confirmed-result consumer with the official 0 s/90 s
+  opportunities, allowed Infantry/Sentry source, 20-second result window, and
+  pre-180 s phase boundary;
+- Small Energy Mechanism 25% team Defense for 45 seconds and source XP doubling
+  through existing progression, capped at 1200 extra XP per activation window;
+- one shared timed Energy Mechanism effect list, with same-class Defense using
+  the existing max semantics when Small and Large windows overlap;
 - same-class Attack/Defense/Cooling max semantics and same-team no-reactivation
   while the Large Energy Mechanism remains in its activated Buff window;
 - Attack Buff resolution for current direct-projectile Robot/Base/Outpost
@@ -230,7 +237,9 @@ Regional V1.4.0 manual.
 - physical Large Energy Mechanism gameplay: rotating entity, activation
   opportunities, operator/Sentry trigger commands, random lit-module selection,
   projectile-hit timing, armor/ring hit detection, and ring-score recognition;
-- Small Energy Mechanism gameplay and its Defense/Experience effects;
+- Small Energy Mechanism rotating hardware, hit recognition, and incomplete
+  activation attempts; V1.4.0 does not define whether a failed attempt returns
+  its activation opportunity, so that attempt/refund path remains deferred;
 - Hero deployment-mode Experience;
 - unknown-source / redistributed Experience;
 - projectile / non-projectile source redistribution;

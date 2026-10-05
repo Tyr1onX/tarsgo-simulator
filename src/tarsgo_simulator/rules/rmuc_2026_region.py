@@ -23,6 +23,11 @@ _GROUND_ROBOT_TYPES = {"hero", "engineer", "infantry", "sentry"}
 _REBUILD_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
 _EXPERIENCE_ROBOT_TYPES = {"hero", "infantry", "drone"}
 _HP_PERFORMANCE_ROBOT_TYPES = {"hero", "infantry"}
+_SMALL_ENERGY_PHASE_END = 180.0
+_SMALL_ENERGY_OPPORTUNITY_INTERVAL = 90.0
+_SMALL_ENERGY_ACTIVATION_WINDOW = 20.0
+_SMALL_ENERGY_BUFF_DURATION = 45.0
+_SMALL_ENERGY_EXPERIENCE_BONUS_CAP = 1200.0
 # V1.4.0 Radar marking can track Drone, but the vulnerability effect itself
 # is explicitly limited to ground robots.
 _RADAR_VULNERABILITY_ROBOT_TYPES = set(_GROUND_ROBOT_TYPES)
@@ -146,9 +151,11 @@ class _TimedAttackBuff:
 
 @dataclass
 class _TimedEnergyMechanismBuff:
+    mechanism: str
     defense: float
     cooling_multiplier: float
     remaining: float
+    experience_bonus_remaining: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -2329,8 +2336,11 @@ class RMUC2026RegionalRules:
 
         self.attack_damage_by_team: dict[str, int] = {}
         self._attack_buffs_by_team: dict[str, list[_TimedAttackBuff]] = {}
-        self._large_energy_mechanism_buffs_by_team: dict[
+        self._energy_mechanism_buffs_by_team: dict[
             str, list[_TimedEnergyMechanismBuff]
+        ] = {}
+        self._small_energy_mechanism_activation_times_by_team: dict[
+            str, list[float]
         ] = {}
         self._radar_vulnerability_by_robot: dict[str, _RadarVulnerabilityState] = {}
         self._radar_double_vulnerability_by_team: dict[
@@ -3440,7 +3450,7 @@ class RMUC2026RegionalRules:
         Rotation, hit detection, ring recognition, activation opportunities, and
         the 20-second activation procedure remain outside this rule-level API.
         """
-        buffs = self._large_energy_mechanism_buffs_by_team.get(team_id)
+        buffs = self._energy_mechanism_buffs_by_team.get(team_id)
         effects = self._large_energy_mechanism_effects(average_ring_score)
         duration = (
             None
@@ -3451,7 +3461,10 @@ class RMUC2026RegionalRules:
             buffs is None
             or effects is None
             or duration is None
-            or any(buff.remaining > 0 for buff in buffs)
+            or any(
+                buff.mechanism == "large" and buff.remaining > 0
+                for buff in buffs
+            )
         ):
             return False
 
@@ -3460,12 +3473,75 @@ class RMUC2026RegionalRules:
             return False
         buffs.append(
             _TimedEnergyMechanismBuff(
+                mechanism="large",
                 defense=defense,
                 cooling_multiplier=cooling_multiplier,
                 remaining=duration,
             )
         )
         self._grant_large_energy_mechanism_experience(team_id)
+        return True
+
+    def activate_small_energy_mechanism_buff(
+        self,
+        match: "Match",
+        initiator: Robot,
+        activation_started_at: float,
+    ) -> bool:
+        """Apply one referee-confirmed Small Energy Mechanism activation.
+
+        The caller supplies the activation start time from the upstream
+        mechanism event. This rule-level result boundary checks the V1.4.0
+        phase, accumulated opportunity, permitted command source, and 20-second
+        completion window; rotating hardware and hit recognition stay outside
+        the Rules Lab.
+        """
+        team_id = initiator.team
+        buffs = self._energy_mechanism_buffs_by_team.get(team_id)
+        activation_times = self._small_energy_mechanism_activation_times_by_team.get(
+            team_id
+        )
+        elapsed = match.elapsed_time
+        if (
+            match.finished
+            or buffs is None
+            or activation_times is None
+            or self._robots_by_id.get(initiator.id) is not initiator
+            or initiator.type not in {"infantry", "sentry"}
+            or not math.isfinite(activation_started_at)
+            or activation_started_at < 0
+            or activation_started_at >= _SMALL_ENERGY_PHASE_END
+            or elapsed + 1e-9 < activation_started_at
+            or elapsed >= _SMALL_ENERGY_PHASE_END
+            or elapsed - activation_started_at
+            >= _SMALL_ENERGY_ACTIVATION_WINDOW - 1e-9
+            or any(
+                buff.mechanism == "small" and buff.remaining > 0
+                for buff in buffs
+            )
+            or any(
+                abs(previous - activation_started_at) <= 1e-9
+                for previous in activation_times
+            )
+        ):
+            return False
+
+        available_opportunities = 1 + int(
+            activation_started_at + 1e-9 >= _SMALL_ENERGY_OPPORTUNITY_INTERVAL
+        )
+        if len(activation_times) >= available_opportunities:
+            return False
+
+        buffs.append(
+            _TimedEnergyMechanismBuff(
+                mechanism="small",
+                defense=0.25,
+                cooling_multiplier=1.0,
+                remaining=_SMALL_ENERGY_BUFF_DURATION,
+                experience_bonus_remaining=_SMALL_ENERGY_EXPERIENCE_BONUS_CAP,
+            )
+        )
+        activation_times.append(float(activation_started_at))
         return True
 
     def _grant_large_energy_mechanism_experience(self, team_id: str) -> None:
@@ -3489,12 +3565,30 @@ class RMUC2026RegionalRules:
         return max(
             (
                 buff.defense
-                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                for buff in self._energy_mechanism_buffs_by_team.get(
                     team_id, ()
                 )
-                if buff.remaining > 0
+                if buff.mechanism == "large" and buff.remaining > 0
             ),
             default=0.0,
+        )
+
+    def _current_small_energy_mechanism_defense(self, team_id: str) -> float:
+        return max(
+            (
+                buff.defense
+                for buff in self._energy_mechanism_buffs_by_team.get(
+                    team_id, ()
+                )
+                if buff.mechanism == "small" and buff.remaining > 0
+            ),
+            default=0.0,
+        )
+
+    def _current_energy_mechanism_defense(self, team_id: str) -> float:
+        return max(
+            self._current_large_energy_mechanism_defense(team_id),
+            self._current_small_energy_mechanism_defense(team_id),
         )
 
     def _current_large_energy_mechanism_cooling_multiplier(
@@ -3504,10 +3598,10 @@ class RMUC2026RegionalRules:
         return max(
             (
                 buff.cooling_multiplier
-                for buff in self._large_energy_mechanism_buffs_by_team.get(
+                for buff in self._energy_mechanism_buffs_by_team.get(
                     team_id, ()
                 )
-                if buff.remaining > 0
+                if buff.mechanism == "large" and buff.remaining > 0
             ),
             default=1.0,
         )
@@ -3635,11 +3729,11 @@ class RMUC2026RegionalRules:
 
     def _effective_defense(self, target: DamageableTarget) -> float:
         if isinstance(target, Robot) and target.type == "drone":
-            return self._current_large_energy_mechanism_defense(target.team)
+            return self._current_energy_mechanism_defense(target.team)
         state = self._team_states.get(target.team)
         if state is None:
             return 0.0
-        energy_defense = self._current_large_energy_mechanism_defense(target.team)
+        energy_defense = self._current_energy_mechanism_defense(target.team)
         if not isinstance(target, Robot):
             return max(state.tech_core_defense, energy_defense)
         return max(
@@ -4433,7 +4527,7 @@ class RMUC2026RegionalRules:
         """Refresh timed combat buffs around the existing 10 Hz Heat loop."""
         frame_dt = max(0.0, dt)
         self._advance_attack_buffs(frame_dt)
-        self._advance_large_energy_mechanism_buffs(frame_dt)
+        self._advance_energy_mechanism_buffs(frame_dt)
         self._advance_radar_double_vulnerability(frame_dt)
         self._advance_radar_anti_drone(frame_dt)
         self._advance_field_defense_occupancy(match, frame_dt)
@@ -4485,16 +4579,16 @@ class RMUC2026RegionalRules:
                     active.append(buff)
             self._attack_buffs_by_team[team_id] = active
 
-    def _advance_large_energy_mechanism_buffs(self, dt: float) -> None:
+    def _advance_energy_mechanism_buffs(self, dt: float) -> None:
         if dt <= 0:
             return
-        for team_id, buffs in self._large_energy_mechanism_buffs_by_team.items():
+        for team_id, buffs in self._energy_mechanism_buffs_by_team.items():
             active: list[_TimedEnergyMechanismBuff] = []
             for buff in buffs:
                 buff.remaining = max(0.0, buff.remaining - dt)
                 if buff.remaining > 1e-9:
                     active.append(buff)
-            self._large_energy_mechanism_buffs_by_team[team_id] = active
+            self._energy_mechanism_buffs_by_team[team_id] = active
 
     def _advance_radar_double_vulnerability(self, dt: float) -> None:
         if dt <= 0:
@@ -4614,7 +4708,10 @@ class RMUC2026RegionalRules:
         self._attack_buffs_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
-        self._large_energy_mechanism_buffs_by_team = {
+        self._energy_mechanism_buffs_by_team = {
+            team_id: [] for team_id in team_by_side.values()
+        }
+        self._small_energy_mechanism_activation_times_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
         self._radar_vulnerability_by_robot = {}
@@ -5559,7 +5656,40 @@ class RMUC2026RegionalRules:
             return
 
         old_level = state.level
-        state.experience = min(cap_experience, state.experience + float(amount))
+        experience_before = state.experience
+        base_awarded = min(
+            cap_experience - experience_before,
+            float(amount),
+        )
+        experience_after_base = experience_before + base_awarded
+        small_energy_buff = None
+        if robot.type in _EXPERIENCE_ROBOT_TYPES:
+            small_energy_buff = next(
+                (
+                    buff
+                    for buff in self._energy_mechanism_buffs_by_team.get(
+                        robot.team, ()
+                    )
+                    if (
+                        buff.mechanism == "small"
+                        and buff.remaining > 0
+                        and buff.experience_bonus_remaining > 1e-9
+                    )
+                ),
+                None,
+            )
+        bonus_awarded = 0.0
+        if small_energy_buff is not None:
+            bonus_awarded = min(
+                base_awarded,
+                small_energy_buff.experience_bonus_remaining,
+                cap_experience - experience_after_base,
+            )
+            small_energy_buff.experience_bonus_remaining = max(
+                0.0,
+                small_energy_buff.experience_bonus_remaining - bonus_awarded,
+            )
+        state.experience = experience_after_base + bonus_awarded
         state.level = max(
             level
             for level, threshold in self._level_thresholds.items()
