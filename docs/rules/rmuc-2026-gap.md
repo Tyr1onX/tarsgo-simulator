@@ -106,6 +106,11 @@ Regional V1.4.0 manual.
 - Drone aerial entity with 17mm=750 initial allowance and no additional-acquisition path;
 - Drone Air Support: 30s initial time, +20s every minute, explicit call/pause,
   active-alive state, helipad launcher gate, and 1 Gold Coin/s unlimited paid continuation;
+- Radar anti-Drone laser countermeasure as state separate from ground-only Radar
+  Vulnerability: Air-Support-only eligibility, P in [0,100], 0.1 s uninterrupted
+  judgement ticks with +n growth, 0.5/s no-laser decay, P0 50/100/100,
+  45-second launcher lock, three-lock per-match cap, team isolation, reset,
+  spectator-AI driving, and Observer HUD exposure;
 - Drone Experience progression and official level-dependent Heat/Cooling Performance;
 - committed-shot allowance deduction and allowance-zero attack gate;
 - team-wide purchased allowance caps: 17mm=1000, 42mm=100;
@@ -254,9 +259,14 @@ Regional V1.4.0 manual.
 - interference-wave difficulty gating is not modeled; the Radar Vulnerability
   setter may only be used after that official condition has already been
   resolved externally;
-- aerial targets may carry Radar marking P but Table 5-22 limits Vulnerability
-  to ground robots; the instantiated Drone therefore rejects the modeled Radar
-  Vulnerability effect;
+- aerial targets may carry Radar recognition marking P but Table 5-22 limits
+  Vulnerability to ground robots; the instantiated Drone therefore rejects that
+  effect. Its implemented anti-Drone laser targeting P is a separate state and
+  never promotes the Drone into the ground-only Vulnerability consumer;
+- the anti-Drone laser detector's physical vertical-area reductions (3/5 then
+  1/5) and the third-attempt no-active-light behavior remain deferred with
+  3D/optical geometry; the Rules Lab models the official 50/100/100 thresholds
+  without inventing spatial hit-area behavior;
 - V1.4.0 does not explicitly state whether Engineer death resets the already
   consumed portion of the Assembly 180-second Invincibility budget; the current
   Rules Lab preserves consumed time because the manual only says death makes the
