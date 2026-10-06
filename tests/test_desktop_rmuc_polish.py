@@ -10,7 +10,9 @@ from tarsgo_simulator.desktop.polish import (
     contextual_controls,
     parse_virtual_shield,
     status_badges,
+    structure_display_size,
     structure_visual_profile,
+    terrain_visual_markers,
     zone_visual_style,
 )
 from tarsgo_simulator.desktop.visuals import CombatVisualState
@@ -141,6 +143,94 @@ def test_base_and_outpost_have_distinct_structure_profiles() -> None:
     assert base.ring_count > outpost.ring_count
 
 
+def test_outpost_display_minimum_does_not_change_official_blocking_footprint() -> None:
+    match = _match()
+    outpost = next(item for item in match.structures if item.id == "red-outpost")
+    base = next(item for item in match.structures if item.id == "red-base")
+    physical_bounds = match.map.structure_bounds(outpost.id)
+    base_bounds = match.map.structure_bounds(base.id)
+    assert physical_bounds is not None
+    assert base_bounds is not None
+    viewport = _app()._viewport_for_match(match)
+    physical_diameter = round(viewport.world_length_to_screen(outpost.footprint[0]))
+    physical_base_size = (
+        round(viewport.world_length_to_screen(base_bounds.width)),
+        round(viewport.world_length_to_screen(base_bounds.height)),
+    )
+
+    display_size = structure_display_size("outpost", (physical_diameter, physical_diameter))
+
+    assert physical_diameter < display_size[0]
+    assert display_size == (44, 44)
+    assert structure_display_size("base", physical_base_size) == physical_base_size
+    assert match.map.structure_bounds(outpost.id) == physical_bounds
+    assert outpost.footprint == (550.0, 550.0)
+
+
+def test_terrain_markers_are_symbolic_and_renderer_does_not_mutate_map_geometry() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    viewport = app._viewport_for_match(match)
+    field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
+    screen, _font, small_font = _surface_and_fonts()
+    original_obstacles = match.map.obstacles
+    original_bounds = {
+        structure.id: match.map.structure_bounds(structure.id)
+        for structure in match.structures
+    }
+    original_connections = match.map.terrain_connections
+
+    markers = terrain_visual_markers(
+        match.map.terrain_features,
+        match.map.terrain_connections,
+        match.map.zones,
+    )
+    rendered = app._draw_rmuc_terrain(
+        screen,
+        small_font,
+        field,
+        viewport,
+        terrain_features=match.map.terrain_features,
+        terrain_connections=match.map.terrain_connections,
+        zones=match.map.zones,
+    )
+
+    assert {marker.kind for marker in markers} == {
+        "surface",
+        "elevated",
+        "ramp",
+        "tunnel",
+    }
+    assert len(rendered) == len(markers)
+    assert all(field.collidepoint(center) for _kind, center in rendered)
+    assert match.map.obstacles == original_obstacles
+    assert match.map.terrain_connections == original_connections
+    assert {
+        structure.id: match.map.structure_bounds(structure.id)
+        for structure in match.structures
+    } == original_bounds
+
+
+def test_maps_without_terrain_metadata_render_without_terrain_cues() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match(TRAINING_SCENARIO)
+    screen, _font, small_font = _surface_and_fonts()
+
+    rendered = app._draw_rmuc_terrain(
+        screen,
+        small_font,
+        pygame.Rect(*app.FIELD_VIEW_RECT),
+        app._viewport_for_match(match),
+        terrain_features=match.map.terrain_features,
+        terrain_connections=match.map.terrain_connections,
+        zones=match.map.zones,
+    )
+
+    assert rendered == ()
+
+
 def test_rmuc_inspector_overlay_and_toggle_stay_inside_1100x780() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
@@ -169,6 +259,9 @@ def test_battlefield_art_helpers_render_inside_1100x780() -> None:
     )
 
     assert screen.get_rect().contains(field)
+    assert sum(screen.get_at(field.center)[:3]) > sum(
+        screen.get_at((field.centerx, field.top + 8))[:3]
+    )
 
 
 def test_zone_art_renders_default_selected_and_targeted_states() -> None:
@@ -220,6 +313,45 @@ def test_canonical_zone_render_uses_polygon_outline_and_fill() -> None:
 
     assert screen.get_at((125, 100)) != pygame.Color(8, 8, 8, 255)
     assert screen.get_at((84, 136)) == unchanged
+
+
+def test_buff_zone_is_quiet_by_default_and_clearer_when_contextual() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    _screen, _font, small_font = _surface_and_fonts()
+    rect = pygame.Rect(80, 90, 90, 60)
+    polygon = ((80, 90), (170, 90), (170, 150), (80, 150))
+    idle = pygame.Surface((260, 220))
+    emphasized = pygame.Surface((260, 220))
+    floor = app.ARENA_FLOOR
+    idle.fill(floor)
+    emphasized.fill(floor)
+
+    for target, selected in ((idle, set()), (emphasized, {"hero"})):
+        app._draw_rmuc_zone(
+            target,
+            small_font,
+            rect,
+            zone_id="red-base-buff",
+            polygon_points=polygon,
+            selected_types=selected,
+            occupied_by_selected=False,
+            targeted_by_selected=False,
+            animation_time=0.0,
+        )
+
+    def visual_energy(surface):
+        return sum(
+            sum(
+                abs(channel - baseline)
+                for channel, baseline in zip(surface.get_at((x, y))[:3], floor)
+            )
+            for x in range(rect.left, rect.right)
+            for y in range(rect.top, rect.bottom)
+        )
+
+    assert visual_energy(idle) > 0
+    assert visual_energy(emphasized) > visual_energy(idle)
 
 
 def test_selected_ai_target_positions_use_existing_path_endpoint() -> None:

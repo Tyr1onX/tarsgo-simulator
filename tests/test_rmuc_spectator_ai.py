@@ -139,6 +139,67 @@ def test_rmuc_ai_fixed_seed_is_repeatable() -> None:
     assert first_snapshot == second_snapshot
 
 
+def test_rmuc_ai_replan_phases_are_deterministic_staggered_and_resettable(
+    monkeypatch,
+) -> None:
+    match = _match()
+    phases = dict(match._ai_replan_elapsed)
+
+    assert len(phases) == len(match.robots)
+    assert len(set(phases.values())) == len(phases)
+    sorted_ids = sorted(phases)
+    expected_spacing = 0.75 / len(sorted_ids)
+    for index, robot_id in enumerate(sorted_ids):
+        assert phases[robot_id] == pytest.approx(index * expected_spacing)
+
+    calls_by_update = []
+    current_calls = []
+    alive_robot_ids = {robot.id for robot in match.robots if robot.alive}
+
+    def record_replan(robot, _display_state):
+        if robot.alive:
+            current_calls.append(robot.id)
+
+    monkeypatch.setattr(match, "_rmuc_ai_step", record_replan)
+    for _ in range(90):
+        current_calls = []
+        match._update_ai(1 / 60)
+        calls_by_update.append(tuple(current_calls))
+
+    active_updates = [calls for calls in calls_by_update if calls]
+    assert len(active_updates) > 1
+    assert max(len(calls) for calls in active_updates) == 1
+    assert {robot_id for calls in active_updates for robot_id in calls} == alive_robot_ids
+    for robot_id in alive_robot_ids:
+        assert sum(robot_id in calls for calls in active_updates) == 2
+
+    match.reset()
+    drone_ids = {"opponent-drone", "tarsgo-drone"}
+    match._update_ai(0.1)
+    drone_phase_gap = (
+        match._ai_replan_elapsed["tarsgo-drone"]
+        - match._ai_replan_elapsed["opponent-drone"]
+    ) % 0.75
+    assert drone_phase_gap == pytest.approx(0.375)
+    for robot in match.robots:
+        if robot.id in drone_ids:
+            robot.alive = True
+
+    drone_replan_frames = {}
+    for frame in range(45):
+        current_calls = []
+        match._update_ai(1 / 60)
+        for robot_id in current_calls:
+            if robot_id in drone_ids:
+                drone_replan_frames.setdefault(robot_id, frame)
+    assert set(drone_replan_frames) == drone_ids
+    assert drone_replan_frames["opponent-drone"] != drone_replan_frames["tarsgo-drone"]
+
+    match._update_ai(0.31)
+    match.reset()
+    assert match._ai_replan_elapsed == phases
+
+
 def _candidate_by_key(match: Match, robot, key: str):
     return next(
         candidate

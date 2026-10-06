@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from typing import Iterable
+
+from tarsgo_simulator.core.map import TerrainConnection, TerrainFeature, Zone
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,20 @@ class StructureVisualProfile:
     size: int
     core_radius: int
     ring_count: int
+    minimum_display_diameter: int
+
+
+@dataclass(frozen=True)
+class TerrainVisualMarker:
+    """A screen-space terrain cue anchored to a semantic map marker.
+
+    The anchor is not a terrain footprint, portal coordinate, or collision
+    shape. Those remain deferred until the field diagrams provide exact XY
+    extents.
+    """
+
+    kind: str
+    center: tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -26,8 +43,18 @@ class BadgeSpec:
     tone: str = "neutral"
 
 
-BASE_PROFILE = StructureVisualProfile(size=31, core_radius=8, ring_count=2)
-OUTPOST_PROFILE = StructureVisualProfile(size=22, core_radius=6, ring_count=1)
+BASE_PROFILE = StructureVisualProfile(
+    size=31,
+    core_radius=8,
+    ring_count=2,
+    minimum_display_diameter=58,
+)
+OUTPOST_PROFILE = StructureVisualProfile(
+    size=22,
+    core_radius=6,
+    ring_count=1,
+    minimum_display_diameter=44,
+)
 
 
 _ZONE_FAMILIES = {
@@ -92,6 +119,63 @@ def zone_visual_style(
 
 def structure_visual_profile(structure_type: str) -> StructureVisualProfile:
     return BASE_PROFILE if structure_type == "base" else OUTPOST_PROFILE
+
+
+def structure_display_size(
+    structure_type: str,
+    physical_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Return presentation dimensions without changing the physical footprint."""
+    profile = structure_visual_profile(structure_type)
+    width, height = physical_size or (profile.size * 2, profile.size * 2)
+    minimum = profile.minimum_display_diameter
+    return max(width, minimum), max(height, minimum)
+
+
+def terrain_visual_markers(
+    terrain_features: Iterable[TerrainFeature],
+    terrain_connections: Iterable[TerrainConnection],
+    zones: Iterable[Zone],
+) -> tuple[TerrainVisualMarker, ...]:
+    """Build visual-only cues from existing symbolic terrain anchors.
+
+    Existing ``*-terrain-*`` zones are approximate location anchors, not
+    terrain polygons. The returned markers intentionally use only their
+    centers and never expose zone bounds to collision or pathfinding.
+    """
+    features = tuple(terrain_features)
+    connections = tuple(terrain_connections)
+    feature_kinds = {feature.kind for feature in features}
+    connected_tunnels = {
+        feature.id
+        for feature in features
+        if feature.kind == "tunnel"
+        and any(connection.via_feature == feature.id for connection in connections)
+    }
+    markers: list[TerrainVisualMarker] = []
+    for zone in zones:
+        marker_name = zone.id.lower().removeprefix("red-").removeprefix("blue-")
+        kind = None
+        if marker_name.startswith("terrain-road-") and "surface" in feature_kinds:
+            kind = "surface"
+        elif marker_name.startswith("terrain-elevated-") and "elevated" in feature_kinds:
+            kind = "elevated"
+        elif marker_name.startswith("terrain-launch-") and "ramp" in feature_kinds:
+            kind = "ramp"
+        elif marker_name.startswith("terrain-tunnel-") and connected_tunnels:
+            kind = "tunnel"
+        if kind is None:
+            continue
+        center = (
+            (
+                sum(point[0] for point in zone.vertices) / len(zone.vertices),
+                sum(point[1] for point in zone.vertices) / len(zone.vertices),
+            )
+            if zone.vertices
+            else (zone.x + zone.width / 2, zone.y + zone.height / 2)
+        )
+        markers.append(TerrainVisualMarker(kind, center))
+    return tuple(markers)
 
 
 def parse_virtual_shield(status: str) -> int:
