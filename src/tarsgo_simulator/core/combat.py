@@ -31,7 +31,11 @@ def update_combat(
             and target.team != attacker.team
             and (can_target is None or can_target(target))
             and _distance(attacker.position, target.position) <= attacker.attack_range
-            and game_map.has_line_of_sight(attacker.position, target.position)
+            and game_map.has_line_of_sight(
+                attacker.position,
+                target.position,
+                target.id if isinstance(target, Structure) else None,
+            )
         ]
         if not targets:
             continue

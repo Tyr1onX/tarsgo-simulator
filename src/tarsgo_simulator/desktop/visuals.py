@@ -616,7 +616,15 @@ class CombatVisualState:
                 continue
             if math.dist(attacker.position, target.position) > attacker.attack_range:
                 continue
-            if not match.map.has_line_of_sight(attacker.position, target.position):
+            if not match.map.has_line_of_sight(
+                attacker.position,
+                target.position,
+                (
+                    target.id
+                    if any(item is target for item in match.structures)
+                    else None
+                ),
+            ):
                 continue
             if target.alive and not match.ruleset.can_target(target):
                 continue

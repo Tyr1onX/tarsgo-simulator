@@ -51,10 +51,7 @@ class Robot:
                 position = waypoint
                 path.pop(0)
                 continue
-            if self.aerial:
-                if not game_map.contains(waypoint):
-                    return position, []
-            elif not game_map.can_traverse(position, waypoint):
+            if not game_map.can_traverse(position, waypoint):
                 return position, []
             if distance <= remaining:
                 position = waypoint
@@ -67,10 +64,7 @@ class Robot:
                 position[0] + (waypoint[0] - position[0]) * ratio,
                 position[1] + (waypoint[1] - position[1]) * ratio,
             )
-            if self.aerial:
-                if not game_map.contains(next_position):
-                    return position, []
-            elif not game_map.can_traverse(position, next_position):
+            if not game_map.can_traverse(position, next_position):
                 return position, []
             position = next_position
             remaining = 0

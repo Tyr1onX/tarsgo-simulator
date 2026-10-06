@@ -156,7 +156,8 @@ def test_rmuc_ai_replenishes_and_critical_hp_retreats() -> None:
     infantry = _robot(match, "tarsgo-infantry-1")
     supply = _zone(match, "red-supply-buff")
 
-    infantry.position = (900.0, 750.0)
+    # Stay outside the newly modelled red-outpost footprint.
+    infantry.position = (910.0, 750.0)
     match._rmuc_ai_step(infantry, match.ruleset.display_state)
     assert match.ai_intent(infantry.id) == "前往补给区"
     assert supply.contains(infantry.path[-1])
