@@ -2155,6 +2155,89 @@ def _draw_rmuc_battlefield(
         )
 
 
+def _draw_rmuc_field_regions(
+    screen: pygame.Surface,
+    field_rect: pygame.Rect,
+    viewport: Viewport,
+    zones: tuple,
+) -> tuple[str, ...]:
+    """Tint confirmed region polygons as floor treatment, never as debug wireframes."""
+    suffix_styles = {
+        "start": ("start", 38, 12),
+        "resource": ("resource", 24, 10),
+        "assembly": ("assembly", 24, 10),
+        "base-buff": ("base", 20, 32),
+        "outpost-buff": ("outpost", 18, 24),
+    }
+    rendered: list[str] = []
+    for zone in zones:
+        suffix = zone.id.removeprefix("red-").removeprefix("blue-")
+        spec = suffix_styles.get(suffix)
+        if spec is None or len(zone.vertices) < 3:
+            continue
+        family, fill_alpha, edge_alpha = spec
+        team_color = TEAM_RED_COLOR if zone.id.startswith("red-") else TEAM_BLUE_COLOR
+        family_color = {
+            "resource": RESOURCE_COLOR,
+            "assembly": ASSEMBLY_COLOR,
+        }.get(family, team_color)
+        color = _blend_color(family_color, team_color, 0.5)
+        points = tuple(
+            tuple(round(value) for value in viewport.world_to_screen(point))
+            for point in zone.vertices
+        )
+        left = min(point[0] for point in points)
+        top = min(point[1] for point in points)
+        right = max(point[0] for point in points)
+        bottom = max(point[1] for point in points)
+        bounds = pygame.Rect(
+            left,
+            top,
+            max(1, right - left + 1),
+            max(1, bottom - top + 1),
+        )
+        if not bounds.colliderect(field_rect):
+            continue
+        local_points = tuple((x - left, y - top) for x, y in points)
+        layer = pygame.Surface(bounds.size, pygame.SRCALPHA)
+        pygame.draw.polygon(layer, (*color, fill_alpha), local_points)
+
+        if family in {"start", "resource"}:
+            pattern = pygame.Surface(bounds.size, pygame.SRCALPHA)
+            step = 22 if family == "start" else 26
+            for offset in range(-bounds.height, bounds.width + bounds.height, step):
+                pygame.draw.line(
+                    pattern,
+                    (*_blend_color(color, TEXT_COLOR, 0.28), 9),
+                    (offset, bounds.height),
+                    (offset + bounds.height, 0),
+                    width=1,
+                )
+            mask = pygame.mask.from_surface(layer, threshold=0)
+            pattern.blit(
+                mask.to_surface(
+                    setcolor=(255, 255, 255, 255),
+                    unsetcolor=(255, 255, 255, 0),
+                ),
+                (0, 0),
+                special_flags=pygame.BLEND_RGBA_MULT,
+            )
+            layer.blit(pattern, (0, 0))
+        elif family == "assembly":
+            center = (bounds.width // 2, bounds.height // 2)
+            radius = max(4, min(bounds.width, bounds.height) // 4)
+            pygame.draw.circle(layer, (*color, 16), center, radius, width=1)
+
+        if edge_alpha:
+            pygame.draw.polygon(layer, (*color, edge_alpha), local_points, width=1)
+        old_clip = screen.get_clip()
+        screen.set_clip(field_rect)
+        screen.blit(layer, bounds.topleft)
+        screen.set_clip(old_clip)
+        rendered.append(zone.id)
+    return tuple(rendered)
+
+
 def _draw_rmuc_terrain(
     screen: pygame.Surface,
     legend_font: pygame.font.Font,
@@ -2164,6 +2247,7 @@ def _draw_rmuc_terrain(
     terrain_features: tuple,
     terrain_connections: tuple,
     zones: tuple,
+    debug_geometry: bool = True,
 ) -> tuple[tuple[str, tuple[int, int]], ...]:
     """Draw symbolic terrain cues only; never render their anchor as a footprint."""
     markers = terrain_visual_markers(
@@ -2186,9 +2270,33 @@ def _draw_rmuc_terrain(
         if not field_rect.collidepoint(center):
             continue
         color = palette[marker.kind]
-        pygame.draw.circle(screen, ARENA_SHADOW, (center[0] + 1, center[1] + 2), 13)
-        pygame.draw.circle(screen, ARENA_FLOOR_DARK, center, 12)
-        pygame.draw.circle(screen, color, center, 12, width=1)
+        if not debug_geometry:
+            if marker.kind == "surface":
+                # A restrained road-lane stamp at the confirmed symbolic
+                # anchor. It intentionally does not imply a road footprint.
+                marking = pygame.Surface((18, 12), pygame.SRCALPHA)
+                road_color = _blend_color(color, TEXT_COLOR, 0.15)
+                pygame.draw.line(
+                    marking,
+                    (*road_color, 88),
+                    (1, 3),
+                    (16, 3),
+                    width=1,
+                )
+                pygame.draw.line(
+                    marking,
+                    (*road_color, 88),
+                    (1, 8),
+                    (16, 8),
+                    width=1,
+                )
+                screen.blit(marking, (center[0] - 9, center[1] - 6))
+                rendered.append((marker.kind, center))
+            continue
+        if debug_geometry:
+            pygame.draw.circle(screen, ARENA_SHADOW, (center[0] + 1, center[1] + 2), 13)
+            pygame.draw.circle(screen, ARENA_FLOOR_DARK, center, 12)
+            pygame.draw.circle(screen, color, center, 12, width=1)
         if marker.kind == "surface":
             pygame.draw.line(
                 screen,
@@ -2202,7 +2310,7 @@ def _draw_rmuc_terrain(
                 color,
                 (center[0] - 5, center[1] + 3),
                 (center[0] + 5, center[1] + 3),
-                width=2,
+                width=2 if debug_geometry else 1,
             )
         elif marker.kind == "elevated":
             pygame.draw.polygon(
@@ -2259,7 +2367,7 @@ def _draw_rmuc_terrain(
             )
         rendered.append((marker.kind, center))
 
-    if rendered:
+    if rendered and debug_geometry:
         labels = {
             "surface": "路面",
             "elevated": "高地",
@@ -3844,6 +3952,13 @@ def _draw(
             screen,
             field_rect,
         )
+        if not debug_geometry:
+            _draw_rmuc_field_regions(
+                screen,
+                field_rect,
+                viewport,
+                match.map.zones,
+            )
     else:
         pygame.draw.rect(screen, FIELD_COLOR, field_rect)
         pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
@@ -3927,7 +4042,7 @@ def _draw(
             label_surface.get_rect(center=zone_rect.center),
         )
 
-    if is_rmuc and debug_geometry:
+    if is_rmuc:
         _draw_rmuc_terrain(
             screen,
             hud_font,
@@ -3936,6 +4051,7 @@ def _draw(
             terrain_features=match.map.terrain_features,
             terrain_connections=match.map.terrain_connections,
             zones=match.map.zones,
+            debug_geometry=debug_geometry,
         )
 
     structure_statuses = (

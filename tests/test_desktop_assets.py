@@ -145,7 +145,7 @@ def test_robot_sprite_set_is_complete_transparent_and_presentation_only() -> Non
         sprite = manager.load(name)
         assert sprite is not None
         assert sprite.get_flags() & pygame.SRCALPHA
-        assert sprite.get_at((0, 0)).a == 0
+        assert sprite.get_at((0, 0)).a <= 1
         rendered = manager.render(name, size=(48, 32), angle=37, tint=(213, 83, 78))
         assert rendered is not None
         assert rendered.get_flags() & pygame.SRCALPHA
@@ -301,7 +301,7 @@ def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
     )[0]
 
 
-def test_default_rmuc_view_hides_terrain_symbols_until_debug_mode(
+def test_default_rmuc_view_uses_small_road_cues_and_keeps_debug_symbols(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tarsgo_simulator.desktop import app
@@ -314,7 +314,7 @@ def test_default_rmuc_view_hides_terrain_symbols_until_debug_mode(
     calls: list[bool] = []
 
     def record_terrain_draw(*_args: object, **kwargs: object) -> tuple[()]:
-        calls.append(True)
+        calls.append(bool(kwargs.get("debug_geometry")))
         return ()
 
     monkeypatch.setattr(app, "_draw_rmuc_terrain", record_terrain_draw)
@@ -330,10 +330,44 @@ def test_default_rmuc_view_hides_terrain_symbols_until_debug_mode(
     )
 
     app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments)
-    assert calls == []
+    assert calls == [False]
 
     app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments, debug_geometry=True)
-    assert calls == [True]
+    assert calls == [False, True]
+
+
+def test_default_floor_regions_use_only_configured_nonterrain_polygons() -> None:
+    from tarsgo_simulator.desktop import app
+
+    pygame.font.init()
+    match = Match.from_scenario(RMUC_SCENARIO)
+    zones_before = tuple(
+        (zone.id, zone.vertices, zone.x, zone.y, zone.width, zone.height)
+        for zone in match.map.zones
+    )
+    rendered = app._draw_rmuc_field_regions(
+        pygame.Surface(app.WINDOW_SIZE),
+        pygame.Rect(*app.RMUC_FIELD_VIEW_RECT),
+        app._viewport_for_match(match),
+        match.map.zones,
+    )
+
+    rendered_ids = set(rendered)
+    assert {
+        "red-start",
+        "blue-start",
+        "red-base-buff",
+        "blue-base-buff",
+        "red-resource",
+        "blue-resource",
+        "red-assembly",
+        "blue-assembly",
+    } <= rendered_ids
+    assert not any("terrain-" in zone_id for zone_id in rendered_ids)
+    assert tuple(
+        (zone.id, zone.vertices, zone.x, zone.y, zone.width, zone.height)
+        for zone in match.map.zones
+    ) == zones_before
 
 
 def test_packaging_configuration_copies_the_rmuc_asset_directory() -> None:

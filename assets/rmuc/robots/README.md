@@ -1,32 +1,37 @@
 # RMUC robot sprites
 
 All PNG files in this directory are original project presentation assets
-generated with the built-in image-generation tool on 2026-10-06. No third-party
-images, team photographs, official robot images, or network-sourced material
+generated with the built-in image-generation tool. The V2 set was generated on
+2026-10-07 using the user's real Hero, Engineer, Infantry, Sentry, and Drone
+photos as private structural references. The photos are not included in the
+repository or shipped with the game. No third-party or network-sourced images
 were used. The assets are distributed under the repository MIT license.
 
 | File | Presentation role |
 | --- | --- |
-| `hero-chassis.png` | Heavy tracked Hero chassis, rendered with `body_angle`. |
-| `hero-turret.png` | Hero turret and cannon, rendered with `turret_angle`. |
-| `engineer.png` | Compact Engineer vehicle with articulated arm, rendered with `body_angle`. |
-| `infantry-chassis.png` | Compact Infantry four-wheel chassis, rendered with `body_angle`. |
-| `infantry-turret.png` | Light Infantry turret and cannon, rendered with `turret_angle`. |
-| `sentry-chassis.png` | Broad heavy tracked Sentry chassis, rendered with `body_angle`. |
-| `sentry-turret.png` | Wide twin-rail Sentry turret and autocannon, rendered with `turret_angle`. |
-| `drone.png` | Four-rotor airborne Drone, rendered with `body_angle`. |
+| `hero-chassis.png` | Open Hero chassis with visible wheel modules and CNC plates, rendered with `body_angle`. |
+| `hero-turret.png` | Separate open Hero gimbal and 42 mm launcher, rendered with `turret_angle`. |
+| `engineer.png` | Open Engineer chassis with lift and articulated tool, rendered with `body_angle`. |
+| `infantry-chassis.png` | Compact four-mecanum Infantry chassis with exposed motors, rendered with `body_angle`. |
+| `infantry-turret.png` | Separate compact Infantry gimbal and friction-wheel launcher, rendered with `turret_angle`. |
+| `sentry-chassis.png` | Open four-wheel Sentry chassis with CNC panels, rendered with `body_angle`. |
+| `sentry-turret.png` | Separate sensor gimbal and twin launcher rails, rendered with `turret_angle`. |
+| `drone.png` | Drone with four large wire-mesh rotor guards, rendered with `body_angle`. |
 
-Every image has a transparent background. Dark graphite armor, restrained red
-and blue accent panels, soft overhead shadows, and readable mechanical
-silhouettes are shared across the set. Hero, Infantry, and Sentry use separate
-chassis and turret layers so their body and weapon directions remain
-independent.
+Every image has a transparent background. Black anodized aluminum,
+carbon-fiber, perforated CNC plates, exposed motors, wiring and sensors, and
+small red/blue indicator accents define the shared style. The robots keep
+open competition-engineering structures instead of enclosed armor. Hero,
+Infantry, and Sentry use separate chassis and turret layers so their body and
+weapon directions remain independent.
 
-Source prompts described orthographic top-down competition robots with dark
-graphite metal, restrained red/blue details, mechanical structure and soft
-shadows. Role-specific details requested the Hero's heavy cannon and tracked
-chassis, Engineer's articulated gripper arm, compact four-wheel Infantry,
-wide tracked Sentry with twin cannon rails, and Drone's four rotor guards.
+Source prompts describe orthographic top-down competition sprites with black
+anodized-aluminum frames, carbon-fiber parts, CNC cutouts, visible motors,
+wiring, sensors, and restrained team indicators. Role-specific details follow
+the attached references: the Hero's broad drive chassis and gimbal, Engineer's
+lift and manipulator, Infantry's compact four-mecanum frame, Sentry's
+autonomous gimbal, and the Drone's four large mesh rotor guards. Text, team
+numbers and logos are omitted from generated sprites.
 
 Sprite dimensions and pixel bounds are presentation data only. The renderer
 scales them using desktop visual profiles; collision footprints, navigation,
