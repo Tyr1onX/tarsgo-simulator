@@ -43,7 +43,7 @@ jobs:
         run: python -m PyInstaller --noconfirm --clean --windowed --name "TARS-Go-Simulator" --icon "build/app-icons/tarsgo.${{ matrix.icon_format }}" --add-data "configs${{ matrix.data_separator }}configs" --add-data "assets${{ matrix.data_separator }}assets" run_game.py
       - name: Verify packaged RMUC art
         run: |
-          python -c "from pathlib import Path; files=list(Path('dist').rglob('*.png')); names={p.name for p in files}; required={'floor-surface.png','base.png','outpost.png'}; missing=required-names; assert not missing, f'Missing packaged RMUC assets: {sorted(missing)}'"
+          python -c "from pathlib import Path; files=list(Path('dist').rglob('*.png')); names={p.name for p in files}; required={'floor-surface.png','base.png','outpost.png','hero-chassis.png','hero-turret.png','engineer.png','infantry-chassis.png','infantry-turret.png','sentry-chassis.png','sentry-turret.png','drone.png'}; missing=required-names; assert not missing, f'Missing packaged RMUC assets: {sorted(missing)}'"
       - name: Package macOS app
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc --keepParent "dist/TARS-Go-Simulator.app" "TARS-Go-Simulator-macos.zip"
