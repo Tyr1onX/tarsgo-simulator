@@ -9,6 +9,7 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.assets import ASSET_MANAGER
 from tarsgo_simulator.desktop.fonts import ui_font
 from tarsgo_simulator.desktop.icon import render_app_icon
 from tarsgo_simulator.desktop.polish import (
@@ -2134,7 +2135,15 @@ def _draw_rmuc_battlefield(
 ) -> None:
     shadow_rect = field_rect.inflate(10, 10).move(0, 3)
     pygame.draw.rect(screen, ARENA_SHADOW, shadow_rect)
-    screen.blit(_rmuc_field_material(field_rect.size), field_rect.topleft)
+    floor = ASSET_MANAGER.render("field/floor-surface.png", size=field_rect.size)
+    if floor is None:
+        floor = _rmuc_field_material(field_rect.size)
+    screen.blit(floor, field_rect.topleft)
+    screen.fill(
+        (148, 154, 158),
+        field_rect,
+        special_flags=pygame.BLEND_RGB_MULT,
+    )
     pygame.draw.rect(screen, ARENA_EDGE, field_rect, width=2)
     inner_rect = field_rect.inflate(-5, -5)
     if inner_rect.width > 0 and inner_rect.height > 0:
@@ -2497,6 +2506,8 @@ def _draw_rmuc_zone(
         or targeted_by_selected
         or hovered
     )
+    if not emphasized:
+        return
     family_color = _zone_family_color(style.family)
     team_color = (
         TEAM_RED_COLOR
@@ -2663,107 +2674,144 @@ def _draw_rmuc_structure(
     half_height = max(1, body_height // 2)
     size = max(half_width, half_height)
 
-    shadow = pygame.Surface((body_width + 16, body_height + 16), pygame.SRCALPHA)
-    shadow_center = (shadow.get_width() // 2 + 2, shadow.get_height() // 2 + 3)
-    pygame.draw.ellipse(
-        shadow,
-        (*ARENA_SHADOW, 118),
-        pygame.Rect(
-            shadow_center[0] - half_width - 3,
-            shadow_center[1] - half_height - 3,
-            body_width + 6,
-            body_height + 6,
-        ),
+    structure_asset = {
+        "base": "structures/base.png",
+        "outpost": "structures/outpost.png",
+    }.get(structure_type)
+    sprite = (
+        ASSET_MANAGER.render(
+            structure_asset,
+            size=(body_width, body_height),
+            tint=draw_color,
+        )
+        if structure_asset is not None
+        else None
     )
-    screen.blit(
-        shadow,
-        (
-            center[0] - shadow.get_width() // 2,
-            center[1] - shadow.get_height() // 2,
-        ),
-    )
-
-    if structure_type == "base":
-        diagonal_x = round(half_width * 0.68)
-        diagonal_y = round(half_height * 0.68)
-        outer = list(footprint_points) or [
-            (center[0], center[1] - half_height),
-            (center[0] + diagonal_x, center[1] - diagonal_y),
-            (center[0] + half_width, center[1]),
-            (center[0] + diagonal_x, center[1] + diagonal_y),
-            (center[0], center[1] + half_height),
-            (center[0] - diagonal_x, center[1] + diagonal_y),
-            (center[0] - half_width, center[1]),
-            (center[0] - diagonal_x, center[1] - diagonal_y),
-        ]
-        inset = max(0.0, min(0.45, 6 / max(1, size)))
-        inner = [
+    if sprite is None:
+        shadow = pygame.Surface((body_width + 16, body_height + 16), pygame.SRCALPHA)
+        shadow_center = (shadow.get_width() // 2 + 2, shadow.get_height() // 2 + 3)
+        pygame.draw.ellipse(
+            shadow,
+            (*ARENA_SHADOW, 118),
+            pygame.Rect(
+                shadow_center[0] - half_width - 3,
+                shadow_center[1] - half_height - 3,
+                body_width + 6,
+                body_height + 6,
+            ),
+        )
+        screen.blit(
+            shadow,
             (
-                round(center[0] + (x - center[0]) * (1 - inset)),
-                round(center[1] + (y - center[1]) * (1 - inset)),
-            )
-            for x, y in outer
-        ]
-        pygame.draw.polygon(screen, ROBOT_OUTLINE, outer)
-        pygame.draw.polygon(screen, body_color, inner)
-        pygame.draw.polygon(screen, edge_color, inner, width=2)
-        for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
-            start = (
-                center[0] + round(math.cos(angle) * (profile.core_radius + 4)),
-                center[1] + round(math.sin(angle) * (profile.core_radius + 4)),
-            )
-            end = (
-                center[0] + round(math.cos(angle) * (half_width - 9)),
-                center[1] + round(math.sin(angle) * (half_height - 9)),
-            )
-            pygame.draw.line(screen, edge_color, start, end, width=2)
-        core_glow = pygame.Surface((30, 30), pygame.SRCALPHA)
-        pygame.draw.circle(core_glow, (*draw_color, 46), (15, 15), 13)
-        screen.blit(core_glow, (center[0] - 15, center[1] - 15))
-        pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 3)
-        pygame.draw.circle(screen, draw_color, center, profile.core_radius)
-        pygame.draw.circle(
-            screen,
-            _blend_color(draw_color, TEXT_COLOR, 0.38),
-            (center[0] - 2, center[1] - 2),
-            max(2, profile.core_radius // 3),
+                center[0] - shadow.get_width() // 2,
+                center[1] - shadow.get_height() // 2,
+            ),
         )
+
+        if structure_type == "base":
+            diagonal_x = round(half_width * 0.68)
+            diagonal_y = round(half_height * 0.68)
+            outer = list(footprint_points) or [
+                (center[0], center[1] - half_height),
+                (center[0] + diagonal_x, center[1] - diagonal_y),
+                (center[0] + half_width, center[1]),
+                (center[0] + diagonal_x, center[1] + diagonal_y),
+                (center[0], center[1] + half_height),
+                (center[0] - diagonal_x, center[1] + diagonal_y),
+                (center[0] - half_width, center[1]),
+                (center[0] - diagonal_x, center[1] - diagonal_y),
+            ]
+            inset = max(0.0, min(0.45, 6 / max(1, size)))
+            inner = [
+                (
+                    round(center[0] + (x - center[0]) * (1 - inset)),
+                    round(center[1] + (y - center[1]) * (1 - inset)),
+                )
+                for x, y in outer
+            ]
+            pygame.draw.polygon(screen, ROBOT_OUTLINE, outer)
+            pygame.draw.polygon(screen, body_color, inner)
+            pygame.draw.polygon(screen, edge_color, inner, width=2)
+            for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
+                start = (
+                    center[0] + round(math.cos(angle) * (profile.core_radius + 4)),
+                    center[1] + round(math.sin(angle) * (profile.core_radius + 4)),
+                )
+                end = (
+                    center[0] + round(math.cos(angle) * (half_width - 9)),
+                    center[1] + round(math.sin(angle) * (half_height - 9)),
+                )
+                pygame.draw.line(screen, edge_color, start, end, width=2)
+            core_glow = pygame.Surface((30, 30), pygame.SRCALPHA)
+            pygame.draw.circle(core_glow, (*draw_color, 46), (15, 15), 13)
+            screen.blit(core_glow, (center[0] - 15, center[1] - 15))
+            pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 3)
+            pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+            pygame.draw.circle(
+                screen,
+                _blend_color(draw_color, TEXT_COLOR, 0.38),
+                (center[0] - 2, center[1] - 2),
+                max(2, profile.core_radius // 3),
+            )
+        else:
+            body_rect = pygame.Rect(
+                center[0] - half_width,
+                center[1] - half_height,
+                body_width,
+                body_height,
+            )
+            pygame.draw.ellipse(screen, ROBOT_OUTLINE, body_rect)
+            inner_rect = body_rect.inflate(-4, -4)
+            if inner_rect.width > 0 and inner_rect.height > 0:
+                pygame.draw.ellipse(screen, body_color, inner_rect)
+            pygame.draw.ellipse(screen, edge_color, body_rect, width=2)
+            inner_rect = body_rect.inflate(-12, -12)
+            if inner_rect.width > 0 and inner_rect.height > 0:
+                pygame.draw.ellipse(screen, ARENA_FLOOR_DARK, inner_rect, width=2)
+            for angle in (
+                0,
+                math.pi / 4,
+                math.pi / 2,
+                3 * math.pi / 4,
+                math.pi,
+                5 * math.pi / 4,
+                3 * math.pi / 2,
+                7 * math.pi / 4,
+            ):
+                inner = (
+                    center[0] + round(math.cos(angle) * (profile.core_radius + 3)),
+                    center[1] + round(math.sin(angle) * (profile.core_radius + 3)),
+                )
+                outer = (
+                    center[0] + round(math.cos(angle) * (half_width - 5)),
+                    center[1] + round(math.sin(angle) * (half_height - 5)),
+                )
+                pygame.draw.line(screen, edge_color, inner, outer, width=1)
+            pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 2)
+            pygame.draw.circle(screen, draw_color, center, profile.core_radius)
     else:
-        body_rect = pygame.Rect(
-            center[0] - half_width,
-            center[1] - half_height,
-            body_width,
-            body_height,
-        )
-        pygame.draw.ellipse(screen, ROBOT_OUTLINE, body_rect)
-        inner_rect = body_rect.inflate(-4, -4)
-        if inner_rect.width > 0 and inner_rect.height > 0:
-            pygame.draw.ellipse(screen, body_color, inner_rect)
-        pygame.draw.ellipse(screen, edge_color, body_rect, width=2)
-        inner_rect = body_rect.inflate(-12, -12)
-        if inner_rect.width > 0 and inner_rect.height > 0:
-            pygame.draw.ellipse(screen, ARENA_FLOOR_DARK, inner_rect, width=2)
-        for angle in (
-            0,
-            math.pi / 4,
-            math.pi / 2,
-            3 * math.pi / 4,
-            math.pi,
-            5 * math.pi / 4,
-            3 * math.pi / 2,
-            7 * math.pi / 4,
-        ):
-            inner = (
-                center[0] + round(math.cos(angle) * (profile.core_radius + 3)),
-                center[1] + round(math.sin(angle) * (profile.core_radius + 3)),
-            )
-            outer = (
-                center[0] + round(math.cos(angle) * (half_width - 5)),
-                center[1] + round(math.sin(angle) * (half_height - 5)),
-            )
-            pygame.draw.line(screen, edge_color, inner, outer, width=1)
-        pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 2)
-        pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+        screen.blit(sprite, sprite.get_rect(center=center))
+        if debug_geometry:
+            if footprint_points:
+                pygame.draw.polygon(
+                    screen,
+                    SELECTION_COLOR,
+                    footprint_points,
+                    width=1,
+                )
+            elif footprint_size is not None:
+                geometry_rect = pygame.Rect(
+                    center[0] - footprint_size[0] // 2,
+                    center[1] - footprint_size[1] // 2,
+                    footprint_size[0],
+                    footprint_size[1],
+                )
+                pygame.draw.ellipse(
+                    screen,
+                    SELECTION_COLOR,
+                    geometry_rect,
+                    width=1,
+                )
 
     if not alive:
         crack = max(6, profile.core_radius + 3)
@@ -3815,7 +3863,7 @@ def _draw(
             label_surface.get_rect(center=zone_rect.center),
         )
 
-    if is_rmuc and not debug_geometry:
+    if is_rmuc and debug_geometry:
         _draw_rmuc_terrain(
             screen,
             hud_font,

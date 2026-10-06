@@ -1,0 +1,265 @@
+from pathlib import Path
+
+import pygame
+import pytest
+
+from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.assets import AssetManager, resolve_asset_root
+from tarsgo_simulator.desktop.polish import structure_display_size
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+ASSET_ROOT = REPOSITORY_ROOT / "assets" / "rmuc"
+RMUC_SCENARIO = (
+    REPOSITORY_ROOT
+    / "configs"
+    / "scenarios"
+    / "rmuc-2026-region-rules-lab.yaml"
+)
+
+
+def _write_alpha_png(path: Path) -> pygame.Surface:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = pygame.Surface((8, 6), pygame.SRCALPHA, 32)
+    image.fill((220, 90, 50, 128))
+    pygame.image.save(image, path)
+    return image
+
+
+def test_asset_root_prefers_pyinstaller_bundle_and_paths_stay_inside_root(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundled_assets = bundle / "assets" / "rmuc"
+    bundled_assets.mkdir(parents=True)
+    source_root = tmp_path / "source"
+    package_file = source_root / "src" / "tarsgo_simulator" / "desktop" / "assets.py"
+    (source_root / "assets" / "rmuc").mkdir(parents=True)
+    package_file.parent.mkdir(parents=True)
+    package_file.touch()
+
+    resolved = resolve_asset_root(
+        bundle_path=bundle,
+        package_file=package_file,
+        working_directory=tmp_path / "elsewhere",
+    )
+    source_resolved = resolve_asset_root(
+        package_file=package_file,
+        working_directory=tmp_path / "elsewhere",
+    )
+
+    assert resolved == bundled_assets.resolve()
+    assert source_resolved == (source_root / "assets" / "rmuc").resolve()
+    manager = AssetManager(resolved)
+    assert manager.path_for("structures/base.png") == (
+        bundled_assets / "structures" / "base.png"
+    ).resolve()
+    with pytest.raises(ValueError):
+        manager.path_for("../outside.png")
+    with pytest.raises(ValueError):
+        manager.path_for("/outside.png")
+
+
+def test_asset_manager_loads_alpha_png_and_caches_source_and_transforms(
+    tmp_path: Path,
+) -> None:
+    original = _write_alpha_png(tmp_path / "field" / "sample.png")
+    manager = AssetManager(tmp_path)
+
+    first = manager.load("field/sample.png")
+    second = manager.load("field/sample.png")
+    assert first is not None
+    assert first is second
+    assert first.get_flags() & pygame.SRCALPHA
+    assert first.get_at((3, 3)).a == 128
+
+    rendered = manager.render(
+        "field/sample.png",
+        size=(20, 12),
+        angle=90,
+        tint=(210, 80, 75),
+    )
+    assert rendered is not None
+    assert rendered is manager.render(
+        "field/sample.png",
+        size=(20, 12),
+        angle=90,
+        tint=(210, 80, 75),
+    )
+    assert rendered.get_size() == (12, 20)
+    assert rendered.get_flags() & pygame.SRCALPHA
+    assert original.get_size() == (8, 6)
+
+
+def test_missing_asset_uses_the_supplied_fallback() -> None:
+    fallback = pygame.Surface((10, 8), pygame.SRCALPHA)
+    manager = AssetManager("/definitely/missing/rmuc-assets")
+
+    assert manager.load("structures/not-installed.png", fallback=fallback) is fallback
+    assert manager.render(
+        "structures/not-installed.png",
+        fallback=fallback,
+    ) is fallback
+
+
+def test_first_batch_structure_sprites_keep_transparency_and_team_tints() -> None:
+    manager = AssetManager(ASSET_ROOT)
+    for name in ("structures/base.png", "structures/outpost.png"):
+        sprite = manager.load(name)
+        assert sprite is not None
+        assert sprite.get_flags() & pygame.SRCALPHA
+        assert sprite.get_at((0, 0)).a == 0
+        assert any(sprite.get_at((x, y)).a >= 240 for x, y in (
+            (sprite.get_width() // 2, sprite.get_height() // 2),
+            (sprite.get_width() // 2, sprite.get_height() // 3),
+        ))
+
+    red = manager.render(
+        "structures/base.png",
+        size=(72, 62),
+        tint=(213, 83, 78),
+    )
+    blue = manager.render(
+        "structures/base.png",
+        size=(72, 62),
+        tint=(80, 137, 211),
+    )
+    assert red is not None and blue is not None
+    assert red.get_at((36, 31)) != blue.get_at((36, 31))
+
+
+def test_missing_structure_sprite_uses_procedural_drawing_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tarsgo_simulator.desktop import app
+
+    monkeypatch.setattr(app, "ASSET_MANAGER", AssetManager(tmp_path / "missing"))
+    pygame.font.init()
+    screen = pygame.Surface(app.WINDOW_SIZE)
+    screen.fill((0, 0, 0))
+    size = app._draw_rmuc_structure(
+        screen,
+        pygame.font.Font(None, 18),
+        structure_type="base",
+        center=(100, 100),
+        color=app.TEAM_RED_COLOR,
+        alive=True,
+        hp=5000,
+        max_hp=5000,
+        status="",
+        animation_time=0.0,
+        debug_geometry=False,
+    )
+
+    assert size > 0
+    assert screen.get_at((100, 100))[:3] != (0, 0, 0)
+    floor_screen = pygame.Surface(app.WINDOW_SIZE)
+    floor_screen.fill((0, 0, 0))
+    app._draw_rmuc_battlefield(
+        floor_screen,
+        pygame.Rect(*app.RMUC_FIELD_VIEW_RECT),
+    )
+    assert floor_screen.get_at((100, 250))[:3] != (0, 0, 0)
+
+
+def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
+    from tarsgo_simulator.desktop import app
+
+    pygame.font.init()
+    match = Match.from_scenario(RMUC_SCENARIO)
+    structures = tuple(match.structures)
+    original = {
+        structure.id: (
+            match.map.structure_bounds(structure.id),
+            structure.footprint,
+            structure.footprint_vertices,
+            structure.footprint_shape,
+        )
+        for structure in structures
+    }
+    viewport = app._viewport_for_match(match)
+    screen = pygame.Surface(app.WINDOW_SIZE)
+    teams = tuple(team.team_id for team in match.config.scenario.teams.values())
+    player_team = match.config.scenario.player_team
+    opponent_team = next(team_id for team_id in teams if team_id != player_team)
+
+    app._draw(
+        screen,
+        pygame.font.Font(None, 25),
+        pygame.font.Font(None, 18),
+        match,
+        player_team,
+        opponent_team,
+        set(),
+        None,
+        viewport,
+    )
+
+    assert screen.get_size() == (1100, 780)
+    assert app.ASSET_MANAGER.load("field/floor-surface.png") is not None
+    assert app.ASSET_MANAGER.load("structures/base.png") is not None
+    assert app.ASSET_MANAGER.load("structures/outpost.png") is not None
+    for structure in structures:
+        assert (
+            match.map.structure_bounds(structure.id),
+            structure.footprint,
+            structure.footprint_vertices,
+            structure.footprint_shape,
+        ) == original[structure.id]
+
+    outpost = next(item for item in structures if item.type == "outpost")
+    physical_bounds = match.map.structure_bounds(outpost.id)
+    assert physical_bounds is not None
+    physical_diameter = round(viewport.world_length_to_screen(outpost.footprint[0]))
+    assert physical_diameter < structure_display_size(
+        "outpost",
+        (physical_diameter, physical_diameter),
+    )[0]
+
+
+def test_default_rmuc_view_hides_terrain_symbols_until_debug_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tarsgo_simulator.desktop import app
+
+    pygame.font.init()
+    match = Match.from_scenario(RMUC_SCENARIO)
+    teams = tuple(team.team_id for team in match.config.scenario.teams.values())
+    player_team = match.config.scenario.player_team
+    opponent_team = next(team_id for team_id in teams if team_id != player_team)
+    calls: list[bool] = []
+
+    def record_terrain_draw(*_args: object, **kwargs: object) -> tuple[()]:
+        calls.append(True)
+        return ()
+
+    monkeypatch.setattr(app, "_draw_rmuc_terrain", record_terrain_draw)
+    arguments = (
+        pygame.font.Font(None, 25),
+        pygame.font.Font(None, 18),
+        match,
+        player_team,
+        opponent_team,
+        set(),
+        None,
+        app._viewport_for_match(match),
+    )
+
+    app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments)
+    assert calls == []
+
+    app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments, debug_geometry=True)
+    assert calls == [True]
+
+
+def test_packaging_configuration_copies_the_rmuc_asset_directory() -> None:
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "build-desktop.yml").read_text()
+    required_files = (
+        ASSET_ROOT / "field" / "floor-surface.png",
+        ASSET_ROOT / "structures" / "base.png",
+        ASSET_ROOT / "structures" / "outpost.png",
+    )
+
+    assert all(path.is_file() for path in required_files)
+    assert '--add-data "assets${{ matrix.data_separator }}assets"' in workflow
