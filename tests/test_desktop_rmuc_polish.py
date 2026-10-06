@@ -195,6 +195,16 @@ def test_terrain_markers_are_symbolic_and_renderer_does_not_mutate_map_geometry(
         terrain_connections=match.map.terrain_connections,
         zones=match.map.zones,
     )
+    road_markings = app._draw_rmuc_terrain(
+        screen,
+        small_font,
+        field,
+        viewport,
+        terrain_features=match.map.terrain_features,
+        terrain_connections=match.map.terrain_connections,
+        zones=match.map.zones,
+        debug_geometry=False,
+    )
 
     assert {marker.kind for marker in markers} == {
         "surface",
@@ -203,6 +213,8 @@ def test_terrain_markers_are_symbolic_and_renderer_does_not_mutate_map_geometry(
         "tunnel",
     }
     assert len(rendered) == len(markers)
+    assert road_markings
+    assert {kind for kind, _center in road_markings} == {"surface"}
     assert all(field.collidepoint(center) for _kind, center in rendered)
     assert match.map.obstacles == original_obstacles
     assert match.map.terrain_connections == original_connections
