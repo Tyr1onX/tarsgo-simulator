@@ -81,7 +81,7 @@ def test_rmuc_debug_zone_rendering_restores_original_zone_ids() -> None:
     assert label == "RED-BASE-BUFF"
 
 
-def test_rmuc_viewport_leaves_room_for_right_side_panel() -> None:
+def test_rmuc_viewport_expands_beneath_broadcast_hud() -> None:
     app = _app()
     match = _match()
     assert app._is_rmuc_rules_lab(match)
@@ -89,7 +89,105 @@ def test_rmuc_viewport_leaves_room_for_right_side_panel() -> None:
     viewport = app._viewport_for_match(match)
     field_right = viewport.origin[0] + viewport.screen_size[0]
 
-    assert field_right < app.RMUC_PANEL_RECT[0]
+    assert field_right > app.RMUC_PANEL_RECT[0]
+    assert viewport.screen_size[0] > 1000
+    assert viewport.screen_size[0] / viewport.screen_size[1] == pytest.approx(28 / 15)
+    assert viewport.origin[1] + viewport.screen_size[1] <= app.WINDOW_SIZE[1] - 28
+
+
+def test_rmuc_window_caption_uses_match_presentation() -> None:
+    app = _app()
+    assert app._window_caption(_match()) == "TARS-Go RMUC 2026 区域赛"
+
+
+def test_rmuc_inspector_toggle_accepts_key_and_button_click() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    size = app.WINDOW_SIZE
+    toggle = app._rmuc_inspector_toggle_rect(size)
+
+    key_event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_i)
+    click_event = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN,
+        button=1,
+        pos=toggle.center,
+    )
+    outside_click = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN,
+        button=1,
+        pos=(toggle.right + 4, toggle.centery),
+    )
+    other_key = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_d)
+
+    assert app._rmuc_inspector_toggle_requested(key_event, size)
+    assert app._rmuc_inspector_toggle_requested(click_event, size)
+    assert not app._rmuc_inspector_toggle_requested(outside_click, size)
+    assert not app._rmuc_inspector_toggle_requested(other_key, size)
+
+
+def test_rmuc_default_view_hides_inspector_until_opened(monkeypatch) -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    player_team = match.config.scenario.player_team
+    opponent_team = next(
+        team.team_id
+        for team in match.config.scenario.teams.values()
+        if team.team_id != player_team
+    )
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "_draw_rmuc_panel",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    pygame.font.init()
+    draw_args = (
+        pygame.Surface(app.WINDOW_SIZE),
+        app.ui_font(25),
+        app.ui_font(18),
+        match,
+        player_team,
+        opponent_team,
+        {"tarsgo-hero"},
+        None,
+        app._viewport_for_match(match),
+    )
+
+    app._draw(*draw_args, inspector_open=False)
+    assert calls == []
+
+    app._draw(*draw_args, inspector_open=True)
+    assert len(calls) == 1
+
+
+def test_rmuc_inspector_shows_controls_only_in_debug(monkeypatch) -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    player_team = match.config.scenario.player_team
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "_draw_context_controls",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    pygame.font.init()
+    draw_args = (
+        pygame.Surface(app.WINDOW_SIZE),
+        app.ui_font(18),
+        app.ui_font(12),
+        match,
+        player_team,
+        {"tarsgo-hero"},
+        app._rmuc_robot_labels(match),
+    )
+
+    app._draw_rmuc_panel(*draw_args, debug_geometry=False)
+    assert calls == []
+
+    app._draw_rmuc_panel(*draw_args, debug_geometry=True)
+    assert len(calls) == 1
 
 
 def test_rmuc_map_labels_are_minimal_and_number_infantry() -> None:

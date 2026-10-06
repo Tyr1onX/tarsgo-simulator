@@ -141,16 +141,19 @@ def test_base_and_outpost_have_distinct_structure_profiles() -> None:
     assert base.ring_count > outpost.ring_count
 
 
-def test_rmuc_panel_and_battlefield_do_not_overlap() -> None:
+def test_rmuc_inspector_overlay_and_toggle_stay_inside_1100x780() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
     field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
     panel = pygame.Rect(*app.RMUC_PANEL_RECT)
+    toggle = app._rmuc_inspector_toggle_rect(app.WINDOW_SIZE)
     window = pygame.Rect((0, 0), app.WINDOW_SIZE)
 
-    assert not field.colliderect(panel)
+    assert field.colliderect(panel)
     assert window.contains(field)
     assert window.contains(panel)
+    assert window.contains(toggle)
+    assert toggle.top >= field.bottom
 
 
 def test_battlefield_art_helpers_render_inside_1100x780() -> None:
