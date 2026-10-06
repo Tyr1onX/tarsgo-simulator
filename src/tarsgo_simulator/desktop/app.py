@@ -1,6 +1,7 @@
 """Minimal Pygame front end for training and partial rules-lab matches."""
 
 import argparse
+from functools import lru_cache
 import math
 from pathlib import Path
 
@@ -15,7 +16,9 @@ from tarsgo_simulator.desktop.polish import (
     contextual_controls,
     parse_virtual_shield,
     status_badges,
+    structure_display_size,
     structure_visual_profile,
+    terrain_visual_markers,
     zone_visual_style,
 )
 from tarsgo_simulator.desktop.viewport import Viewport
@@ -2112,15 +2115,164 @@ def _blend_color(
     )
 
 
+@lru_cache(maxsize=4)
+def _rmuc_field_material(size: tuple[int, int]) -> pygame.Surface:
+    """Build a subtle light falloff; it carries no field geometry semantics."""
+    width, height = size
+    material = pygame.Surface(size)
+    denominator = max(1, height - 1)
+    for y in range(height):
+        lift = round(3 * math.sin(math.pi * y / denominator))
+        color = tuple(min(255, channel + lift) for channel in ARENA_FLOOR)
+        pygame.draw.line(material, color, (0, y), (width - 1, y))
+    return material
+
+
 def _draw_rmuc_battlefield(
     screen: pygame.Surface,
     field_rect: pygame.Rect,
 ) -> None:
     shadow_rect = field_rect.inflate(10, 10).move(0, 3)
     pygame.draw.rect(screen, ARENA_SHADOW, shadow_rect)
-    pygame.draw.rect(screen, ARENA_FLOOR, field_rect)
-
+    screen.blit(_rmuc_field_material(field_rect.size), field_rect.topleft)
     pygame.draw.rect(screen, ARENA_EDGE, field_rect, width=2)
+    inner_rect = field_rect.inflate(-5, -5)
+    if inner_rect.width > 0 and inner_rect.height > 0:
+        pygame.draw.rect(
+            screen,
+            _blend_color(ARENA_FLOOR_LIGHT, ARENA_FLOOR, 0.42),
+            inner_rect,
+            width=1,
+        )
+
+
+def _draw_rmuc_terrain(
+    screen: pygame.Surface,
+    legend_font: pygame.font.Font,
+    field_rect: pygame.Rect,
+    viewport: Viewport,
+    *,
+    terrain_features: tuple,
+    terrain_connections: tuple,
+    zones: tuple,
+) -> tuple[tuple[str, tuple[int, int]], ...]:
+    """Draw symbolic terrain cues only; never render their anchor as a footprint."""
+    markers = terrain_visual_markers(
+        terrain_features,
+        terrain_connections,
+        zones,
+    )
+    palette = {
+        "surface": (115, 133, 137),
+        "elevated": (137, 147, 121),
+        "ramp": (151, 132, 108),
+        "tunnel": (118, 137, 153),
+    }
+    rendered: list[tuple[str, tuple[int, int]]] = []
+    for marker in markers:
+        center = tuple(
+            round(value)
+            for value in viewport.world_to_screen(marker.center)
+        )
+        if not field_rect.collidepoint(center):
+            continue
+        color = palette[marker.kind]
+        pygame.draw.circle(screen, ARENA_SHADOW, (center[0] + 1, center[1] + 2), 13)
+        pygame.draw.circle(screen, ARENA_FLOOR_DARK, center, 12)
+        pygame.draw.circle(screen, color, center, 12, width=1)
+        if marker.kind == "surface":
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 5, center[1] - 2),
+                (center[0] + 5, center[1] - 2),
+                width=2,
+            )
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 5, center[1] + 3),
+                (center[0] + 5, center[1] + 3),
+                width=2,
+            )
+        elif marker.kind == "elevated":
+            pygame.draw.polygon(
+                screen,
+                color,
+                (
+                    (center[0] - 6, center[1]),
+                    (center[0] - 3, center[1] - 4),
+                    (center[0] + 3, center[1] - 4),
+                    (center[0] + 6, center[1]),
+                    (center[0] + 3, center[1] + 4),
+                    (center[0] - 3, center[1] + 4),
+                ),
+                width=1,
+            )
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 3, center[1]),
+                (center[0] + 3, center[1]),
+                width=1,
+            )
+        elif marker.kind == "ramp":
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 5, center[1] + 3),
+                (center[0] + 4, center[1] - 3),
+                width=2,
+            )
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 5, center[1] + 5),
+                (center[0] + 4, center[1] - 1),
+                width=1,
+            )
+        else:
+            arch = pygame.Rect(center[0] - 5, center[1] - 5, 10, 11)
+            pygame.draw.arc(screen, color, arch, 0.0, math.pi, width=2)
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] - 5, center[1]),
+                (center[0] - 5, center[1] + 4),
+                width=2,
+            )
+            pygame.draw.line(
+                screen,
+                color,
+                (center[0] + 5, center[1]),
+                (center[0] + 5, center[1] + 4),
+                width=2,
+            )
+        rendered.append((marker.kind, center))
+
+    if rendered:
+        labels = {
+            "surface": "路面",
+            "elevated": "高地",
+            "ramp": "坡面",
+            "tunnel": "隧道",
+        }
+        kinds = {kind for kind, _center in rendered}
+        x = field_rect.left + 11
+        y = field_rect.bottom - 22
+        for kind in ("surface", "elevated", "ramp", "tunnel"):
+            if kind not in kinds:
+                continue
+            color = palette[kind]
+            pygame.draw.circle(screen, color, (x + 3, y + 8), 3)
+            text = legend_font.render(
+                labels[kind],
+                True,
+                _blend_color(color, ARENA_FLOOR, 0.25),
+            )
+            screen.blit(text, (x + 10, y))
+            x += text.get_width() + 27
+    return tuple(rendered)
 
 
 def _draw_rmuc_obstacle(
@@ -2260,7 +2412,7 @@ def _draw_zone_pattern(
     if rect.width < 12 or rect.height < 12:
         return
     layer = pygame.Surface(rect.size, pygame.SRCALPHA)
-    alpha = 54 if active else 24
+    alpha = 26 if active else 8
     local = layer.get_rect()
     if family == "resource":
         step = 14
@@ -2355,7 +2507,7 @@ def _draw_rmuc_zone(
     )
     color = _blend_color(family_color, team_color, 0.32)
     pulse = 0.5 + 0.5 * math.sin(animation_time * 3.4)
-    fill_alpha = 10 if not emphasized else round(25 + 11 * pulse)
+    fill_alpha = 5 if not emphasized else round(18 + 6 * pulse)
     overlay = pygame.Surface(zone_rect.size, pygame.SRCALPHA)
     if polygon_points:
         local_points = tuple(
@@ -2366,7 +2518,11 @@ def _draw_rmuc_zone(
         screen.blit(overlay, zone_rect.topleft)
         pygame.draw.polygon(
             screen,
-            _blend_color(color, TEXT_COLOR, 0.20 if emphasized else 0.05),
+            (
+                _blend_color(color, TEXT_COLOR, 0.20)
+                if emphasized
+                else _blend_color(color, ARENA_FLOOR, 0.40)
+            ),
             polygon_points,
             width=2 if emphasized else 1,
         )
@@ -2382,13 +2538,13 @@ def _draw_rmuc_zone(
             screen,
             zone_rect,
             family=style.family,
-            color=color,
+            color=(color if emphasized else _blend_color(color, ARENA_FLOOR, 0.40)),
             active=emphasized,
         )
         _draw_zone_corner_frame(
             screen,
             zone_rect,
-            color,
+            color if emphasized else _blend_color(color, ARENA_FLOOR, 0.40),
             active=emphasized,
         )
         if emphasized:
@@ -2408,7 +2564,7 @@ def _draw_rmuc_zone(
         screen,
         center=symbol_center,
         family=style.family,
-        color=color,
+        color=color if emphasized else _blend_color(color, ARENA_FLOOR, 0.40),
     )
     if _should_show_zone_label(
         emphasized=style.emphasized,
@@ -2499,10 +2655,9 @@ def _draw_rmuc_structure(
         draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     body_color = _blend_color(draw_color, ARENA_FLOOR_DARK, 0.58)
     edge_color = draw_color if alive else _blend_color(MUTED_COLOR, ARENA_GRID, 0.35)
-    body_width, body_height = (
-        footprint_size
-        if footprint_size is not None
-        else (profile.size * 2, profile.size * 2)
+    body_width, body_height = structure_display_size(
+        structure_type,
+        footprint_size,
     )
     half_width = max(1, body_width // 2)
     half_height = max(1, body_height // 2)
@@ -3658,6 +3813,17 @@ def _draw(
         screen.blit(
             label_surface,
             label_surface.get_rect(center=zone_rect.center),
+        )
+
+    if is_rmuc and not debug_geometry:
+        _draw_rmuc_terrain(
+            screen,
+            hud_font,
+            field_rect,
+            viewport,
+            terrain_features=match.map.terrain_features,
+            terrain_connections=match.map.terrain_connections,
+            zones=match.map.zones,
         )
 
     structure_statuses = (

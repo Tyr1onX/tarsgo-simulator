@@ -125,10 +125,17 @@ class Match:
             self._rmuc_spectator_ai_requested
             and self.config.rule_document.metadata.id == _RMUC_RULE_ID
         )
+        ai_robots = [robot for robot in self.robots if self._ai_controls(robot)]
+        if self._rmuc_spectator_ai:
+            ai_robots.sort(key=lambda robot: robot.id)
+        replan_phase = (
+            _RMUC_AI_REPLAN_INTERVAL / len(ai_robots)
+            if self._rmuc_spectator_ai and ai_robots
+            else 0.0
+        )
         self._ai_replan_elapsed = {
-            robot.id: 0.0
-            for robot in self.robots
-            if self._ai_controls(robot)
+            robot.id: index * replan_phase
+            for index, robot in enumerate(ai_robots)
         }
         self._ai_intents = {
             robot.id: "等待决策"
@@ -1600,7 +1607,9 @@ class Match:
                 elapsed = self._ai_replan_elapsed[robot.id] + dt
                 if not robot.alive:
                     self._rmuc_ai_step(robot, display_state)
-                    self._ai_replan_elapsed[robot.id] = 0.0
+                    self._ai_replan_elapsed[robot.id] = (
+                        elapsed % _RMUC_AI_REPLAN_INTERVAL
+                    )
                     continue
                 if elapsed >= _RMUC_AI_REPLAN_INTERVAL:
                     elapsed %= _RMUC_AI_REPLAN_INTERVAL
