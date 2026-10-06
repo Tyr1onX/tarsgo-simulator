@@ -10,6 +10,12 @@ from tarsgo_simulator.desktop.viewport import Viewport
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RULES_LAB_PATH = REPOSITORY_ROOT / "configs" / "scenarios" / "rmul-2026-rules-lab.yaml"
+RMUC_RULES_LAB_PATH = (
+    REPOSITORY_ROOT
+    / "configs"
+    / "scenarios"
+    / "rmuc-2026-region-rules-lab.yaml"
+)
 
 
 def test_viewport_round_trip_for_rmul_field_points() -> None:
@@ -30,6 +36,38 @@ def test_viewport_preserves_field_aspect_ratio_with_uniform_scale() -> None:
     assert screen_width / screen_height == pytest.approx(3 / 2)
     assert viewport.scale == pytest.approx(screen_width / 1200.0)
     assert viewport.scale == pytest.approx(screen_height / 800.0)
+
+
+@pytest.mark.parametrize(
+    "window_rect",
+    (
+        (18.0, 182.0, 822.0, 534.0),  # RMUC broadcast field in 1100 x 780.
+        (18.0, 160.0, 1220.0, 650.0),  # Wider supported desktop window.
+    ),
+)
+def test_rmuc_canonical_field_viewport_stays_proportional(window_rect) -> None:
+    match = Match(load_match_config(RMUC_RULES_LAB_PATH))
+    viewport = Viewport.fit(
+        (match.map.width, match.map.height),
+        window_rect,
+    )
+    screen_width, screen_height = viewport.screen_size
+    _left, top, available_width, available_height = window_rect
+
+    assert match.map.width / match.map.height == pytest.approx(28 / 15)
+    assert screen_width / screen_height == pytest.approx(28 / 15)
+    assert viewport.scale == pytest.approx(screen_width / match.map.width)
+    assert viewport.scale == pytest.approx(screen_height / match.map.height)
+    assert screen_width <= available_width
+    assert screen_height <= available_height
+    assert (
+        viewport.origin[0] > window_rect[0]
+        or viewport.origin[1] > top
+    )
+    assert (
+        viewport.origin[0] + screen_width < window_rect[0] + available_width
+        or viewport.origin[1] + screen_height < top + available_height
+    )
 
 
 def test_viewport_rejects_screen_points_outside_rendered_field() -> None:

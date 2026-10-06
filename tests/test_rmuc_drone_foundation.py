@@ -323,7 +323,7 @@ def test_drone_reset_restores_official_foundation_state() -> None:
 
     assert drone.aerial
     assert not drone.alive
-    assert drone.position == (500.0, 260.0)
+    assert drone.position == (2000.0, 2400.0)
     assert rules.drone_air_support_available(drone.id) == pytest.approx(30.0)
     assert not rules.drone_air_support_active(drone.id)
     assert rules._projectile_allowance_by_robot[drone.id].allowed == 750

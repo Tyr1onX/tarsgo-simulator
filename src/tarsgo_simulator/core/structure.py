@@ -12,3 +12,7 @@ class Structure:
     hp: int
     max_hp: int
     alive: bool = True
+    # World-unit footprint dimensions, shape and optional local polygon outline.
+    footprint: tuple[float, float] | None = None
+    footprint_shape: str = "rectangle"
+    footprint_vertices: tuple[tuple[float, float], ...] = ()

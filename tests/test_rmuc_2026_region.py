@@ -8,6 +8,7 @@ from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import Structure
 from tarsgo_simulator.rules.rmuc_2026_region import RMUC2026RegionalRules
+from rmuc_test_support import move_ground_robots_to_unbuffed_region
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ def _match() -> Match:
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 9999.0
+    move_ground_robots_to_unbuffed_region(match)
     return match
 
 
@@ -325,10 +327,10 @@ def test_invincible_base_does_not_absorb_target_selection() -> None:
             robot.hp = 0
             robot.path.clear()
 
-    attacker.position = (2400.0, 750.0)
+    attacker.position = (24500.0, 7500.0)
     attacker.attack_cooldown = 0.0
     match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
-    target_robot.position = (2180.0, 750.0)
+    target_robot.position = (23200.0, 7500.0)
     assert abs(attacker.position[0] - base.position[0]) < abs(
         attacker.position[0] - target_robot.position[0]
     )
@@ -445,9 +447,9 @@ def test_result_draws_when_all_tiebreaks_are_equal() -> None:
     assert match.winner is None
 
 
-def test_synthetic_field_uses_existing_2800_by_1500_world_boundary() -> None:
+def test_canonical_field_uses_official_28000_by_15000_millimeter_boundary() -> None:
     match = _match()
     zone_ids = {zone.id for zone in match.map.zones}
 
-    assert (match.map.width, match.map.height) == (2800, 1500)
+    assert (match.map.width, match.map.height) == (28000, 15000)
     assert {"red-outpost-rebuild", "blue-outpost-rebuild"} <= zone_ids

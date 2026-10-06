@@ -38,25 +38,49 @@ def test_rmuc_structures_use_rule_footprints_as_shared_map_blockers() -> None:
     blue_outpost = match.map.structure_bounds("blue-outpost")
     blue_base = match.map.structure_bounds("blue-base")
 
+    assert (match.map.width, match.map.height) == (28000, 15000)
     assert red_base is not None
-    assert (red_base.width, red_base.height) == (188.1, 161.9)
+    assert (red_base.width, red_base.height) == (1881, 1609)
+    red_base_structure = _structure(match, "red-base")
+    assert red_base_structure.footprint_shape == "polygon"
+    assert len(red_base_structure.footprint_vertices) == 6
     assert red_outpost is not None
-    assert (red_outpost.width, red_outpost.height) == (65.0, 65.0)
+    assert (red_outpost.width, red_outpost.height) == (550, 550)
+    assert _structure(match, "red-outpost").footprint_shape == "circle"
     assert blue_outpost is not None
-    assert (blue_outpost.width, blue_outpost.height) == (65.0, 65.0)
+    assert (blue_outpost.width, blue_outpost.height) == (550, 550)
     assert blue_base is not None
-    assert (blue_base.width, blue_base.height) == (188.1, 161.9)
+    assert (blue_base.width, blue_base.height) == (1881, 1609)
+    assert _structure(match, "red-base").position == (2407, 7500)
+    assert _structure(match, "red-outpost").position == (6600, 7500)
+    assert _structure(match, "blue-base").position == (25593, 7500)
+    assert _structure(match, "blue-outpost").position == (21400, 7500)
+    red_start = next(zone for zone in match.map.zones if zone.id == "red-start")
+    assert len(red_start.vertices) == 6
+    assert red_start.width == 4185
+    assert red_start.height == 3906
+    blue_start = next(zone for zone in match.map.zones if zone.id == "blue-start")
+    assert blue_start.width == red_start.width
+    assert blue_start.height == red_start.height
+    assert red_base.x == 1466.5
+    assert red_base.y == 6695.5
     assert not match.map.is_passable(_structure(match, "red-base").position)
     assert not match.map.is_passable(_structure(match, "red-outpost").position)
     assert not match.map.is_passable(_structure(match, "blue-outpost").position)
     assert not match.map.is_passable(_structure(match, "blue-base").position)
+    # The official Base is hexagonal and the Outpost body is circular; their
+    # unused bounding-box corners remain traversable.
+    assert match.map.is_passable((3307.0, 8250.0))
+    assert match.map.is_passable((7000.0, 7900.0))
+    assert match.map.has_line_of_sight((3307.0, 8250.0), (3360.0, 8300.0))
+    assert match.map.has_line_of_sight((7000.0, 7900.0), (7100.0, 8000.0))
     # Semantic buff/terrain zones are not physical collision geometry.
-    assert match.map.is_passable((1310.0, 640.0))
+    assert match.map.is_passable((2475.0, 12850.0))
 
 
 def test_astar_routes_around_rmuc_outpost_and_robots_stop_at_it() -> None:
     match = _match()
-    start, goal = (700.0, 750.0), (1000.0, 750.0)
+    start, goal = (4500.0, 7500.0), (8700.0, 7500.0)
 
     path = find_path(match.map, start, goal)
 
@@ -66,20 +90,20 @@ def test_astar_routes_around_rmuc_outpost_and_robots_stop_at_it() -> None:
         match.map.can_traverse(first, second)
         for first, second in zip(path, path[1:])
     )
-    assert any(point[1] < 699.0 or point[1] > 801.0 for point in path)
+    assert any(point[1] < 7045.0 or point[1] > 7955.0 for point in path)
 
-    base_path = find_path(match.map, (400.0, 750.0), (100.0, 750.0))
+    base_path = find_path(match.map, (1000.0, 7500.0), (4000.0, 7500.0))
     assert base_path is not None
     assert all(
         match.map.can_traverse(first, second)
         for first, second in zip(base_path, base_path[1:])
     )
-    assert any(point[1] <= 651.0 or point[1] >= 849.0 for point in base_path)
+    assert any(point[1] <= 6645.0 or point[1] >= 8355.0 for point in base_path)
 
     for robot_id in ("tarsgo-infantry-1", "tarsgo-drone"):
         robot = _robot(match, robot_id)
         robot.position = start
-        robot.speed = 100.0
+        robot.speed = 1000.0
         robot.alive = True
         robot.path = [goal]
         proposed_position, proposed_path = robot.propose_movement(5.0, match.map)
@@ -92,19 +116,19 @@ def test_rmuc_structure_target_is_exempt_but_other_structure_blocks_sight() -> N
     base = _structure(match, "red-base")
     outpost = _structure(match, "red-outpost")
 
-    assert not match.map.has_line_of_sight((400.0, 750.0), base.position)
-    assert match.map.has_line_of_sight((400.0, 750.0), base.position, base.id)
-    assert not match.map.has_line_of_sight((700.0, 750.0), (1000.0, 750.0))
-    assert not match.map.has_line_of_sight((700.0, 750.0), outpost.position, base.id)
+    assert not match.map.has_line_of_sight((1000.0, 7500.0), base.position)
+    assert match.map.has_line_of_sight((1000.0, 7500.0), base.position, base.id)
+    assert not match.map.has_line_of_sight((6000.0, 7500.0), (7200.0, 7500.0))
+    assert not match.map.has_line_of_sight((6000.0, 7500.0), outpost.position, base.id)
 
 
 def test_rmuc_combat_blocks_occluded_shots_and_allows_clear_structure_hits() -> None:
     match = _match()
     red = _robot(match, "tarsgo-hero")
     blue = _robot(match, "opponent-hero")
-    red.position = (400.0, 750.0)
-    blue.position = (40.0, 750.0)
-    red.attack_range = blue.attack_range = 500.0
+    red.position = (1000.0, 7500.0)
+    blue.position = (4000.0, 7500.0)
+    red.attack_range = blue.attack_range = 5000.0
     old_hp = (red.hp, blue.hp)
 
     def apply_damage(target, amount, _attacker):
@@ -121,8 +145,8 @@ def test_rmuc_combat_blocks_occluded_shots_and_allows_clear_structure_hits() -> 
 
     assert (red.hp, blue.hp) == old_hp
 
-    red.position = (1000.0, 500.0)
-    blue.position = (1200.0, 500.0)
+    red.position = (4000.0, 6000.0)
+    blue.position = (4000.0, 8000.0)
     update_combat(
         [red, blue],
         match.map,
@@ -132,7 +156,7 @@ def test_rmuc_combat_blocks_occluded_shots_and_allows_clear_structure_hits() -> 
     )
     assert red.hp < old_hp[0] and blue.hp < old_hp[1]
 
-    blue.position = (400.0, 750.0)
+    blue.position = (5000.0, 7500.0)
     blue.attack_cooldown = 0.0
     red_base = _structure(match, "red-base")
     hits: list[str] = []
@@ -151,7 +175,7 @@ def test_rmuc_ai_paths_to_a_passable_attack_approach_for_structure_targets() -> 
     match = _match(spectator_ai=True)
     hero = _robot(match, "tarsgo-hero")
     target = _structure(match, "blue-outpost")
-    hero.position = (1600.0, 750.0)
+    hero.position = (16000.0, 7500.0)
 
     match._set_ai_goal(
         hero,
