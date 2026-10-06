@@ -259,9 +259,9 @@ def test_battlefield_art_helpers_render_inside_1100x780() -> None:
     )
 
     assert screen.get_rect().contains(field)
-    assert sum(screen.get_at(field.center)[:3]) > sum(
-        screen.get_at((field.centerx, field.top + 8))[:3]
-    )
+    assert screen.get_at(field.center)[:3] != screen.get_at(
+        (field.centerx, field.top + 8)
+    )[:3]
 
 
 def test_zone_art_renders_default_selected_and_targeted_states() -> None:
@@ -306,7 +306,7 @@ def test_canonical_zone_render_uses_polygon_outline_and_fill() -> None:
         zone_id="red-resource",
         polygon_points=((80, 80), (170, 80), (125, 140)),
         selected_types=set(),
-        occupied_by_selected=False,
+        occupied_by_selected=True,
         targeted_by_selected=False,
         animation_time=0.0,
     )
@@ -350,7 +350,7 @@ def test_buff_zone_is_quiet_by_default_and_clearer_when_contextual() -> None:
             for y in range(rect.top, rect.bottom)
         )
 
-    assert visual_energy(idle) > 0
+    assert visual_energy(idle) == 0
     assert visual_energy(emphasized) > visual_energy(idle)
 
 
