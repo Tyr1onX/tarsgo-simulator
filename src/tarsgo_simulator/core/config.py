@@ -8,7 +8,12 @@ from typing import Any, Mapping
 
 import yaml
 
-from tarsgo_simulator.core.map import Rectangle, Zone
+from tarsgo_simulator.core.map import (
+    Rectangle,
+    TerrainConnection,
+    TerrainFeature,
+    Zone,
+)
 
 
 class ConfigError(ValueError):
@@ -73,6 +78,8 @@ class ScenarioDefinition:
     structures: tuple[StructureDefinition, ...]
     spawns: dict[str, tuple[float, float]]
     path_grid_size: float = 20.0
+    terrain_features: tuple[TerrainFeature, ...] = ()
+    terrain_connections: tuple[TerrainConnection, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,8 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     setup = _mapping(scenario_data, "setup", "setup", scenario_file)
     field_geometry_id = scenario_data.get("field_geometry")
     field_geometry_data: dict[str, Any] | None = None
+    terrain_features: tuple[TerrainFeature, ...] = ()
+    terrain_connections: tuple[TerrainConnection, ...] = ()
     if field_geometry_id is not None:
         if not isinstance(field_geometry_id, str) or not field_geometry_id.strip():
             raise ConfigError(f"{scenario_file}: `field_geometry` 必须是非空 id")
@@ -141,6 +150,9 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         )
         if field_geometry_data.get("team_symmetry") == "rotate_180":
             zones = _mirror_team_zones(zones, map_width, map_height)
+        terrain_features, terrain_connections = _terrain(
+            field_geometry_data, field_geometry_file
+        )
     else:
         map_data = _mapping(setup, "map", "setup.map", scenario_file)
         map_width = _number(map_data, "width", "setup.map.width", scenario_file)
@@ -235,6 +247,8 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         structures=structures,
         spawns=spawns,
         path_grid_size=path_grid_size,
+        terrain_features=terrain_features,
+        terrain_connections=terrain_connections,
     )
     return MatchConfig(rule_document, scenario)
 
@@ -586,6 +600,108 @@ def _field_structures(
                 )
             )
     return tuple(result)
+
+
+def _terrain(
+    data: Mapping[str, Any], path: Path
+) -> tuple[tuple[TerrainFeature, ...], tuple[TerrainConnection, ...]]:
+    raw = data.get("terrain", {})
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: `terrain` 必须是映射")
+    raw_features = raw.get("features", [])
+    raw_connections = raw.get("connections", [])
+    if not isinstance(raw_features, list) or not isinstance(raw_connections, list):
+        raise ConfigError(f"{path}: terrain.features/connections 必须是列表")
+
+    features: list[TerrainFeature] = []
+    feature_ids: set[str] = set()
+    allowed_kinds = {"ground", "elevated", "surface", "ramp", "tunnel"}
+    for index, item in enumerate(raw_features):
+        label = f"terrain.features[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{path}: `{label}` 必须是映射")
+        feature_id = _string(item, "id", f"{label}.id", path)
+        kind = _string(item, "kind", f"{label}.kind", path)
+        if feature_id in feature_ids:
+            raise ConfigError(f"{path}: terrain feature id 重复：{feature_id}")
+        if kind not in allowed_kinds:
+            raise ConfigError(f"{path}: `{label}.kind` 无效：{kind}")
+        feature_ids.add(feature_id)
+
+        raw_height = item.get("relative_height_mm")
+        height: tuple[float, float] | None = None
+        if raw_height is not None:
+            if (
+                not isinstance(raw_height, list)
+                or len(raw_height) != 2
+                or any(
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                    for value in raw_height
+                )
+                or raw_height[0] > raw_height[1]
+            ):
+                raise ConfigError(
+                    f"{path}: `{label}.relative_height_mm` 必须是有序的两元素数值列表"
+                )
+            height = (float(raw_height[0]), float(raw_height[1]))
+        raw_slope = item.get("slope_degrees")
+        slope: float | None = None
+        if raw_slope is not None:
+            if (
+                not isinstance(raw_slope, (int, float))
+                or isinstance(raw_slope, bool)
+                or not math.isfinite(raw_slope)
+                or not 0 < raw_slope < 90
+            ):
+                raise ConfigError(
+                    f"{path}: `{label}.slope_degrees` 必须介于 0° 与 90°"
+                )
+            slope = float(raw_slope)
+        source = item.get("source", "")
+        if not isinstance(source, str):
+            raise ConfigError(f"{path}: `{label}.source` 必须是字串")
+        features.append(
+            TerrainFeature(feature_id, kind, height, slope, source.strip())
+        )
+
+    feature_by_id = {feature.id: feature for feature in features}
+    connections: list[TerrainConnection] = []
+    seen_connections: set[tuple[str, str, str]] = set()
+    used_connectors: set[str] = set()
+    for index, item in enumerate(raw_connections):
+        label = f"terrain.connections[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{path}: `{label}` 必须是映射")
+        from_surface = _string(item, "from", f"{label}.from", path)
+        to_surface = _string(item, "to", f"{label}.to", path)
+        via_feature = _string(item, "via", f"{label}.via", path)
+        missing = {from_surface, to_surface, via_feature} - feature_by_id.keys()
+        if missing:
+            raise ConfigError(
+                f"{path}: `{label}` 引用了未知地形：{', '.join(sorted(missing))}"
+            )
+        if from_surface == to_surface:
+            raise ConfigError(f"{path}: `{label}` 起点与终点不能相同")
+        if feature_by_id[via_feature].kind not in {"ramp", "tunnel"}:
+            raise ConfigError(f"{path}: `{label}.via` 必须是坡道或隧道")
+        if (
+            feature_by_id[from_surface].kind not in {"ground", "elevated", "surface"}
+            or feature_by_id[to_surface].kind not in {"ground", "elevated", "surface"}
+        ):
+            raise ConfigError(
+                f"{path}: `{label}` 起点与终点必须是地面、高地或未定层级表面"
+            )
+        if via_feature in used_connectors:
+            raise ConfigError(f"{path}: connector `{via_feature}` 只能连接一组表面")
+        key = (from_surface, to_surface, via_feature)
+        if key in seen_connections:
+            raise ConfigError(f"{path}: terrain connection 重复：{key}")
+        seen_connections.add(key)
+        used_connectors.add(via_feature)
+        connections.append(TerrainConnection(*key))
+    return tuple(features), tuple(connections)
 
 
 def _local_footprint_vertices(

@@ -80,12 +80,54 @@ zones:
   - id: red-terrain-tunnel-end-b
     points: [[9700, 3200], [10200, 3200], [10200, 3700], [9700, 3700]]
 
-# No additional module is registered as a solid 2D obstacle until its contact
-# footprint and height-dependent traversal/LOS semantics are dimensioned.
+# Terrain descriptions are symbolic until their complete XY footprints and
+# portal coordinates can be bound to the canonical mm field. They do not add
+# collision, LOS, movement, or gameplay effects.
 obstacles: []
+
+# Confirmed by the V1.4.0 module diagrams and terrain descriptions. Heights
+# and grades are metadata only; symbolic A* routes can cross layers only by
+# these explicit ramp/tunnel nodes. The current diagrams do not provide every
+# portal coordinate needed to constrain the live XY path grid.
+terrain:
+  features:
+    - {id: field-ground, kind: ground, source: "§4.1, p.31"}
+    - {id: north-road, kind: surface, source: "§4.3.2, Figure 4-27, p.55"}
+    - {id: south-road, kind: surface, source: "§4.3.2, Figure 4-27, p.55"}
+    - {id: central-highland, kind: elevated, source: "§4.3.2, Figure 4-27, p.55"}
+    - {id: central-ramp-north, kind: ramp, slope_degrees: 10.5, source: "§4.3.2, Figure 4-27, p.55"}
+    - {id: central-ramp-south, kind: ramp, slope_degrees: 10.5, source: "§4.3.2, Figure 4-27, p.55; center symmetry, §4.1, p.31"}
+    - {id: red-trapezoid-highland, kind: elevated, relative_height_mm: [200, 400], source: "§4.3.1, p.53"}
+    - {id: red-trapezoid-ramp-steep, kind: ramp, slope_degrees: 43, source: "Figure 4-26, p.54"}
+    - {id: red-trapezoid-ramp-shallow, kind: ramp, slope_degrees: 23, source: "Figure 4-26, p.54"}
+    - {id: fortress-ramp, kind: ramp, slope_degrees: 20, source: "Figure 4-25, p.53"}
+    - {id: assembly-slope-red-outer, kind: ramp, slope_degrees: 14, source: "Figure 4-28, p.56"}
+    - {id: assembly-slope-red-inner, kind: ramp, slope_degrees: 12, source: "Figure 4-28, p.56"}
+    - {id: assembly-slope-blue-inner, kind: ramp, slope_degrees: 45, source: "Figure 4-28, p.56"}
+    - {id: assembly-slope-blue-outer, kind: ramp, slope_degrees: 15, source: "Figure 4-28, p.56"}
+    - {id: blue-trapezoid-highland, kind: elevated, relative_height_mm: [200, 400], source: "§4.3.1, p.53; center symmetry, §4.1, p.31"}
+    - {id: blue-trapezoid-ramp-steep, kind: ramp, slope_degrees: 43, source: "Figure 4-26, p.54; center symmetry, §4.1, p.31"}
+    - {id: blue-trapezoid-ramp-shallow, kind: ramp, slope_degrees: 23, source: "Figure 4-26, p.54; center symmetry, §4.1, p.31"}
+    - {id: road-tunnel-west-entry, kind: surface, source: "Figure 4-4 and Figure 4-34, pp.34, 61"}
+    - {id: road-tunnel-west-exit, kind: surface, source: "Figure 4-4 and Figure 4-34, pp.34, 61"}
+    - {id: road-tunnel-west-passage, kind: tunnel, source: "§4.4, Figure 4-34, p.61"}
+    - {id: road-tunnel-east-entry, kind: surface, source: "Figure 4-4 and Figure 4-34, pp.34, 61"}
+    - {id: road-tunnel-east-exit, kind: surface, source: "Figure 4-4 and Figure 4-34, pp.34, 61"}
+    - {id: road-tunnel-east-passage, kind: tunnel, source: "§4.4, Figure 4-34, p.61"}
+    - {id: road-ramp-11, kind: ramp, slope_degrees: 11, source: "Figure 4-34, p.61"}
+    - {id: road-ramp-15, kind: ramp, slope_degrees: 15, source: "Figure 4-34, p.61"}
+    - {id: fly-slope, kind: ramp, slope_degrees: 17, source: "§4.4.2, Figure 4-37, p.63"}
+  connections:
+    - {from: north-road, to: central-highland, via: central-ramp-north}
+    - {from: south-road, to: central-highland, via: central-ramp-south}
+    - {from: road-tunnel-west-entry, to: road-tunnel-west-exit, via: road-tunnel-west-passage}
+    - {from: road-tunnel-east-entry, to: road-tunnel-east-exit, via: road-tunnel-east-passage}
 
 deferred:
   - "Undimensioned field module edges and interaction-card extents beyond the plan projections above."
   - "2D collision edges for bridges, roads, ramps, tunnels and elevated modules until their complete plan footprints are dimensioned."
-  - "2.5D height, ramp grade, tunnel clearance, step height, bridges/overhangs and height-dependent collision/line-of-sight."
+  - "Binding symbolic terrain layers and connectors to exact XY footprints and portal coordinates in the movement A* grid."
+  - "Traversability from field ground onto the trapezoid highlands: the drawings specify ramp angles and elevation, but the text does not establish robot-accessible paths."
+  - "Height-dependent collision/line-of-sight, central-highland absolute height, tunnel clearance, step height and bridge/overhang geometry."
+  - "Jump trajectory and airborne movement over the road fly slope. Drone flight-area and height constraints remain separate from ground terrain."
   - "Exact Outpost platform footprint; only the 550 mm body circle is used for 2D blocking."

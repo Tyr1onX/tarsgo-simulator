@@ -71,6 +71,64 @@ def find_path(
     return None
 
 
+def find_terrain_path(
+    game_map: GameMap,
+    start_surface: str,
+    goal_surface: str,
+) -> list[str] | None:
+    """Return a route through only explicitly documented terrain connectors.
+
+    This semantic route is separate from XY A*: the V1.4.0 drawings establish
+    several module connections but do not give complete portal coordinates
+    that can be bound safely to the 200 mm movement grid.
+    """
+    features = {feature.id: feature for feature in game_map.terrain_features}
+    if start_surface not in features or goal_surface not in features:
+        return None
+    if features[start_surface].kind not in {"ground", "elevated", "surface"} or (
+        features[goal_surface].kind not in {"ground", "elevated", "surface"}
+    ):
+        return None
+    if start_surface == goal_surface:
+        return [start_surface]
+
+    adjacency: dict[str, set[str]] = {feature_id: set() for feature_id in features}
+    for connection in game_map.terrain_connections:
+        adjacency[connection.from_surface].add(connection.via_feature)
+        adjacency[connection.via_feature].add(connection.from_surface)
+        adjacency[connection.to_surface].add(connection.via_feature)
+        adjacency[connection.via_feature].add(connection.to_surface)
+
+    open_nodes: list[tuple[int, int, str]] = [(0, 0, start_surface)]
+    sequence = count(1)
+    costs = {start_surface: 0}
+    came_from: dict[str, str] = {}
+    visited: set[str] = set()
+    while open_nodes:
+        _, _, current = heappop(open_nodes)
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == goal_surface:
+            route = [current]
+            while current in came_from:
+                current = came_from[current]
+                route.append(current)
+            route.reverse()
+            return route
+        for neighbor in sorted(adjacency[current]):
+            if neighbor in visited:
+                continue
+            candidate_cost = costs[current] + 1
+            if candidate_cost >= costs.get(neighbor, math.inf):
+                continue
+            costs[neighbor] = candidate_cost
+            came_from[neighbor] = current
+            # No geometric heuristic is invented for these symbolic nodes.
+            heappush(open_nodes, (candidate_cost, next(sequence), neighbor))
+    return None
+
+
 def _cell_for(
     point: tuple[float, float], grid_size: float = GRID_SIZE
 ) -> tuple[int, int]:

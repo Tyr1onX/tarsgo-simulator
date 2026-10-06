@@ -60,6 +60,26 @@ class Zone:
         )
 
 
+@dataclass(frozen=True)
+class TerrainFeature:
+    """Officially described terrain semantics, independent of 2D collision."""
+
+    id: str
+    kind: str
+    relative_height_mm: tuple[float, float] | None = None
+    slope_degrees: float | None = None
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class TerrainConnection:
+    """A verified surface-to-surface transition through a named module."""
+
+    from_surface: str
+    to_surface: str
+    via_feature: str
+
+
 class GameMap:
     def __init__(
         self,
@@ -70,6 +90,8 @@ class GameMap:
         zones: Iterable[Zone] = (),
         structures: Iterable[Structure] = (),
         path_grid_size: float = 20.0,
+        terrain_features: Iterable[TerrainFeature] = (),
+        terrain_connections: Iterable[TerrainConnection] = (),
     ) -> None:
         self.width = float(width)
         self.height = float(height)
@@ -78,6 +100,8 @@ class GameMap:
         self.zones = tuple(zones)
         self.structures = tuple(structures)
         self.path_grid_size = float(path_grid_size)
+        self.terrain_features = tuple(terrain_features)
+        self.terrain_connections = tuple(terrain_connections)
         self.unit_scale = self.path_grid_size / 20.0
         self._structure_bounds_by_id = {
             structure.id: Rectangle(
