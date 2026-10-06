@@ -8,7 +8,7 @@ used to calculate gameplay state.
 
 | Path | Use | Source |
 | --- | --- | --- |
-| `field/floor-surface.png` | Arena floor material | Original project asset generated for this simulator on 2026-10-06. Prompt: overhead warm-gray modular competition-floor panels with subtle joints, scuffs, and wear; no marks, logos, text, or external references. |
+| `field/floor-surface.png` | Arena floor material | Original project asset generated for PR #67 on 2026-10-06. Prompt: orthographic top-down graphite-gray matte composite panels with large restrained seams, a subtle brushed technical surface, sparse cool-white and muted-blue details; no arena objects, markings, symbols, text, logos, neon, or hexagons. |
 | `structures/base.png` | Base sprite | Original project asset generated for this simulator on 2026-10-06. Prompt: isolated, transparent, orthographic armored arena base with charcoal metal, silver edges, amber lights, and restrained red/blue panels; no marks, logos, text, or external references. |
 | `structures/outpost.png` | Outpost sprite | Original project asset generated for this simulator on 2026-10-06. Prompt: isolated, transparent, orthographic circular arena outpost with a segmented metal ring, central hub, amber lights, and restrained red/blue panels; no marks, logos, text, or external references. |
 
