@@ -105,6 +105,54 @@ def test_rmuc_robot_silhouettes_are_distinct_without_labels() -> None:
     assert len(set(renderings)) == 5
 
 
+def test_rmuc_robot_sprite_layers_follow_body_and_turret_angles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.init()
+    requested_angles: list[tuple[str, float]] = []
+    render_asset = app.ASSET_MANAGER.render
+
+    def record_render(
+        relative_path: str,
+        *,
+        size: tuple[int, int] | None = None,
+        angle: float = 0.0,
+        tint: tuple[int, int, int] | None = None,
+        fallback: pygame.Surface | None = None,
+    ) -> pygame.Surface | None:
+        requested_angles.append((relative_path, angle))
+        return render_asset(
+            relative_path,
+            size=size,
+            angle=angle,
+            tint=tint,
+            fallback=fallback,
+        )
+
+    monkeypatch.setattr(app.ASSET_MANAGER, "render", record_render)
+    app._draw_rmuc_robot_shape(
+        pygame.Surface((128, 128)),
+        center=(64, 64),
+        robot_type="hero",
+        color=app.TEAM_BLUE_COLOR,
+        body_angle=math.pi / 2,
+        turret_angle=0.0,
+        alive=True,
+        selected=False,
+        animation_time=0.0,
+        muzzle_remaining=0.0,
+        muzzle_caliber="42mm",
+        impact_remaining=0.0,
+    )
+
+    assert requested_angles == [
+        ("robots/hero-chassis.png", -90.0),
+        ("robots/hero-turret.png", 0.0),
+    ]
+
+
 def test_visual_orientation_update_does_not_mutate_gameplay_position() -> None:
     match = _match()
     robot = next(item for item in match.robots if item.id == "tarsgo-hero")

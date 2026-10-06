@@ -128,6 +128,29 @@ def test_first_batch_structure_sprites_keep_transparency_and_team_tints() -> Non
     assert red.get_at((36, 31)) != blue.get_at((36, 31))
 
 
+def test_robot_sprite_set_is_complete_transparent_and_presentation_only() -> None:
+    manager = AssetManager(ASSET_ROOT)
+    sprite_names = (
+        "robots/hero-chassis.png",
+        "robots/hero-turret.png",
+        "robots/engineer.png",
+        "robots/infantry-chassis.png",
+        "robots/infantry-turret.png",
+        "robots/sentry-chassis.png",
+        "robots/sentry-turret.png",
+        "robots/drone.png",
+    )
+
+    for name in sprite_names:
+        sprite = manager.load(name)
+        assert sprite is not None
+        assert sprite.get_flags() & pygame.SRCALPHA
+        assert sprite.get_at((0, 0)).a == 0
+        rendered = manager.render(name, size=(48, 32), angle=37, tint=(213, 83, 78))
+        assert rendered is not None
+        assert rendered.get_flags() & pygame.SRCALPHA
+
+
 def test_missing_structure_sprite_uses_procedural_drawing_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -163,8 +186,36 @@ def test_missing_structure_sprite_uses_procedural_drawing_fallback(
     assert floor_screen.get_at((100, 250))[:3] != (0, 0, 0)
 
 
+def test_missing_robot_sprite_uses_procedural_drawing_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tarsgo_simulator.desktop import app
+
+    monkeypatch.setattr(app, "ASSET_MANAGER", AssetManager(tmp_path / "missing"))
+    screen = pygame.Surface((128, 128))
+    screen.fill((0, 0, 0))
+    app._draw_rmuc_robot_shape(
+        screen,
+        center=(64, 64),
+        robot_type="hero",
+        color=app.TEAM_RED_COLOR,
+        body_angle=0.2,
+        turret_angle=-0.1,
+        alive=True,
+        selected=False,
+        animation_time=0.0,
+        muzzle_remaining=0.0,
+        muzzle_caliber="42mm",
+        impact_remaining=0.0,
+    )
+
+    assert screen.get_at((64, 64))[:3] != (0, 0, 0)
+
+
 def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
     from tarsgo_simulator.desktop import app
+    from tarsgo_simulator.desktop.visuals import CombatVisualState
 
     pygame.font.init()
     match = Match.from_scenario(RMUC_SCENARIO)
@@ -178,12 +229,23 @@ def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
         )
         for structure in structures
     }
+    original_robots = {
+        robot.id: (
+            robot.position,
+            robot.type,
+            robot.alive,
+            match.ruleset.robot_parameters(robot.type),
+        )
+        for robot in match.robots
+    }
     viewport = app._viewport_for_match(match)
     screen = pygame.Surface(app.WINDOW_SIZE)
     teams = tuple(team.team_id for team in match.config.scenario.teams.values())
     player_team = match.config.scenario.player_team
     opponent_team = next(team_id for team_id in teams if team_id != player_team)
 
+    visual_state = CombatVisualState()
+    visual_state.reset(match)
     app._draw(
         screen,
         pygame.font.Font(None, 25),
@@ -194,12 +256,26 @@ def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
         set(),
         None,
         viewport,
+        visual_state=visual_state,
     )
 
     assert screen.get_size() == (1100, 780)
     assert app.ASSET_MANAGER.load("field/floor-surface.png") is not None
     assert app.ASSET_MANAGER.load("structures/base.png") is not None
     assert app.ASSET_MANAGER.load("structures/outpost.png") is not None
+    assert all(
+        app.ASSET_MANAGER.load(f"robots/{name}") is not None
+        for name in (
+            "hero-chassis.png",
+            "hero-turret.png",
+            "engineer.png",
+            "infantry-chassis.png",
+            "infantry-turret.png",
+            "sentry-chassis.png",
+            "sentry-turret.png",
+            "drone.png",
+        )
+    )
     for structure in structures:
         assert (
             match.map.structure_bounds(structure.id),
@@ -207,6 +283,13 @@ def test_rmuc_art_renders_at_1100x780_without_changing_mm_footprints() -> None:
             structure.footprint_vertices,
             structure.footprint_shape,
         ) == original[structure.id]
+    for robot in match.robots:
+        assert (
+            robot.position,
+            robot.type,
+            robot.alive,
+            match.ruleset.robot_parameters(robot.type),
+        ) == original_robots[robot.id]
 
     outpost = next(item for item in structures if item.type == "outpost")
     physical_bounds = match.map.structure_bounds(outpost.id)
@@ -259,6 +342,14 @@ def test_packaging_configuration_copies_the_rmuc_asset_directory() -> None:
         ASSET_ROOT / "field" / "floor-surface.png",
         ASSET_ROOT / "structures" / "base.png",
         ASSET_ROOT / "structures" / "outpost.png",
+        ASSET_ROOT / "robots" / "hero-chassis.png",
+        ASSET_ROOT / "robots" / "hero-turret.png",
+        ASSET_ROOT / "robots" / "engineer.png",
+        ASSET_ROOT / "robots" / "infantry-chassis.png",
+        ASSET_ROOT / "robots" / "infantry-turret.png",
+        ASSET_ROOT / "robots" / "sentry-chassis.png",
+        ASSET_ROOT / "robots" / "sentry-turret.png",
+        ASSET_ROOT / "robots" / "drone.png",
     )
 
     assert all(path.is_file() for path in required_files)

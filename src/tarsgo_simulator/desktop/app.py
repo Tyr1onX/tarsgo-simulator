@@ -3047,6 +3047,58 @@ def _draw_robot_lifecycle_effects(
         )
 
 
+_RMUC_ROBOT_SPRITE_PARTS = {
+    "hero": ("hero-chassis.png", "hero-turret.png"),
+    "engineer": ("engineer.png",),
+    "infantry": ("infantry-chassis.png", "infantry-turret.png"),
+    "sentry": ("sentry-chassis.png", "sentry-turret.png"),
+    "drone": ("drone.png",),
+}
+_RMUC_ROBOT_SPRITE_SIZES = {
+    "hero": ((50, 34), (66, 38)),
+    "engineer": ((70, 36),),
+    "infantry": ((34, 26), (42, 28)),
+    "sentry": ((58, 38), (68, 40)),
+    "drone": ((48, 48),),
+}
+
+
+def _rmuc_robot_sprites_available(robot_type: str) -> bool:
+    parts = _RMUC_ROBOT_SPRITE_PARTS.get(robot_type)
+    return bool(parts) and all(
+        ASSET_MANAGER.load(f"robots/{part}") is not None for part in parts
+    )
+
+
+def _draw_rmuc_robot_sprites(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    robot_type: str,
+    color: tuple[int, int, int],
+    body_angle: float,
+    turret_angle: float,
+) -> bool:
+    """Draw presentation-only robot art; sprite pixels never define geometry."""
+    parts = _RMUC_ROBOT_SPRITE_PARTS.get(robot_type)
+    sizes = _RMUC_ROBOT_SPRITE_SIZES.get(robot_type)
+    if not parts or not sizes or not _rmuc_robot_sprites_available(robot_type):
+        return False
+
+    angles = (-math.degrees(body_angle), -math.degrees(turret_angle))
+    for index, (part, size) in enumerate(zip(parts, sizes)):
+        rendered = ASSET_MANAGER.render(
+            f"robots/{part}",
+            size=size,
+            angle=angles[index],
+            tint=color,
+        )
+        if rendered is None:
+            return False
+        screen.blit(rendered, rendered.get_rect(center=center))
+    return True
+
+
 def _draw_rmuc_robot_shape(
     screen: pygame.Surface,
     *,
@@ -3077,6 +3129,7 @@ def _draw_rmuc_robot_shape(
         draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     if alive and respawn_remaining > 0:
         draw_color = _blend_color(draw_color, SHIELD_COLOR, 0.28)
+    robot_sprites_available = _rmuc_robot_sprites_available(robot_type)
     if robot_type == "drone":
         hover = round(2 * math.sin(animation_time * 3.2))
         center = (center[0], center[1] + hover)
@@ -3106,23 +3159,24 @@ def _draw_rmuc_robot_shape(
     ) -> None:
         pygame.draw.line(screen, color, body_point(start), body_point(end), width)
 
-    shadow_extent = max(
-        profile.body_width,
-        profile.body_height,
-        profile.tool_arm_length + 14,
-        46 if robot_type == "drone" else 0,
-    )
-    shadow = pygame.Surface(
-        (shadow_extent + 14, max(28, round(shadow_extent * 0.56))),
-        pygame.SRCALPHA,
-    )
-    pygame.draw.ellipse(shadow, (*ARENA_SHADOW, 105), shadow.get_rect())
-    screen.blit(
-        shadow,
-        (center[0] - shadow.get_width() // 2 + 3, center[1] + 8),
-    )
+    if not robot_sprites_available:
+        shadow_extent = max(
+            profile.body_width,
+            profile.body_height,
+            profile.tool_arm_length + 14,
+            46 if robot_type == "drone" else 0,
+        )
+        shadow = pygame.Surface(
+            (shadow_extent + 14, max(28, round(shadow_extent * 0.56))),
+            pygame.SRCALPHA,
+        )
+        pygame.draw.ellipse(shadow, (*ARENA_SHADOW, 105), shadow.get_rect())
+        screen.blit(
+            shadow,
+            (center[0] - shadow.get_width() // 2 + 3, center[1] + 8),
+        )
 
-    if robot_type == "hero":
+    if robot_type == "hero" and not robot_sprites_available:
         body_polygon(
             (
                 (-22, -10), (-17, -14), (14, -14), (23, -8),
@@ -3145,7 +3199,7 @@ def _draw_rmuc_robot_shape(
         body_line((-14, -11), (9, -11), light_color, 2)
         body_line((-14, 11), (9, 11), armor_color, 2)
         body_line((-9, 0), (8, 0), light_color, 3)
-    elif robot_type == "engineer":
+    elif robot_type == "engineer" and not robot_sprites_available:
         body_polygon(
             (
                 (-18, -10), (-13, -14), (11, -14), (18, -9),
@@ -3192,7 +3246,7 @@ def _draw_rmuc_robot_shape(
             body_point((profile.tool_arm_length + 5, 5)),
             width=3,
         )
-    elif robot_type == "sentry":
+    elif robot_type == "sentry" and not robot_sprites_available:
         body_polygon(
             (
                 (-26, -9), (-21, -14), (19, -14), (26, -9),
@@ -3221,7 +3275,7 @@ def _draw_rmuc_robot_shape(
             width=1,
         )
         body_line((-9, 0), (10, 0), light_color, 3)
-    elif robot_type == "drone":
+    elif robot_type == "drone" and not robot_sprites_available:
         rotors = ((-18, -9), (18, -9), (-18, 9), (18, 9))
         for local_rotor in rotors:
             rotor = body_point(local_rotor)
@@ -3246,7 +3300,7 @@ def _draw_rmuc_robot_shape(
             width=1,
         )
         pygame.draw.circle(screen, TEXT_COLOR, center, 3)
-    else:
+    elif not robot_sprites_available:
         body_polygon(
             (
                 (-14, -7), (-10, -10), (10, -10), (14, -6),
@@ -3272,65 +3326,75 @@ def _draw_rmuc_robot_shape(
             width=1,
         )
         body_line((-6, 0), (6, 0), light_color, 2)
-
     turret_center = body_point((4, 0))
     muzzle_point = center
     if profile.turret_radius > 0:
-        pygame.draw.circle(
-            screen,
-            ROBOT_OUTLINE,
-            turret_center,
-            profile.turret_radius + 3,
-        )
-        pygame.draw.circle(
-            screen,
-            armor_color,
-            turret_center,
-            profile.turret_radius,
-        )
-        pygame.draw.circle(
-            screen,
-            light_color,
-            _rotate_point(turret_center, (-3, -3), turret_angle),
-            max(2, profile.turret_radius // 3),
-        )
         muzzle_point = _rotate_point(
             turret_center,
             (profile.barrel_length, 0),
             turret_angle,
         )
-        barrel_start = _rotate_point(
-            turret_center,
-            (profile.turret_radius - 1, 0),
-            turret_angle,
-        )
-        if robot_type == "sentry":
-            for side in (-1, 1):
-                rail_start = _rotate_point(
-                    turret_center,
-                    (profile.turret_radius, side * 4),
-                    turret_angle,
-                )
-                rail_end = _rotate_point(
-                    turret_center,
-                    (profile.barrel_length - 3, side * 4),
-                    turret_angle,
-                )
-                pygame.draw.line(screen, ROBOT_OUTLINE, rail_start, rail_end, width=4)
-                pygame.draw.line(screen, light_color, rail_start, rail_end, width=2)
-        pygame.draw.line(
+        if not robot_sprites_available:
+            pygame.draw.circle(
+                screen,
+                ROBOT_OUTLINE,
+                turret_center,
+                profile.turret_radius + 3,
+            )
+            pygame.draw.circle(
+                screen,
+                armor_color,
+                turret_center,
+                profile.turret_radius,
+            )
+            pygame.draw.circle(
+                screen,
+                light_color,
+                _rotate_point(turret_center, (-3, -3), turret_angle),
+                max(2, profile.turret_radius // 3),
+            )
+            barrel_start = _rotate_point(
+                turret_center,
+                (profile.turret_radius - 1, 0),
+                turret_angle,
+            )
+            if robot_type == "sentry":
+                for side in (-1, 1):
+                    rail_start = _rotate_point(
+                        turret_center,
+                        (profile.turret_radius, side * 4),
+                        turret_angle,
+                    )
+                    rail_end = _rotate_point(
+                        turret_center,
+                        (profile.barrel_length - 3, side * 4),
+                        turret_angle,
+                    )
+                    pygame.draw.line(screen, ROBOT_OUTLINE, rail_start, rail_end, width=4)
+                    pygame.draw.line(screen, light_color, rail_start, rail_end, width=2)
+            pygame.draw.line(
+                screen,
+                ROBOT_OUTLINE,
+                barrel_start,
+                muzzle_point,
+                width=profile.barrel_width + 2,
+            )
+            pygame.draw.line(
+                screen,
+                light_color if alive else MUTED_COLOR,
+                barrel_start,
+                muzzle_point,
+                width=profile.barrel_width,
+            )
+
+    if robot_sprites_available:
+        _draw_rmuc_robot_sprites(
             screen,
-            ROBOT_OUTLINE,
-            barrel_start,
-            muzzle_point,
-            width=profile.barrel_width + 2,
-        )
-        pygame.draw.line(
-            screen,
-            light_color if alive else MUTED_COLOR,
-            barrel_start,
-            muzzle_point,
-            width=profile.barrel_width,
+            center=center,
+            robot_type=robot_type,
+            color=draw_color,
+            body_angle=body_angle,
+            turret_angle=turret_angle,
         )
 
     if muzzle_remaining > 0 and profile.turret_radius > 0:
