@@ -88,6 +88,8 @@ class Match:
             scenario.zones,
             self.structures,
             scenario.path_grid_size,
+            scenario.terrain_features,
+            scenario.terrain_connections,
         )
         self.robots: list[Robot] = []
         for team, definition in definitions:
