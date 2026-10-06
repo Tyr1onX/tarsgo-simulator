@@ -79,13 +79,12 @@ FIELD_VIEW_RECT = (
     WINDOW_SIZE[1] - FIELD_TOP - WINDOW_MARGIN,
 )
 RMUC_PANEL_WIDTH = 236
-RMUC_PANEL_GAP = 12
 RMUC_BROADCAST_HUD_HEIGHT = 164
 RMUC_FIELD_VIEW_RECT = (
     18,
     182,
-    WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - RMUC_PANEL_GAP - 30,
-    WINDOW_SIZE[1] - 246,
+    WINDOW_SIZE[0] - WINDOW_MARGIN * 2,
+    WINDOW_SIZE[1] - 212,
 )
 RMUC_PANEL_RECT = (
     WINDOW_SIZE[0] - RMUC_PANEL_WIDTH - 16,
@@ -192,6 +191,7 @@ def main(scenario_path: str | Path | None = None) -> None:
         selection_current: tuple[int, int] | None = None
         selection_shift = False
         debug_geometry = False
+        inspector_open = False
         visual_state = CombatVisualState()
         visual_state.reset(match)
         running = True
@@ -199,11 +199,20 @@ def main(scenario_path: str | Path | None = None) -> None:
         while running:
             dt = clock.tick(60) / 1000.0
             for event in pygame.event.get():
+                if (
+                    _is_rmuc_rules_lab(match)
+                    and _rmuc_inspector_toggle_requested(event, screen.get_size())
+                ):
+                    inspector_open = not inspector_open
+                    continue
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        running = False
+                        if inspector_open:
+                            inspector_open = False
+                        else:
+                            running = False
                     elif event.key == pygame.K_d:
                         debug_geometry = not debug_geometry
                     elif event.key == pygame.K_r:
@@ -213,6 +222,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_start = None
                         selection_current = None
                         selection_shift = False
+                        inspector_open = False
                     elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
@@ -389,6 +399,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                 selection_rect,
                 viewport,
                 debug_geometry=debug_geometry,
+                inspector_open=inspector_open,
                 visual_state=visual_state,
                 hud_font=hud_font,
             )
@@ -411,7 +422,7 @@ def cli() -> None:
 def _window_caption(match: Match) -> str:
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
-        return "TARS-Go RMUC 2026 区域赛规则实验室（实验版）"
+        return "TARS-Go RMUC 2026 区域赛"
     if display_state is not None:
         return "TARS-Go RMUL 2026 Rules Lab (Partial / Experimental)"
     return "TARS-Go Infantry Training"
@@ -1019,6 +1030,48 @@ def _rmuc_hud_rects(
     )
 
 
+def _rmuc_inspector_toggle_rect(
+    screen_size: tuple[int, int],
+) -> pygame.Rect:
+    screen_width, screen_height = screen_size
+    return pygame.Rect(18, screen_height - 28, 92, 22).clamp(
+        pygame.Rect(0, 0, screen_width, screen_height)
+    )
+
+
+def _rmuc_inspector_toggle_requested(
+    event: pygame.event.Event,
+    screen_size: tuple[int, int],
+) -> bool:
+    if event.type == pygame.KEYDOWN:
+        return event.key == pygame.K_i
+    return (
+        event.type == pygame.MOUSEBUTTONDOWN
+        and event.button == 1
+        and _rmuc_inspector_toggle_rect(screen_size).collidepoint(event.pos)
+    )
+
+
+def _draw_rmuc_inspector_toggle(
+    screen: pygame.Surface,
+    small_font: pygame.font.Font,
+    *,
+    inspector_open: bool,
+) -> None:
+    rect = _rmuc_inspector_toggle_rect(screen.get_size())
+    color = SELECTION_COLOR if inspector_open else MUTED_COLOR
+    pygame.draw.rect(screen, PANEL_BACKGROUND, rect, border_radius=5)
+    pygame.draw.rect(
+        screen,
+        color if inspector_open else PANEL_BORDER,
+        rect,
+        width=1,
+        border_radius=5,
+    )
+    label = small_font.render("单位详情", True, color)
+    screen.blit(label, label.get_rect(center=rect.center))
+
+
 def _rmuc_panel_layout(
     panel: pygame.Rect,
     selected_count: int,
@@ -1519,13 +1572,15 @@ def _draw_rmuc_panel(
         player_team,
         team_rect,
     )
-    _draw_context_controls(
-        screen,
-        small_font,
-        _selected_robot_types(match, selected_robot_ids),
-        controls_rect,
-        debug_geometry=debug_geometry,
-    )
+    if debug_geometry:
+        _draw_context_controls(
+            screen,
+            small_font,
+            _selected_robot_types(match, selected_robot_ids),
+            controls_rect,
+            debug_geometry=True,
+        )
+
 
 def _draw_hud_structure_metric(
     screen: pygame.Surface,
@@ -3390,6 +3445,7 @@ def _draw(
     viewport: Viewport,
     *,
     debug_geometry: bool = False,
+    inspector_open: bool = False,
     visual_state: CombatVisualState | None = None,
     hud_font: pygame.font.Font | None = None,
 ) -> None:
@@ -3897,18 +3953,19 @@ def _draw(
     if is_rmuc and visual_state is not None:
         _draw_visual_projectiles(screen, viewport, visual_state)
         _draw_move_markers(screen, viewport, visual_state)
-        _draw_selected_paths(
-            screen,
-            small_font,
-            match,
-            viewport,
-            selected_robot_ids,
-        )
+        if debug_geometry:
+            _draw_selected_paths(
+                screen,
+                small_font,
+                match,
+                viewport,
+                selected_robot_ids,
+            )
 
     if selection_rect is not None:
         pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)
 
-    if is_rmuc:
+    if is_rmuc and inspector_open:
         _draw_rmuc_panel(
             screen,
             small_font,
@@ -3918,6 +3975,13 @@ def _draw(
             selected_robot_ids,
             labels,
             debug_geometry=debug_geometry,
+        )
+
+    if is_rmuc:
+        _draw_rmuc_inspector_toggle(
+            screen,
+            small_font,
+            inspector_open=inspector_open,
         )
 
 

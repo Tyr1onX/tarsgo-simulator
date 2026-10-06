@@ -41,7 +41,7 @@ def test_viewport_preserves_field_aspect_ratio_with_uniform_scale() -> None:
 @pytest.mark.parametrize(
     "window_rect",
     (
-        (18.0, 182.0, 822.0, 534.0),  # RMUC broadcast field in 1100 x 780.
+        (18.0, 182.0, 1064.0, 568.0),  # RMUC broadcast field in 1100 x 780.
         (18.0, 160.0, 1220.0, 650.0),  # Wider supported desktop window.
     ),
 )
