@@ -75,6 +75,9 @@ class Match:
                     position=definition.position,
                     hp=parameters.max_hp,
                     max_hp=parameters.max_hp,
+                    footprint=definition.footprint,
+                    footprint_shape=definition.footprint_shape,
+                    footprint_vertices=definition.footprint_vertices,
                 )
             )
         self.map = GameMap(
@@ -84,6 +87,7 @@ class Match:
             initial_parameters.collision_radius,
             scenario.zones,
             self.structures,
+            scenario.path_grid_size,
         )
         self.robots: list[Robot] = []
         for team, definition in definitions:
@@ -640,14 +644,20 @@ class Match:
             and base[0].alive
             and (
                 base[1] <= 0.30
-                or (base[1] <= 0.55 and base[2] <= 320.0)
+                or (
+                    base[1] <= 0.55
+                    and base[2] <= 320.0 * self.map.unit_scale
+                )
             )
         ) or (
             outpost is not None
             and outpost[0].alive
             and (
                 outpost[1] <= 0.18
-                or (outpost[1] <= 0.35 and outpost[2] <= 220.0)
+                or (
+                    outpost[1] <= 0.35
+                    and outpost[2] <= 220.0 * self.map.unit_scale
+                )
             )
         ):
             return "return"
@@ -656,7 +666,10 @@ class Match:
             structure.alive
             and (
                 hp_ratio <= (0.45 if structure.type == "outpost" else 0.65)
-                or (hp_ratio <= 0.78 and nearest_enemy <= 380.0)
+                or (
+                    hp_ratio <= 0.78
+                    and nearest_enemy <= 380.0 * self.map.unit_scale
+                )
             )
             for structure, hp_ratio, nearest_enemy in pressure.values()
         ):
@@ -949,7 +962,7 @@ class Match:
         angle = angles[slot % len(angles)]
         if self._team_side(protector.team) == "blue":
             angle = math.pi - angle
-        distance = max(70.0, self.map.collision_radius * 3.5)
+        distance = max(70.0 * self.map.unit_scale, self.map.collision_radius * 3.5)
         goal = (
             min(
                 self.map.width,
@@ -1130,12 +1143,18 @@ class Match:
                     ),
                     default=field_scale,
                 )
-                threatened = hp_fraction <= 0.70 or nearest_enemy <= 460.0
+                threatened = (
+                    hp_fraction <= 0.70
+                    or nearest_enemy <= 460.0 * self.map.unit_scale
+                )
                 if not threatened:
                     continue
                 threat_score = (
                     max(0.0, 0.70 - hp_fraction) * 2.2
-                    + max(0.0, 1.20 - nearest_enemy / 460.0)
+                    + max(
+                        0.0,
+                        1.20 - nearest_enemy / (460.0 * self.map.unit_scale),
+                    )
                 )
                 candidates.append(
                     (

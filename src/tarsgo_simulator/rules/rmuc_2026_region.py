@@ -4755,13 +4755,36 @@ class RMUC2026RegionalRules:
                 current_zone_ids - state.occupied_rfid_zone_ids
             )
 
-            for zone_id in entered_zone_ids:
+            # Figure 5-23 identifies the central highland as both a buff
+            # location and a terrain-crossing RFID location. If one position
+            # enters both mapped regions in the same update, handle the
+            # terrain crossing first; a separate entry into another RFID
+            # region still interrupts the sequence as before.
+            entered_terrain_zone_ids = [
+                zone_id
+                for zone_id in entered_zone_ids
+                if zone_id in self._terrain_zone_lookup
+            ]
+            entered_other_zone_ids = [
+                zone_id
+                for zone_id in entered_zone_ids
+                if zone_id not in self._terrain_zone_lookup
+            ]
+            for zone_id in entered_terrain_zone_ids:
                 self._process_terrain_rfid_entry(
                     robot,
                     state,
                     zone_id,
                     event_time,
                 )
+            if not entered_terrain_zone_ids:
+                for zone_id in entered_other_zone_ids:
+                    self._process_terrain_rfid_entry(
+                        robot,
+                        state,
+                        zone_id,
+                        event_time,
+                    )
 
             state.occupied_rfid_zone_ids = current_zone_ids
 

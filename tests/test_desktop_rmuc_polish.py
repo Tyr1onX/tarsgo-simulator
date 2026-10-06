@@ -196,6 +196,29 @@ def test_zone_art_renders_default_selected_and_targeted_states() -> None:
     )
 
 
+def test_canonical_zone_render_uses_polygon_outline_and_fill() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    screen, _font, small_font = _surface_and_fonts()
+    screen.fill((8, 8, 8))
+    unchanged = screen.get_at((84, 136))
+
+    app._draw_rmuc_zone(
+        screen,
+        small_font,
+        pygame.Rect(80, 80, 90, 60),
+        zone_id="red-resource",
+        polygon_points=((80, 80), (170, 80), (125, 140)),
+        selected_types=set(),
+        occupied_by_selected=False,
+        targeted_by_selected=False,
+        animation_time=0.0,
+    )
+
+    assert screen.get_at((125, 100)) != pygame.Color(8, 8, 8, 255)
+    assert screen.get_at((84, 136)) == unchanged
+
+
 def test_selected_ai_target_positions_use_existing_path_endpoint() -> None:
     app = _app()
     match = Match.from_scenario(RMUC_SCENARIO, rmuc_spectator_ai=True)

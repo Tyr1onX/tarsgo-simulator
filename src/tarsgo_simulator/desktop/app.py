@@ -448,7 +448,7 @@ def _select_player_robot(
         ):
             continue
         distance = math.hypot(robot.position[0] - point[0], robot.position[1] - point[1])
-        if distance <= match.map.collision_radius + 9:
+        if distance <= match.map.collision_radius + 9 * match.map.unit_scale:
             return robot.id
     return None
 
@@ -2062,101 +2062,10 @@ def _draw_rmuc_battlefield(
     field_rect: pygame.Rect,
 ) -> None:
     shadow_rect = field_rect.inflate(10, 10).move(0, 3)
-    pygame.draw.rect(screen, ARENA_SHADOW, shadow_rect, border_radius=5)
+    pygame.draw.rect(screen, ARENA_SHADOW, shadow_rect)
     pygame.draw.rect(screen, ARENA_FLOOR, field_rect)
 
-    floor = pygame.Surface(field_rect.size, pygame.SRCALPHA)
-    band_height = max(36, field_rect.height // 8)
-    for index, y in enumerate(range(0, field_rect.height, band_height)):
-        tone = ARENA_FLOOR_LIGHT if index % 2 == 0 else ARENA_FLOOR_DARK
-        pygame.draw.rect(
-            floor,
-            (*tone, 22),
-            pygame.Rect(0, y, field_rect.width, min(band_height, field_rect.height - y)),
-        )
-
-    half = field_rect.width // 2
-    pygame.draw.rect(
-        floor,
-        (*TEAM_RED_COLOR, 10),
-        pygame.Rect(0, 0, half, field_rect.height),
-    )
-    pygame.draw.rect(
-        floor,
-        (*TEAM_BLUE_COLOR, 10),
-        pygame.Rect(half, 0, field_rect.width - half, field_rect.height),
-    )
-
-    lane_width = max(48, field_rect.width // 12)
-    pygame.draw.rect(
-        floor,
-        (*ARENA_LANE, 28),
-        pygame.Rect(half - lane_width // 2, 0, lane_width, field_rect.height),
-    )
-    screen.blit(floor, field_rect.topleft)
-
-    grid_x = max(52, field_rect.width // 10)
-    grid_y = max(52, field_rect.height // 7)
-    for x in range(field_rect.left + grid_x, field_rect.right, grid_x):
-        pygame.draw.line(
-            screen,
-            ARENA_GRID,
-            (x, field_rect.top + 5),
-            (x, field_rect.bottom - 5),
-            width=1,
-        )
-    for y in range(field_rect.top + grid_y, field_rect.bottom, grid_y):
-        pygame.draw.line(
-            screen,
-            ARENA_GRID,
-            (field_rect.left + 5, y),
-            (field_rect.right - 5, y),
-            width=1,
-        )
-
-    center = field_rect.center
-    pygame.draw.line(
-        screen,
-        ARENA_MIDLINE,
-        (center[0], field_rect.top + 6),
-        (center[0], field_rect.bottom - 6),
-        width=2,
-    )
-    center_radius = min(54, max(30, field_rect.height // 8))
-    pygame.draw.circle(screen, ARENA_FLOOR_DARK, center, center_radius + 8)
-    pygame.draw.circle(screen, ARENA_MIDLINE, center, center_radius, width=1)
-    pygame.draw.circle(screen, ARENA_GRID, center, max(10, center_radius // 3), width=1)
-
-    dash_length = 22
-    dash_gap = 18
-    for y in range(field_rect.top + 18, field_rect.bottom - 18, dash_length + dash_gap):
-        pygame.draw.line(
-            screen,
-            ARENA_LANE,
-            (center[0] - lane_width // 2, y),
-            (center[0] - lane_width // 2, min(y + dash_length, field_rect.bottom - 18)),
-            width=2,
-        )
-        pygame.draw.line(
-            screen,
-            ARENA_LANE,
-            (center[0] + lane_width // 2, y),
-            (center[0] + lane_width // 2, min(y + dash_length, field_rect.bottom - 18)),
-            width=2,
-        )
-
-    marking = 14
-    for x, y, sx, sy in (
-        (field_rect.left + 16, field_rect.top + 16, 1, 1),
-        (field_rect.right - 16, field_rect.top + 16, -1, 1),
-        (field_rect.left + 16, field_rect.bottom - 16, 1, -1),
-        (field_rect.right - 16, field_rect.bottom - 16, -1, -1),
-    ):
-        pygame.draw.line(screen, ARENA_EDGE, (x, y), (x + sx * marking, y), width=2)
-        pygame.draw.line(screen, ARENA_EDGE, (x, y), (x, y + sy * marking), width=2)
-
     pygame.draw.rect(screen, ARENA_EDGE, field_rect, width=2)
-    pygame.draw.rect(screen, ARENA_GRID, field_rect.inflate(-6, -6), width=1)
 
 
 def _draw_rmuc_obstacle(
@@ -2362,6 +2271,7 @@ def _draw_rmuc_zone(
     zone_rect: pygame.Rect,
     *,
     zone_id: str,
+    polygon_points: tuple[tuple[int, int], ...] = (),
     selected_types: set[str],
     occupied_by_selected: bool,
     targeted_by_selected: bool,
@@ -2392,34 +2302,48 @@ def _draw_rmuc_zone(
     pulse = 0.5 + 0.5 * math.sin(animation_time * 3.4)
     fill_alpha = 10 if not emphasized else round(25 + 11 * pulse)
     overlay = pygame.Surface(zone_rect.size, pygame.SRCALPHA)
-    pygame.draw.rect(
-        overlay,
-        (*color, fill_alpha),
-        overlay.get_rect(),
-        border_radius=5,
-    )
-    screen.blit(overlay, zone_rect.topleft)
-    _draw_zone_pattern(
-        screen,
-        zone_rect,
-        family=style.family,
-        color=color,
-        active=emphasized,
-    )
-    _draw_zone_corner_frame(
-        screen,
-        zone_rect,
-        color,
-        active=emphasized,
-    )
-    if emphasized:
-        pygame.draw.rect(
-            screen,
-            _blend_color(color, TEXT_COLOR, 0.20),
-            zone_rect.inflate(-3, -3),
-            width=1,
-            border_radius=4,
+    if polygon_points:
+        local_points = tuple(
+            (x - zone_rect.x, y - zone_rect.y)
+            for x, y in polygon_points
         )
+        pygame.draw.polygon(overlay, (*color, fill_alpha), local_points)
+        screen.blit(overlay, zone_rect.topleft)
+        pygame.draw.polygon(
+            screen,
+            _blend_color(color, TEXT_COLOR, 0.20 if emphasized else 0.05),
+            polygon_points,
+            width=2 if emphasized else 1,
+        )
+    else:
+        pygame.draw.rect(
+            overlay,
+            (*color, fill_alpha),
+            overlay.get_rect(),
+            border_radius=5,
+        )
+        screen.blit(overlay, zone_rect.topleft)
+        _draw_zone_pattern(
+            screen,
+            zone_rect,
+            family=style.family,
+            color=color,
+            active=emphasized,
+        )
+        _draw_zone_corner_frame(
+            screen,
+            zone_rect,
+            color,
+            active=emphasized,
+        )
+        if emphasized:
+            pygame.draw.rect(
+                screen,
+                _blend_color(color, TEXT_COLOR, 0.20),
+                zone_rect.inflate(-3, -3),
+                width=1,
+                border_radius=4,
+            )
 
     symbol_center = (
         zone_rect.centerx,
@@ -2507,6 +2431,8 @@ def _draw_rmuc_structure(
     status: str,
     animation_time: float,
     debug_geometry: bool,
+    footprint_size: tuple[int, int] | None = None,
+    footprint_points: tuple[tuple[int, int], ...] = (),
     impact_remaining: float = 0.0,
     impact_caliber: str = "17mm",
     shield_impact_remaining: float = 0.0,
@@ -2518,15 +2444,26 @@ def _draw_rmuc_structure(
         draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     body_color = _blend_color(draw_color, ARENA_FLOOR_DARK, 0.58)
     edge_color = draw_color if alive else _blend_color(MUTED_COLOR, ARENA_GRID, 0.35)
-    size = profile.size
+    body_width, body_height = (
+        footprint_size
+        if footprint_size is not None
+        else (profile.size * 2, profile.size * 2)
+    )
+    half_width = max(1, body_width // 2)
+    half_height = max(1, body_height // 2)
+    size = max(half_width, half_height)
 
-    shadow = pygame.Surface((size * 2 + 16, size * 2 + 16), pygame.SRCALPHA)
+    shadow = pygame.Surface((body_width + 16, body_height + 16), pygame.SRCALPHA)
     shadow_center = (shadow.get_width() // 2 + 2, shadow.get_height() // 2 + 3)
-    pygame.draw.circle(
+    pygame.draw.ellipse(
         shadow,
         (*ARENA_SHADOW, 118),
-        shadow_center,
-        size + 3,
+        pygame.Rect(
+            shadow_center[0] - half_width - 3,
+            shadow_center[1] - half_height - 3,
+            body_width + 6,
+            body_height + 6,
+        ),
     )
     screen.blit(
         shadow,
@@ -2537,41 +2474,37 @@ def _draw_rmuc_structure(
     )
 
     if structure_type == "base":
-        diagonal = round(size * 0.68)
-        outer = [
-            (center[0], center[1] - size),
-            (center[0] + diagonal, center[1] - diagonal),
-            (center[0] + size, center[1]),
-            (center[0] + diagonal, center[1] + diagonal),
-            (center[0], center[1] + size),
-            (center[0] - diagonal, center[1] + diagonal),
-            (center[0] - size, center[1]),
-            (center[0] - diagonal, center[1] - diagonal),
+        diagonal_x = round(half_width * 0.68)
+        diagonal_y = round(half_height * 0.68)
+        outer = list(footprint_points) or [
+            (center[0], center[1] - half_height),
+            (center[0] + diagonal_x, center[1] - diagonal_y),
+            (center[0] + half_width, center[1]),
+            (center[0] + diagonal_x, center[1] + diagonal_y),
+            (center[0], center[1] + half_height),
+            (center[0] - diagonal_x, center[1] + diagonal_y),
+            (center[0] - half_width, center[1]),
+            (center[0] - diagonal_x, center[1] - diagonal_y),
         ]
-        inner_size = size - 6
-        inner_diag = round(inner_size * 0.68)
+        inset = max(0.0, min(0.45, 6 / max(1, size)))
         inner = [
-            (center[0], center[1] - inner_size),
-            (center[0] + inner_diag, center[1] - inner_diag),
-            (center[0] + inner_size, center[1]),
-            (center[0] + inner_diag, center[1] + inner_diag),
-            (center[0], center[1] + inner_size),
-            (center[0] - inner_diag, center[1] + inner_diag),
-            (center[0] - inner_size, center[1]),
-            (center[0] - inner_diag, center[1] - inner_diag),
+            (
+                round(center[0] + (x - center[0]) * (1 - inset)),
+                round(center[1] + (y - center[1]) * (1 - inset)),
+            )
+            for x, y in outer
         ]
         pygame.draw.polygon(screen, ROBOT_OUTLINE, outer)
         pygame.draw.polygon(screen, body_color, inner)
         pygame.draw.polygon(screen, edge_color, inner, width=2)
-        rail_radius = size - 9
         for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
             start = (
                 center[0] + round(math.cos(angle) * (profile.core_radius + 4)),
                 center[1] + round(math.sin(angle) * (profile.core_radius + 4)),
             )
             end = (
-                center[0] + round(math.cos(angle) * rail_radius),
-                center[1] + round(math.sin(angle) * rail_radius),
+                center[0] + round(math.cos(angle) * (half_width - 9)),
+                center[1] + round(math.sin(angle) * (half_height - 9)),
             )
             pygame.draw.line(screen, edge_color, start, end, width=2)
         core_glow = pygame.Surface((30, 30), pygame.SRCALPHA)
@@ -2586,10 +2519,20 @@ def _draw_rmuc_structure(
             max(2, profile.core_radius // 3),
         )
     else:
-        pygame.draw.circle(screen, ROBOT_OUTLINE, center, size + 2)
-        pygame.draw.circle(screen, body_color, center, size)
-        pygame.draw.circle(screen, edge_color, center, size, width=2)
-        pygame.draw.circle(screen, ARENA_FLOOR_DARK, center, size - 6, width=2)
+        body_rect = pygame.Rect(
+            center[0] - half_width,
+            center[1] - half_height,
+            body_width,
+            body_height,
+        )
+        pygame.draw.ellipse(screen, ROBOT_OUTLINE, body_rect)
+        inner_rect = body_rect.inflate(-4, -4)
+        if inner_rect.width > 0 and inner_rect.height > 0:
+            pygame.draw.ellipse(screen, body_color, inner_rect)
+        pygame.draw.ellipse(screen, edge_color, body_rect, width=2)
+        inner_rect = body_rect.inflate(-12, -12)
+        if inner_rect.width > 0 and inner_rect.height > 0:
+            pygame.draw.ellipse(screen, ARENA_FLOOR_DARK, inner_rect, width=2)
         for angle in (
             0,
             math.pi / 4,
@@ -2605,8 +2548,8 @@ def _draw_rmuc_structure(
                 center[1] + round(math.sin(angle) * (profile.core_radius + 3)),
             )
             outer = (
-                center[0] + round(math.cos(angle) * (size - 5)),
-                center[1] + round(math.sin(angle) * (size - 5)),
+                center[0] + round(math.cos(angle) * (half_width - 5)),
+                center[1] + round(math.sin(angle) * (half_height - 5)),
             )
             pygame.draw.line(screen, edge_color, inner, outer, width=1)
         pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 2)
@@ -2631,10 +2574,10 @@ def _draw_rmuc_structure(
 
     hovered = _screen_rect_is_hovered(
         pygame.Rect(
-            center[0] - size - 8,
-            center[1] - size - 8,
-            (size + 8) * 2,
-            (size + 8) * 2,
+            center[0] - half_width - 8,
+            center[1] - half_height - 8,
+            body_width + 16,
+            body_height + 16,
         )
     )
     shield = parse_virtual_shield(status) if structure_type == "base" else 0
@@ -2677,10 +2620,10 @@ def _draw_rmuc_structure(
             width=3 if impact_caliber == "42mm" else 2,
         )
 
-    bar_width = size * 2 + 14
+    bar_width = body_width + 14
     bar_rect = pygame.Rect(
         center[0] - bar_width // 2,
-        center[1] + size + 10,
+        center[1] + half_height + 10,
         bar_width,
         7,
     )
@@ -3574,7 +3517,10 @@ def _draw(
     )
     animation_time = pygame.time.get_ticks() / 1000.0
     if is_rmuc:
-        _draw_rmuc_battlefield(screen, field_rect)
+        _draw_rmuc_battlefield(
+            screen,
+            field_rect,
+        )
     else:
         pygame.draw.rect(screen, FIELD_COLOR, field_rect)
         pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
@@ -3610,6 +3556,10 @@ def _draw(
             zone.width,
             zone.height,
         )
+        zone_points = tuple(
+            tuple(round(value) for value in viewport.world_to_screen(point))
+            for point in zone.vertices
+        )
         if is_rmuc and not debug_geometry:
             if zone_visual_style(
                 zone.id,
@@ -3621,6 +3571,7 @@ def _draw(
                 small_font,
                 zone_rect,
                 zone_id=zone.id,
+                polygon_points=zone_points,
                 selected_types=selected_types,
                 occupied_by_selected=any(
                     zone.contains(position)                    for position in selected_positions
@@ -3643,7 +3594,10 @@ def _draw(
                 zone.id,
                 (ZONE_COLOR, zone.id.upper()),
             )
-        pygame.draw.rect(screen, zone_color, zone_rect, width=2)
+        if zone_points:
+            pygame.draw.polygon(screen, zone_color, zone_points, width=2)
+        else:
+            pygame.draw.rect(screen, zone_color, zone_rect, width=2)
         label_surface = small_font.render(zone_label, True, zone_color)
         screen.blit(
             label_surface,
@@ -3679,6 +3633,24 @@ def _draw(
                 if visual_state is not None
                 else None
             )
+            structure_bounds = match.map.structure_bounds(structure.id)
+            footprint_size = (
+                (
+                    max(1, round(viewport.world_length_to_screen(structure_bounds.width))),
+                    max(1, round(viewport.world_length_to_screen(structure_bounds.height))),
+                )
+                if structure_bounds is not None
+                else None
+            )
+            footprint_points = tuple(
+                tuple(
+                    round(value)
+                    for value in viewport.world_to_screen(
+                        (structure.position[0] + x, structure.position[1] + y)
+                    )
+                )
+                for x, y in structure.footprint_vertices
+            )
             _draw_rmuc_structure(
                 screen,
                 small_font,
@@ -3691,6 +3663,8 @@ def _draw(
                 status=structure_status,
                 animation_time=animation_time,
                 debug_geometry=debug_geometry,
+                footprint_size=footprint_size,
+                footprint_points=footprint_points,
                 impact_remaining=(
                     visual_structure.impact_remaining
                     if visual_structure is not None

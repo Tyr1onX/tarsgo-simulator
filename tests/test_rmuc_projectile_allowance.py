@@ -7,6 +7,7 @@ from tarsgo_simulator.core.config import ConfigError, load_match_config, load_ru
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.rmuc_2026_region import RMUC2026RegionalRules
+from rmuc_test_support import move_ground_robots_to_unbuffed_region
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ def _match() -> Match:
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 9999.0
+    move_ground_robots_to_unbuffed_region(match)
     return match
 
 
@@ -119,7 +121,7 @@ def test_committed_structure_attack_consumes_allowance() -> None:
             robot.alive = False
             robot.hp = 0
             robot.path.clear()
-    hero.position = (1750.0, 750.0)
+    hero.position = (23000.0, 7500.0)
     hero.attack_cooldown = 0.0
     match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
 

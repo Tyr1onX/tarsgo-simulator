@@ -20,8 +20,9 @@ def find_path(
     if not game_map.is_passable(start) or not game_map.is_passable(goal):
         return None
 
-    start_cell = _cell_for(start)
-    goal_cell = _cell_for(goal)
+    grid_size = game_map.path_grid_size
+    start_cell = _cell_for(start, grid_size)
+    goal_cell = _cell_for(goal, grid_size)
     if start_cell == goal_cell:
         return [start] if start == goal else [start, goal] if game_map.can_traverse(start, goal) else None
 
@@ -41,16 +42,19 @@ def find_path(
         if current == goal_cell:
             cells = _reconstruct(came_from, current)
             points = [start]
-            points.extend(_center(cell) for cell in cells[1:-1])
+            points.extend(_center(cell, grid_size) for cell in cells)
             points.append(goal)
-            if all(game_map.can_traverse(a, b) for a, b in zip(points, points[1:])):
-                return points
-            return None
+            if not all(
+                game_map.can_traverse(a, b)
+                for a, b in zip(points, points[1:])
+            ):
+                return None
+            return _smooth_path(points, game_map)
 
-        current_point = start if current == start_cell else _center(current)
+        current_point = _center(current, grid_size)
         for dx, dy in _NEIGHBORS:
             neighbor = (current[0] + dx, current[1] + dy)
-            neighbor_point = goal if neighbor == goal_cell else _center(neighbor)
+            neighbor_point = _center(neighbor, grid_size)
             if neighbor in visited or not game_map.can_traverse(current_point, neighbor_point):
                 continue
 
@@ -67,16 +71,41 @@ def find_path(
     return None
 
 
-def _cell_for(point: tuple[float, float]) -> tuple[int, int]:
-    return math.floor(point[0] / GRID_SIZE), math.floor(point[1] / GRID_SIZE)
+def _cell_for(
+    point: tuple[float, float], grid_size: float = GRID_SIZE
+) -> tuple[int, int]:
+    return math.floor(point[0] / grid_size), math.floor(point[1] / grid_size)
 
 
-def _center(cell: tuple[int, int]) -> tuple[float, float]:
-    return (cell[0] * GRID_SIZE + GRID_SIZE / 2, cell[1] * GRID_SIZE + GRID_SIZE / 2)
+def _center(
+    cell: tuple[int, int], grid_size: float = GRID_SIZE
+) -> tuple[float, float]:
+    return (
+        cell[0] * grid_size + grid_size / 2,
+        cell[1] * grid_size + grid_size / 2,
+    )
 
 
 def _heuristic(start: tuple[int, int], goal: tuple[int, int]) -> float:
     return abs(start[0] - goal[0]) + abs(start[1] - goal[1])
+
+
+def _smooth_path(
+    points: list[tuple[float, float]], game_map: GameMap
+) -> list[tuple[float, float]]:
+    result = [points[0]]
+    anchor = 0
+    while anchor < len(points) - 1:
+        next_index = len(points) - 1
+        while next_index > anchor + 1 and not game_map.can_traverse(
+            points[anchor], points[next_index]
+        ):
+            next_index -= 1
+        if not game_map.can_traverse(points[anchor], points[next_index]):
+            return points
+        result.append(points[next_index])
+        anchor = next_index
+    return result
 
 
 def _reconstruct(

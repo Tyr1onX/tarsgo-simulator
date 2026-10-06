@@ -7,6 +7,7 @@ from tarsgo_simulator.core.config import ConfigError, load_rule_document
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.rmuc_2026_region import RMUC2026RegionalRules
+from rmuc_test_support import move_ground_robots_to_unbuffed_region
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ def _match() -> Match:
         robot.speed = 0.0
         robot.attack_cooldown = 9999.0
         robot.path.clear()
+    move_ground_robots_to_unbuffed_region(match)
     return match
 
 
@@ -34,7 +36,7 @@ def _center(zone) -> tuple[float, float]:
 
 
 def _neutral(robot: Robot) -> None:
-    robot.position = (640.0, 240.0)
+    robot.position = (14000.0, 7500.0)
 
 
 def _terrain_state(match: Match, robot_id: str):

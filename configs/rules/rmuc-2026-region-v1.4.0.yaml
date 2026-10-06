@@ -393,13 +393,14 @@ performance:
         - {level: 9, heat_limit: 114, cooling_per_second: 28}
         - {level: 10, heat_limit: 120, cooling_per_second: 30}
 
-# Rules Lab-only combat timing/direct-damage approximation.
+# Rules Lab-only combat timing/direct-damage approximation. Linear parameters
+# use mm and mm/s to match the canonical RMUC field coordinate system.
 # Hero/Infantry max HP and chassis power come from the selected Performance table.
 lab_robot_parameters:
   common:
-    move_speed: 190
-    collision_radius: 18
-    attack_range: 240
+    move_speed: 1900
+    collision_radius: 180
+    attack_range: 2400
     attack_interval: 0.75
   hero:
     damage: 200
