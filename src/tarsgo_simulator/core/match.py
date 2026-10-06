@@ -64,24 +64,33 @@ class Match:
             for definition in scenario.teams[side].robots
         ]
         initial_parameters = self.ruleset.robot_parameters(definitions[0][1].type)
+        self.structures: list[Structure] = []
+        for definition in scenario.structures:
+            parameters = self.ruleset.structure_parameters(definition.type)
+            self.structures.append(
+                Structure(
+                    id=definition.id,
+                    team=definition.team,
+                    type=definition.type,
+                    position=definition.position,
+                    hp=parameters.max_hp,
+                    max_hp=parameters.max_hp,
+                )
+            )
         self.map = GameMap(
             scenario.map_width,
             scenario.map_height,
             scenario.obstacles,
             initial_parameters.collision_radius,
             scenario.zones,
+            self.structures,
         )
         self.robots: list[Robot] = []
         for team, definition in definitions:
             parameters = self.ruleset.robot_parameters(definition.type)
             position = scenario.spawns[definition.id]
             aerial = definition.type == "drone"
-            spawn_valid = (
-                self.map.contains(position)
-                if aerial
-                else self.map.is_passable(position)
-            )
-            if not spawn_valid:
+            if not self.map.is_passable(position):
                 raise ValueError(f"机器人出生点不可通行：{definition.id} at {position}")
             self.robots.append(
                 Robot(
@@ -96,19 +105,6 @@ class Match:
                     damage=parameters.damage,
                     type=definition.type,
                     aerial=aerial,
-                )
-            )
-        self.structures: list[Structure] = []
-        for definition in scenario.structures:
-            parameters = self.ruleset.structure_parameters(definition.type)
-            self.structures.append(
-                Structure(
-                    id=definition.id,
-                    team=definition.team,
-                    type=definition.type,
-                    position=definition.position,
-                    hp=parameters.max_hp,
-                    max_hp=parameters.max_hp,
                 )
             )
         self._validate_spawn_separation()
@@ -346,11 +342,6 @@ class Match:
         return True
 
     def _set_robot_destination(self, robot: Robot, goal: tuple[float, float]) -> bool:
-        if robot.aerial:
-            if not self.map.contains(goal):
-                return False
-            robot.set_path([goal])
-            return True
         path = find_path(self.map, robot.position, goal)
         if path is None:
             return False
@@ -542,10 +533,55 @@ class Match:
     ) -> None:
         self._ai_intents[robot.id] = intent
         self._remember_ai_decision(robot, target_key, sticky=sticky)
+        if target_key is not None and target_key.startswith("structure:"):
+            structure_id = target_key.removeprefix("structure:")
+            structure = next(
+                (item for item in self.structures if item.id == structure_id),
+                None,
+            )
+            if structure is not None and self.map.structure_bounds(structure_id):
+                approaches = []
+                for index, point in enumerate(
+                    self.map.structure_approach_points(structure_id)
+                ):
+                    path = find_path(self.map, robot.position, point)
+                    if path is None:
+                        continue
+                    clear_shot = self.map.has_line_of_sight(
+                        point,
+                        structure.position,
+                        structure.id,
+                    )
+                    path_length = math.fsum(
+                        math.dist(first, second)
+                        for first, second in zip(path, path[1:])
+                    )
+                    approaches.append(
+                        (not clear_shot, path_length, index, path)
+                )
+                if approaches:
+                    path = min(approaches, key=lambda item: item[:3])[3]
+                    robot.set_path(path)
+                else:
+                    robot.path.clear()
+                return
         if math.dist(robot.position, goal) <= self.map.collision_radius:
             robot.path.clear()
             return
         self._set_robot_destination(robot, goal)
+
+    def _has_line_of_sight_to_ai_target(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        target_key: str,
+    ) -> bool:
+        structure_id = (
+            target_key.removeprefix("structure:")
+            if target_key.startswith("structure:")
+            else None
+        )
+        return self.map.has_line_of_sight(start, end, structure_id)
 
     def _ai_target_occupancy(self, robot: Robot, target_key: str) -> int:
         return sum(
@@ -1338,7 +1374,11 @@ class Match:
         target_key, intent, goal, _score = choice
         if (
             math.dist(robot.position, goal) <= robot.attack_range
-            and self.map.has_line_of_sight(robot.position, goal)
+            and self._has_line_of_sight_to_ai_target(
+                robot.position,
+                goal,
+                target_key,
+            )
         ):
             robot.path.clear()
             self._ai_intents[robot.id] = intent
@@ -1435,7 +1475,11 @@ class Match:
             distance = math.dist(robot.position, goal)
             if (
                 distance <= robot.attack_range
-                and self.map.has_line_of_sight(robot.position, goal)
+                and self._has_line_of_sight_to_ai_target(
+                    robot.position,
+                    goal,
+                    target_key,
+                )
             ):
                 robot.path.clear()
                 self._ai_intents[robot.id] = intent
