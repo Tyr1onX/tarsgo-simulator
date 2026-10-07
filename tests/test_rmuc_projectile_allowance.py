@@ -126,6 +126,9 @@ def test_committed_structure_attack_consumes_allowance() -> None:
     match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
 
     match.update(0.01)
+    assert outpost.hp == outpost.max_hp
+    for _ in range(10):
+        match.update(1.0 / 60.0)
 
     assert outpost.hp == 1300
     assert match.ruleset._projectile_allowance_by_robot[hero.id].allowed == 0

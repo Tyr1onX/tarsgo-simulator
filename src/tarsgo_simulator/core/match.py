@@ -11,6 +11,7 @@ from tarsgo_simulator.core.config import MatchConfig, load_match_config
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
+from tarsgo_simulator.core.projectiles import Projectile, ProjectileImpact, ProjectileSystem
 from tarsgo_simulator.core.robot import MovementProposal, Robot
 from tarsgo_simulator.core.structure import Structure
 from tarsgo_simulator.rules.protocol import DamageableTarget, MatchResult, RuleSet
@@ -149,6 +150,10 @@ class Match:
             )
         self._validate_spawn_separation()
         self.elapsed_time = 0.0
+        if hasattr(self, "projectile_system"):
+            self.projectile_system.reset()
+        else:
+            self.projectile_system = ProjectileSystem()
         self.finished = False
         self.winner: str | None = None
         self.current_events: list[MatchEvent] = []
@@ -253,6 +258,29 @@ class Match:
     @property
     def time_limit(self) -> float:
         return self.ruleset.time_limit
+
+    @property
+    def uses_physical_projectiles(self) -> bool:
+        return self.config.rule_document.metadata.id == _RMUC_RULE_ID
+
+    @property
+    def projectiles(self) -> list[Projectile]:
+        """Current simulation projectiles; the desktop renderer treats these as input only."""
+        return self.projectile_system.projectiles
+
+    @property
+    def projectile_impacts(self) -> tuple[ProjectileImpact, ...]:
+        """Contacts recorded during the most recent simulation update."""
+        return tuple(self.projectile_system.impacts)
+
+    @property
+    def projectile_diagnostics(self) -> dict[str, int]:
+        return {
+            "active": len(self.projectile_system.projectiles),
+            "max_active": self.projectile_system.max_active_projectiles,
+            "launched": self.projectile_system.total_launched,
+            "impacts": self.projectile_system.total_impacts,
+        }
 
     def is_player_controlled(self, robot_id: str) -> bool:
         return robot_id in self.config.scenario.player_controlled
@@ -764,6 +792,9 @@ class Match:
 
     def update(self, dt: float) -> None:
         if self.finished:
+            # Contact snapshots are consumed by presentation once per fixed
+            # simulation tick. Do not replay the last hit on later render ticks.
+            self.projectile_system.impacts.clear()
             return
         if dt < 0:
             raise ValueError("dt 不能小于 0")
@@ -781,17 +812,44 @@ class Match:
             self.ruleset.prepare_movement(self, dt)
             self._move_robots(dt)
             self.ruleset.prepare_combat(self, dt)
-            update_combat(
-                self.robots,
-                self.map,
-                can_attack=self.ruleset.can_attack,
-                structures=self.structures,
-                can_target=self.ruleset.can_target,
-                on_attack_committed=self.ruleset.on_attack_committed,
-                apply_damage=lambda target, amount, attacker: self.apply_damage(
-                    target, amount, source_robot=attacker
-                ),
-            )
+            if self.uses_physical_projectiles:
+                existing_projectile_ids = tuple(
+                    projectile.id for projectile in self.projectiles
+                )
+                parameters_for = getattr(self.ruleset, "projectile_parameters_for")
+                self.projectile_system.launch_ready_shots(
+                    self.robots,
+                    self.structures,
+                    self.map,
+                    can_attack=self.ruleset.can_attack,
+                    can_target=self.ruleset.can_target,
+                    parameters_for=parameters_for,
+                    on_attack_committed=self.ruleset.on_attack_committed,
+                )
+                self.projectile_system.advance(
+                    dt,
+                    self.robots,
+                    self.structures,
+                    self.map,
+                    projectile_ids=existing_projectile_ids,
+                    apply_damage=lambda target, amount, attacker: self.apply_damage(
+                        target,
+                        amount,
+                        source_robot=attacker,
+                    ),
+                )
+            else:
+                update_combat(
+                    self.robots,
+                    self.map,
+                    can_attack=self.ruleset.can_attack,
+                    structures=self.structures,
+                    can_target=self.ruleset.can_target,
+                    on_attack_committed=self.ruleset.on_attack_committed,
+                    apply_damage=lambda target, amount, attacker: self.apply_damage(
+                        target, amount, source_robot=attacker
+                    ),
+                )
             self.elapsed_time += dt
             self.ruleset.update(self, dt)
         finally:

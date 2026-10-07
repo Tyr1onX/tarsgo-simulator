@@ -336,6 +336,9 @@ def test_invincible_base_does_not_absorb_target_selection() -> None:
     )
 
     match.update(0.01)
+    assert target_robot.hp == target_robot.max_hp
+    for _ in range(8):
+        match.update(1.0 / 60.0)
 
     assert base.hp == 5000
     assert target_robot.hp == 0

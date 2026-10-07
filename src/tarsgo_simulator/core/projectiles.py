@@ -1,0 +1,494 @@
+"""Deterministic, swept-collision projectiles for RMUC Rules Lab matches."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+import math
+
+from tarsgo_simulator.core.map import (
+    GameMap,
+    Rectangle,
+    _distance_to_segment,
+    _point_in_polygon,
+)
+from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.rules.protocol import DamageableTarget, ProjectileParameters
+
+
+@dataclass(slots=True)
+class Projectile:
+    id: int
+    shooter_id: str
+    shooter_team_id: str
+    caliber: str
+    damage: int
+    radius: float
+    speed: float
+    effective_range: float
+    position: tuple[float, float]
+    previous_position: tuple[float, float]
+    velocity: tuple[float, float]
+    traveled: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectileImpact:
+    projectile_id: int
+    shooter_id: str
+    shooter_team_id: str
+    caliber: str
+    position: tuple[float, float]
+    direction: tuple[float, float]
+    target_id: str | None
+    target_kind: str
+    applied_damage: int
+
+
+class ProjectileSystem:
+    """Own live simulation projectiles; visuals consume snapshots separately."""
+
+    def __init__(self) -> None:
+        self.projectiles: list[Projectile] = []
+        self.impacts: list[ProjectileImpact] = []
+        self._next_id = 1
+        self.max_active_projectiles = 0
+        self.total_launched = 0
+        self.total_impacts = 0
+
+    def reset(self) -> None:
+        self.projectiles.clear()
+        self.impacts.clear()
+        self._next_id = 1
+        self.max_active_projectiles = 0
+        self.total_launched = 0
+        self.total_impacts = 0
+
+    def launch_ready_shots(
+        self,
+        robots: list[Robot],
+        structures: list[Structure],
+        game_map: GameMap,
+        *,
+        can_attack: Callable[[Robot], bool],
+        can_target: Callable[[DamageableTarget], bool],
+        parameters_for: Callable[[Robot], ProjectileParameters | None],
+        on_attack_committed: Callable[[Robot], None],
+    ) -> tuple[int, ...]:
+        """Launch at most one projectile for each ready legal shooter."""
+        robot_targets = [robot for robot in robots if robot.alive and not robot.aerial]
+        structure_targets = [structure for structure in structures if structure.alive]
+        launched: list[int] = []
+
+        for shooter in robots:
+            if not shooter.alive or shooter.attack_cooldown > 1e-9:
+                continue
+            parameters = parameters_for(shooter)
+            if parameters is None or not can_attack(shooter):
+                continue
+
+            candidates: list[tuple[float, str, Robot | Structure]] = []
+            for target in [*robot_targets, *structure_targets]:
+                if target.team == shooter.team or not can_target(target):
+                    continue
+                distance = math.dist(shooter.position, target.position)
+                if distance > min(shooter.attack_range, parameters.effective_range):
+                    continue
+                target_structure_id = target.id if isinstance(target, Structure) else None
+                if not game_map.has_line_of_sight(
+                    shooter.position,
+                    target.position,
+                    target_structure_id,
+                ):
+                    continue
+                candidates.append((distance, target.id, target))
+            if not candidates:
+                continue
+
+            _distance, _target_id, target = min(
+                candidates,
+                key=lambda item: (item[0], item[1]),
+            )
+            dx = target.position[0] - shooter.position[0]
+            dy = target.position[1] - shooter.position[1]
+            length = math.hypot(dx, dy)
+            if length <= 1e-9:
+                continue
+            direction = (dx / length, dy / length)
+            muzzle_offset = (
+                game_map.collision_radius
+                + parameters.radius
+                + 2.0 * game_map.unit_scale
+            )
+            position = (
+                shooter.position[0] + direction[0] * muzzle_offset,
+                shooter.position[1] + direction[1] * muzzle_offset,
+            )
+            projectile_id = self._next_id
+            self._next_id += 1
+            self.projectiles.append(
+                Projectile(
+                    id=projectile_id,
+                    shooter_id=shooter.id,
+                    shooter_team_id=shooter.team,
+                    caliber=parameters.caliber,
+                    damage=shooter.damage,
+                    radius=parameters.radius,
+                    speed=parameters.speed,
+                    effective_range=max(0.0, parameters.effective_range - muzzle_offset),
+                    position=position,
+                    previous_position=position,
+                    velocity=(
+                        direction[0] * parameters.speed,
+                        direction[1] * parameters.speed,
+                    ),
+                )
+            )
+            shooter.attack_cooldown = parameters.firing_interval
+            on_attack_committed(shooter)
+            launched.append(projectile_id)
+
+        self.total_launched += len(launched)
+        self.max_active_projectiles = max(
+            self.max_active_projectiles,
+            len(self.projectiles),
+        )
+        return tuple(launched)
+
+    def advance(
+        self,
+        dt: float,
+        robots: list[Robot],
+        structures: list[Structure],
+        game_map: GameMap,
+        *,
+        apply_damage: Callable[[DamageableTarget, int, Robot], int],
+        projectile_ids: Iterable[int] | None = None,
+    ) -> None:
+        """Advance selected projectiles continuously and settle first contacts."""
+        self.impacts.clear()
+        selected = None if projectile_ids is None else set(projectile_ids)
+        robot_by_id = {robot.id: robot for robot in robots}
+        active: list[Projectile] = []
+        for projectile in self.projectiles:
+            if selected is not None and projectile.id not in selected:
+                active.append(projectile)
+                continue
+            step = max(0.0, dt)
+            remaining = projectile.effective_range - projectile.traveled
+            if step <= 0 or remaining <= 1e-9:
+                active.append(projectile) if remaining > 1e-9 else None
+                continue
+            distance = min(projectile.speed * step, remaining)
+            start = projectile.position
+            end = (
+                start[0] + projectile.velocity[0] / projectile.speed * distance,
+                start[1] + projectile.velocity[1] / projectile.speed * distance,
+            )
+            projectile.previous_position = start
+            collision = _first_collision(
+                start,
+                end,
+                projectile.radius,
+                projectile.shooter_id,
+                robots,
+                structures,
+                game_map,
+            )
+            if collision is not None:
+                fraction, target, target_kind, normal = collision
+                point = (
+                    start[0] + (end[0] - start[0]) * fraction,
+                    start[1] + (end[1] - start[1]) * fraction,
+                )
+                applied = 0
+                if target is not None and target.team != projectile.shooter_team_id:
+                    shooter = robot_by_id.get(projectile.shooter_id)
+                    impact_speed = abs(
+                        projectile.velocity[0] * normal[0]
+                        + projectile.velocity[1] * normal[1]
+                    )
+                    required_speed = 12_000.0 if projectile.caliber == "17mm" else 10_000.0
+                    if shooter is not None and impact_speed > required_speed:
+                        applied = apply_damage(target, projectile.damage, shooter)
+                self.impacts.append(
+                    ProjectileImpact(
+                        projectile_id=projectile.id,
+                        shooter_id=projectile.shooter_id,
+                        shooter_team_id=projectile.shooter_team_id,
+                        caliber=projectile.caliber,
+                        position=point,
+                        direction=projectile.velocity,
+                        target_id=target.id if target is not None else None,
+                        target_kind=target_kind,
+                        applied_damage=applied,
+                    )
+                )
+                self.total_impacts += 1
+                continue
+
+            projectile.position = end
+            projectile.traveled += distance
+            if projectile.traveled + 1e-9 < projectile.effective_range:
+                active.append(projectile)
+
+        self.projectiles = active
+
+
+def _first_collision(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    projectile_radius: float,
+    shooter_id: str,
+    robots: list[Robot],
+    structures: list[Structure],
+    game_map: GameMap,
+) -> tuple[float, DamageableTarget | None, str, tuple[float, float]] | None:
+    candidates: list[
+        tuple[float, int, str, DamageableTarget | None, tuple[float, float]]
+    ] = []
+    for robot in robots:
+        if not robot.alive or robot.aerial or robot.id == shooter_id:
+            continue
+        hit = _moving_circle_contact(
+            start,
+            end,
+            robot.position,
+            game_map.collision_radius + projectile_radius,
+        )
+        if hit is not None:
+            fraction, point = hit
+            normal = _unit_vector(point[0] - robot.position[0], point[1] - robot.position[1])
+            candidates.append((fraction, 0, robot.id, robot, normal))
+
+    for structure in structures:
+        if not structure.alive or structure.footprint is None:
+            continue
+        hit = _structure_contact(start, end, projectile_radius, structure)
+        if hit is not None:
+            fraction, normal = hit
+            candidates.append((fraction, 1, structure.id, structure, normal))
+
+    for index, obstacle in enumerate(game_map.obstacles):
+        hit = _rectangle_contact(start, end, projectile_radius, obstacle)
+        if hit is not None:
+            fraction, normal = hit
+            candidates.append((fraction, 2, f"obstacle-{index:04d}", None, normal))
+
+    # The perimeter is solid for a radius-sized projectile.
+    bounds = Rectangle(
+        projectile_radius,
+        projectile_radius,
+        game_map.width - projectile_radius * 2,
+        game_map.height - projectile_radius * 2,
+    )
+    boundary = _boundary_contact(start, end, bounds)
+    if boundary is not None:
+        fraction, normal = boundary
+        candidates.append((fraction, 3, "field-boundary", None, normal))
+
+    if not candidates:
+        return None
+    fraction, _priority, _identity, target, normal = min(candidates)
+    target_kind = "robot" if isinstance(target, Robot) else (
+        "structure" if isinstance(target, Structure) else "obstacle"
+    )
+    return fraction, target, target_kind, normal
+
+
+def _structure_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    radius: float,
+    structure: Structure,
+) -> tuple[float, tuple[float, float]] | None:
+    width, height = structure.footprint or (0.0, 0.0)
+    if structure.footprint_shape == "circle":
+        hit = _moving_circle_contact(start, end, structure.position, width / 2 + radius)
+        if hit is None:
+            return None
+        fraction, point = hit
+        return fraction, _unit_vector(
+            point[0] - structure.position[0], point[1] - structure.position[1]
+        )
+    if structure.footprint_shape == "polygon" and len(structure.footprint_vertices) >= 3:
+        vertices = tuple(
+            (structure.position[0] + x, structure.position[1] + y)
+            for x, y in structure.footprint_vertices
+        )
+        hit = _polygon_contact(start, end, vertices, radius)
+        if hit is not None:
+            return hit
+    bounds = Rectangle(
+        structure.position[0] - width / 2,
+        structure.position[1] - height / 2,
+        width,
+        height,
+    )
+    return _rectangle_contact(start, end, radius, bounds)
+
+
+def _rectangle_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    radius: float,
+    rectangle: Rectangle,
+) -> tuple[float, tuple[float, float]] | None:
+    left = rectangle.x - radius
+    top = rectangle.y - radius
+    right = rectangle.right + radius
+    bottom = rectangle.bottom + radius
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    t_min, t_max = 0.0, 1.0
+    normal = (0.0, 0.0)
+    for p, q, entering_normal in (
+        (-dx, start[0] - left, (-1.0, 0.0)),
+        (dx, right - start[0], (1.0, 0.0)),
+        (-dy, start[1] - top, (0.0, -1.0)),
+        (dy, bottom - start[1], (0.0, 1.0)),
+    ):
+        if abs(p) <= 1e-12:
+            if q < 0:
+                return None
+            continue
+        ratio = q / p
+        if p < 0:
+            if ratio > t_min:
+                t_min = ratio
+                normal = entering_normal
+        else:
+            t_max = min(t_max, ratio)
+        if t_min > t_max:
+            return None
+    if not 0.0 <= t_min <= 1.0:
+        return None
+    if normal == (0.0, 0.0):
+        normal = _unit_vector(-dx, -dy)
+    return t_min, normal
+
+
+def _polygon_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    vertices: tuple[tuple[float, float], ...],
+    radius: float,
+) -> tuple[float, tuple[float, float]] | None:
+    if _point_in_polygon(start, vertices):
+        edge = min(
+            zip(vertices, (*vertices[1:], vertices[0])),
+            key=lambda pair: _distance_to_segment(start, pair[0], pair[1]),
+        )
+        return 0.0, _edge_normal(edge[0], edge[1], vertices)
+
+    hits: list[tuple[float, tuple[float, float]]] = []
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    for edge_start, edge_end in zip(vertices, (*vertices[1:], vertices[0])):
+        endpoint_hits = [
+            _moving_circle_contact(start, end, endpoint, radius)
+            for endpoint in (edge_start, edge_end)
+        ]
+        hits.extend(
+            (fraction, _unit_vector(point[0] - endpoint[0], point[1] - endpoint[1]))
+            for hit, endpoint in zip(endpoint_hits, (edge_start, edge_end))
+            if hit is not None
+            for fraction, point in (hit,)
+        )
+        ex, ey = edge_end[0] - edge_start[0], edge_end[1] - edge_start[1]
+        edge_length = math.hypot(ex, ey)
+        if edge_length <= 1e-9:
+            continue
+        nx, ny = ey / edge_length, -ex / edge_length
+        for offset in (-radius, radius):
+            start_distance = (start[0] - edge_start[0]) * nx + (start[1] - edge_start[1]) * ny
+            velocity_normal = dx * nx + dy * ny
+            if abs(velocity_normal) <= 1e-12:
+                continue
+            fraction = (offset - start_distance) / velocity_normal
+            if not 0.0 <= fraction <= 1.0:
+                continue
+            point = (start[0] + dx * fraction, start[1] + dy * fraction)
+            projection = ((point[0] - edge_start[0]) * ex + (point[1] - edge_start[1]) * ey) / (edge_length * edge_length)
+            if 0.0 <= projection <= 1.0:
+                normal = (nx, ny) if velocity_normal < 0 else (-nx, -ny)
+                hits.append((fraction, normal))
+
+    if not hits:
+        return None
+    return min(hits, key=lambda item: item[0])
+
+
+def _moving_circle_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    center: tuple[float, float],
+    radius: float,
+) -> tuple[float, tuple[float, float]] | None:
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    ox, oy = start[0] - center[0], start[1] - center[1]
+    c = ox * ox + oy * oy - radius * radius
+    if c <= 0:
+        return 0.0, start
+    a = dx * dx + dy * dy
+    if a <= 1e-18:
+        return None
+    b = 2.0 * (ox * dx + oy * dy)
+    discriminant = b * b - 4.0 * a * c
+    if discriminant < 0:
+        return None
+    fraction = (-b - math.sqrt(discriminant)) / (2.0 * a)
+    if not 0.0 <= fraction <= 1.0:
+        return None
+    return fraction, (start[0] + dx * fraction, start[1] + dy * fraction)
+
+
+def _boundary_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    bounds: Rectangle,
+) -> tuple[float, tuple[float, float]] | None:
+    if not (
+        bounds.x <= start[0] <= bounds.right
+        and bounds.y <= start[1] <= bounds.bottom
+    ):
+        return 0.0, _unit_vector(start[0] - min(max(start[0], bounds.x), bounds.right), start[1] - min(max(start[1], bounds.y), bounds.bottom))
+    if (
+        bounds.x <= end[0] <= bounds.right
+        and bounds.y <= end[1] <= bounds.bottom
+    ):
+        return None
+    candidates: list[tuple[float, tuple[float, float]]] = []
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    if dx < 0:
+        candidates.append(((bounds.x - start[0]) / dx, (1.0, 0.0)))
+    elif dx > 0:
+        candidates.append(((bounds.right - start[0]) / dx, (-1.0, 0.0)))
+    if dy < 0:
+        candidates.append(((bounds.y - start[1]) / dy, (0.0, 1.0)))
+    elif dy > 0:
+        candidates.append(((bounds.bottom - start[1]) / dy, (0.0, -1.0)))
+    valid = [item for item in candidates if 0.0 <= item[0] <= 1.0]
+    return min(valid, key=lambda item: item[0]) if valid else None
+
+
+def _edge_normal(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    vertices: tuple[tuple[float, float], ...],
+) -> tuple[float, float]:
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    # Pick the outward normal by checking which side contains the polygon's
+    # vertex-average center; rule geometry is already supplied by the field.
+    center_x = sum(point[0] for point in vertices) / len(vertices)
+    center_y = sum(point[1] for point in vertices) / len(vertices)
+    normal = _unit_vector(dy, -dx)
+    midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+    if (center_x - midpoint[0]) * normal[0] + (center_y - midpoint[1]) * normal[1] > 0:
+        return (-normal[0], -normal[1])
+    return normal
+
+
+def _unit_vector(x: float, y: float) -> tuple[float, float]:
+    length = math.hypot(x, y)
+    return (x / length, y / length) if length > 1e-12 else (0.0, 0.0)
