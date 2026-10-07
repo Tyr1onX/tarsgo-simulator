@@ -341,9 +341,12 @@ def test_dart_visuals_follow_rule_launch_and_separate_referee_hit() -> None:
     assert launcher.ammo == 3
     assert launcher.launch_pulse_remaining > 0
 
-    visuals.begin_frame(match)
-    assert rules.record_dart_hit(match, RMUC_RED_TEAM, target.id)
-    visuals.after_match_update(match, 1.0 / 60.0)
+    attempt = rules._dart_system_by_team[RMUC_RED_TEAM].pending_projectiles[0]
+    while match.elapsed_time + 1e-9 < attempt.completes_at:
+        flight_dt = min(1.0 / 60.0, attempt.completes_at - match.elapsed_time)
+        visuals.begin_frame(match)
+        match.update(flight_dt)
+        visuals.after_match_update(match, flight_dt)
     dart_impacts = [impact for impact in visuals.impacts if impact.caliber == "dart"]
     assert len(dart_impacts) == 1
     assert dart_impacts[0].position == target.position
@@ -385,8 +388,7 @@ def test_dart_visuals_detect_same_tick_repeated_hit_from_ammo_drop() -> None:
     visuals.after_match_update(match, 0.0)
     assert len([impact for impact in visuals.impacts if impact.caliber == "dart"]) == 1
 
-    # A second launch and referee hit can both arrive between rendered ticks;
-    # the ammo drop distinguishes the new rule hit when result text repeats.
+    # A repeated hit result still produces a second presentation event.
     match.update(2.0)
     visuals.begin_frame(match)
     assert rules.fire_dart(match, RMUC_RED_TEAM)
