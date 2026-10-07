@@ -219,6 +219,50 @@ def _finish_path_requests(match: Match) -> None:
     assert not match._path_work_queue
 
 
+def test_rmuc_attackers_receive_distinct_structure_approach_slots() -> None:
+    match = _match()
+    red_team = _robot(match, "tarsgo-hero").team
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team != red_team and structure.type == "outpost"
+    )
+    points = match.map.structure_approach_points(target.id)
+    attackers = sorted(
+        (
+            robot
+            for robot in match.robots
+            if robot.team == red_team and robot.alive and not robot.aerial
+        ),
+        key=lambda robot: robot.id,
+    )[: min(2, len(points))]
+    assert len(attackers) >= 2
+
+    preferred_slots = []
+    for robot in attackers:
+        target_key = f"structure:{target.id}"
+        match._ai_target_keys[robot.id] = target_key
+        match._set_ai_goal(
+            robot,
+            "进攻前哨站",
+            target.position,
+            target_key=target_key,
+        )
+        plan = match._pending_ai_paths[robot.id]
+        assert plan.preferred_approach_index is not None
+        preferred_slots.append(plan.preferred_approach_index)
+
+    assert len(set(preferred_slots)) == len(attackers)
+    _finish_path_requests(match)
+
+    endpoints = [tuple(robot.path[-1]) for robot in attackers]
+    assert len(set(endpoints)) == len(attackers)
+    assert all(
+        any(endpoint == point for point in points)
+        for endpoint in endpoints
+    )
+
+
 def test_rmuc_ai_replenishes_and_critical_hp_retreats() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")

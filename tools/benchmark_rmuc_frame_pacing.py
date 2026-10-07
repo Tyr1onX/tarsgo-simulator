@@ -321,6 +321,22 @@ def main() -> None:
         (match._pathfinding_counters["max_queue_length"] for match in measurements.matches),
         default=0,
     )
+    movement_counters = {
+        key: sum(
+            match.movement_diagnostics[key]
+            for match in measurements.matches
+        )
+        for key in (
+            "blocked_ticks",
+            "blocked_events",
+            "yield_decisions",
+            "local_avoidance_attempts",
+            "local_avoidance_moves",
+            "stuck_recovery_attempts",
+            "stuck_recovery_successes",
+            "stuck_path_replans",
+        )
+    }
     result = {
         "scenario": str(args.scenario),
         "window_size": list(app.WINDOW_SIZE),
@@ -338,6 +354,7 @@ def main() -> None:
             "transform_calls": transform_calls,
         },
         "pathfinding_scheduler": pathfinding_counters,
+        "movement_diagnostics": movement_counters,
         "phases": {
             key: {"calls": measurements.counts.get(key, 0), **_summary(values)}
             for key, values in sorted(measurements.samples.items())

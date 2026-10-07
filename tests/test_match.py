@@ -412,7 +412,7 @@ def test_match_rejects_overlapping_robot_spawns_with_both_ids() -> None:
         Match(invalid_config)
 
 
-def test_robots_moving_toward_same_goal_do_not_overlap() -> None:
+def test_robots_moving_toward_same_goal_yield_locally_without_overlap() -> None:
     match = _open_field_match()
     _make_opponents_stationary_and_distant(match)
     first, second = _robot(match, T1), _robot(match, T2)
@@ -428,9 +428,9 @@ def test_robots_moving_toward_same_goal_do_not_overlap() -> None:
 
     assert first.position != second.position
     assert math.dist(first.position, goal) < 50
-    assert math.dist(second.position, goal) < 50
-    assert first.path
-    assert second.path
+    assert not (first.position == goal and second.position == goal)
+    assert match.movement_diagnostics["local_avoidance_moves"] > 0
+    assert match.movement_diagnostics["blocked_ticks"] < 100
 
 
 def _head_on_result(reverse_robots: bool) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -439,6 +439,7 @@ def _head_on_result(reverse_robots: bool) -> tuple[tuple[float, float], tuple[fl
     first, second = _robot(match, T1), _robot(match, T2)
     first.position = (300.0, 300.0)
     second.position = (500.0, 300.0)
+    first_start, second_start = first.position, second.position
     assert match.order_move(T1, second.position)
     assert match.order_move(T2, first.position)
     if reverse_robots:
@@ -447,7 +448,9 @@ def _head_on_result(reverse_robots: bool) -> tuple[tuple[float, float], tuple[fl
     for _ in range(50):
         match.update(0.05)
         _assert_no_robot_overlap(match)
-        assert first.position[0] <= second.position[0]
+    assert first.position != first_start
+    assert second.position != second_start
+    assert match.movement_diagnostics["local_avoidance_moves"] > 0
     return first.position, second.position
 
 
@@ -456,10 +459,10 @@ def test_head_on_robot_movement_is_fair_independent_of_robot_order() -> None:
     reverse_order = _head_on_result(True)
 
     assert reverse_order == forward_order
-    assert forward_order[0][0] < forward_order[1][0]
+    assert math.dist(*forward_order) >= 28.0
 
 
-def test_head_on_movement_cannot_pass_through_during_a_long_frame() -> None:
+def test_head_on_movement_uses_safe_yield_during_a_long_frame() -> None:
     match = _open_field_match()
     _make_opponents_stationary_and_distant(match)
     first, second = _robot(match, T1), _robot(match, T2)
@@ -468,17 +471,47 @@ def test_head_on_movement_cannot_pass_through_during_a_long_frame() -> None:
     assert match.order_move(T1, second.position)
     assert match.order_move(T2, first.position)
     first_start, second_start = first.position, second.position
-    first_path, second_path = list(first.path), list(second.path)
-
     match.update(1.0)
 
-    assert first.position == first_start
-    assert second.position == second_start
-    assert first.path == first_path
-    assert second.path == second_path
+    _assert_no_robot_overlap(match)
+    assert first.position != first_start or second.position != second_start
+    assert first.path and second.path
 
 
-def test_stationary_robot_blocks_without_consuming_path_then_allows_motion() -> None:
+def _three_robot_crossing_result(reverse_robots: bool):
+    match = _open_field_match()
+    _make_opponents_stationary_and_distant(match)
+    robots = [_robot(match, robot_id) for robot_id in (T1, T2, O1)]
+    starts = ((200.0, 300.0), (500.0, 200.0), (800.0, 300.0))
+    goals = ((800.0, 300.0), (500.0, 600.0), (200.0, 300.0))
+    for robot, start, goal in zip(robots, starts, goals):
+        robot.position = start
+        robot.speed = 190.0
+        robot.path = [goal]
+    if reverse_robots:
+        match.robots.reverse()
+
+    for _ in range(600):
+        match._move_robots(1.0 / 60.0)
+        _assert_no_robot_overlap(match)
+
+    assert all(not robot.path for robot in robots)
+    assert all(
+        math.dist(robot.position, goal) < 1.0
+        for robot, goal in zip(robots, goals)
+    )
+    assert match.movement_diagnostics["local_avoidance_moves"] > 0
+    return tuple(robot.position for robot in robots)
+
+
+def test_three_robot_crossing_congestion_clears_deterministically() -> None:
+    forward = _three_robot_crossing_result(False)
+    reversed_order = _three_robot_crossing_result(True)
+
+    assert reversed_order == forward
+
+
+def test_stationary_robot_is_routed_around_without_consuming_destination() -> None:
     match = _open_field_match()
     _make_opponents_stationary_and_distant(match)
     moving, blocker = _robot(match, T1), _robot(match, T2)
@@ -490,29 +523,22 @@ def test_stationary_robot_blocks_without_consuming_path_then_allows_motion() -> 
         match.update(0.05)
         _assert_no_robot_overlap(match)
 
-    blocked_position = moving.position
-    blocked_path = list(moving.path)
-    assert blocked_position[0] < blocker.position[0]
+    assert moving.position[0] > blocker.position[0]
+    assert math.dist(moving.position, blocker.position) >= match.map.collision_radius * 2
     assert moving.path
     match.update(0.1)
-    assert moving.position == blocked_position
-    assert moving.path == blocked_path
-
-    moving.attack_cooldown = 0.8
-    match.update(0.2)
-    assert moving.attack_cooldown == pytest.approx(0.6)
-    assert moving.position == blocked_position
-    assert moving.path == blocked_path
+    _assert_no_robot_overlap(match)
+    assert moving.position[0] > blocker.position[0]
 
     assert match.order_move(T2, (750.0, 310.0))
     for _ in range(40):
         match.update(0.05)
         _assert_no_robot_overlap(match)
 
-    assert moving.position[0] > blocked_position[0]
+    assert moving.position[0] > blocker.position[0]
 
 
-def test_dead_robot_remains_a_collision_blocker() -> None:
+def test_dead_robot_remains_solid_but_can_be_routed_around() -> None:
     match = _open_field_match()
     _make_opponents_stationary_and_distant(match)
     moving, blocker = _robot(match, T1), _robot(match, T2)
@@ -527,11 +553,12 @@ def test_dead_robot_remains_a_collision_blocker() -> None:
         _assert_no_robot_overlap(match)
 
     assert not blocker.alive
-    assert moving.position[0] < blocker.position[0]
+    assert moving.position[0] > blocker.position[0]
+    assert math.dist(moving.position, blocker.position) >= match.map.collision_radius * 2
     assert moving.path
 
 
-def test_combat_still_resolves_while_robot_is_physically_blocked() -> None:
+def test_combat_still_resolves_while_robot_uses_local_avoidance() -> None:
     match = _open_field_match()
     _make_opponents_stationary_and_distant(match)
     player, blocker, opponent = _robot(match, T1), _robot(match, T2), _robot(match, O1)
@@ -539,14 +566,82 @@ def test_combat_still_resolves_while_robot_is_physically_blocked() -> None:
     blocker.position = (330.0, 300.0)
     opponent.position = (240.0, 370.0)
     assert match.order_move(T1, (500.0, 300.0))
-    player_start = player.position
+    opponent_start_hp = opponent.hp
 
     match.update(0.1)
 
-    assert player.position == player_start
-    assert player.path
-    assert player.hp < player.max_hp
-    assert opponent.hp < opponent.max_hp
+    _assert_no_robot_overlap(match)
+    assert opponent.hp < opponent_start_hp
+
+
+def test_stuck_robot_attempts_local_recovery_when_route_is_blocked() -> None:
+    config = load_match_config(default_scenario_path())
+    scenario = replace(
+        config.scenario,
+        map_width=1000,
+        map_height=700,
+        obstacles=(
+            Rectangle(350, 250, 300, 20),
+            Rectangle(350, 330, 300, 20),
+        ),
+        spawns={
+            T1: (300.0, 300.0),
+            T2: (500.0, 300.0),
+            O1: (900.0, 100.0),
+            O2: (900.0, 600.0),
+        },
+    )
+    match = Match(replace(config, scenario=scenario))
+    moving, blocker = _robot(match, T1), _robot(match, T2)
+    blocker.speed = 0.0
+    blocker.path.clear()
+    for robot_id, position in ((O1, (900.0, 100.0)), (O2, (900.0, 600.0))):
+        opponent = _robot(match, robot_id)
+        opponent.position = position
+        opponent.speed = 0.0
+        opponent.path.clear()
+
+    assert match.order_move(moving.id, (700.0, 300.0))
+    for _ in range(600):
+        match.update(1.0 / 60.0)
+        _assert_no_robot_overlap(match)
+
+    diagnostics = match.movement_diagnostics
+    assert diagnostics["blocked_ticks"] > 0
+    assert diagnostics["stuck_recovery_attempts"] > 0
+    assert diagnostics["stuck_recovery_successes"] > 0
+    assert diagnostics["stuck_path_replans"] > 0
+    assert match._pathfinding_counters["searches_started"] > 0
+
+
+def test_stuck_recovery_repaths_through_budgeted_service_without_dropping_route() -> None:
+    match = _open_field_match()
+    moving = _robot(match, T1)
+    moving.position = (300.0, 300.0)
+    moving.path = [(700.0, 300.0)]
+    original_route = list(moving.path)
+    match._stuck_seconds_by_robot[moving.id] = 2.0
+    match._stuck_recovery_after[moving.id] = 100.0
+
+    match._recover_stuck_robot(
+        moving,
+        match.map.collision_radius * 2,
+        {},
+        {},
+    )
+
+    assert match.movement_diagnostics["stuck_path_replans"] == 1
+    assert moving.path == original_route
+    assert moving.id in match._pending_ai_paths
+    assert match._path_work_queue
+
+    for _ in range(1000):
+        if not match._path_work_queue:
+            break
+        match._advance_path_requests()
+    assert not match._path_work_queue
+    assert moving.path
+    assert moving.path[-1] == original_route[-1]
 
 
 def test_player_can_move_each_friendly_robot_independently() -> None:
