@@ -2790,7 +2790,6 @@ def _draw_rmuc_structure(
         ASSET_MANAGER.render(
             structure_asset,
             size=(body_width, body_height),
-            tint=draw_color,
         )
         if structure_asset is not None
         else None
@@ -2850,14 +2849,11 @@ def _draw_rmuc_structure(
                     center[1] + round(math.sin(angle) * (half_height - 9)),
                 )
                 pygame.draw.line(screen, edge_color, start, end, width=2)
-            core_glow = pygame.Surface((30, 30), pygame.SRCALPHA)
-            pygame.draw.circle(core_glow, (*draw_color, 46), (15, 15), 13)
-            screen.blit(core_glow, (center[0] - 15, center[1] - 15))
             pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 3)
-            pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+            pygame.draw.circle(screen, body_color, center, profile.core_radius)
             pygame.draw.circle(
                 screen,
-                _blend_color(draw_color, TEXT_COLOR, 0.38),
+                _blend_color(body_color, TEXT_COLOR, 0.14),
                 (center[0] - 2, center[1] - 2),
                 max(2, profile.core_radius // 3),
             )
@@ -2896,7 +2892,17 @@ def _draw_rmuc_structure(
                 )
                 pygame.draw.line(screen, edge_color, inner, outer, width=1)
             pygame.draw.circle(screen, ROBOT_OUTLINE, center, profile.core_radius + 2)
-            pygame.draw.circle(screen, draw_color, center, profile.core_radius)
+            pygame.draw.circle(
+                screen,
+                _blend_color(body_color, edge_color, 0.12),
+                center,
+                profile.core_radius,
+            )
+            sensor_offset = max(2, profile.core_radius // 3)
+            for side in (-1, 1):
+                lens_center = (center[0] + side * sensor_offset, center[1])
+                pygame.draw.circle(screen, ROBOT_OUTLINE, lens_center, 2)
+                pygame.draw.circle(screen, ARENA_GRID, lens_center, 1)
     else:
         screen.blit(sprite, sprite.get_rect(center=center))
         if debug_geometry:
@@ -2920,6 +2926,30 @@ def _draw_rmuc_structure(
                     geometry_rect,
                     width=1,
                 )
+
+    if alive:
+        structure_lights = {
+            "base": (
+                (-0.34, -0.37, "v"),
+                (0.34, -0.37, "v"),
+                (-0.34, 0.37, "v"),
+                (0.34, 0.37, "v"),
+            ),
+            "outpost": (
+                (0.0, -0.40, "h"),
+                (0.40, 0.0, "v"),
+                (0.0, 0.40, "h"),
+                (-0.40, 0.0, "v"),
+            ),
+        }.get(structure_type, ())
+        _draw_rmuc_team_led_overlay(
+            screen,
+            center=center,
+            size=(body_width, body_height),
+            angle=0.0,
+            lights=structure_lights,
+            color=color,
+        )
 
     if not alive:
         crack = max(6, profile.core_radius + 3)
@@ -3169,6 +3199,110 @@ _RMUC_ROBOT_SPRITE_SIZES = {
     "sentry": ((58, 38), (68, 40)),
     "drone": ((48, 48),),
 }
+_RMUC_ROBOT_LED_LAYOUTS = {
+    "hero": (
+        ((-0.36, 0.0, "v"), (0.36, 0.0, "v")),
+        ((-0.28, -0.08, "v"), (0.28, -0.08, "v")),
+    ),
+    "engineer": (
+        ((-0.39, 0.0, "v"), (0.39, 0.0, "v")),
+    ),
+    "infantry": (
+        ((-0.38, 0.0, "v"), (0.38, 0.0, "v")),
+        ((0.0, -0.34, "h"),),
+    ),
+    "sentry": (
+        ((-0.36, 0.0, "v"), (0.36, 0.0, "v")),
+        ((-0.31, -0.08, "v"), (0.31, -0.08, "v")),
+    ),
+    "drone": (
+        (
+            (-0.31, -0.31, "dot"),
+            (0.31, -0.31, "dot"),
+            (-0.31, 0.31, "dot"),
+            (0.31, 0.31, "dot"),
+        ),
+    ),
+}
+
+
+def _rmuc_led_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    if color == TEAM_RED_COLOR:
+        return (250, 63, 71)
+    if color == TEAM_BLUE_COLOR:
+        return (72, 157, 255)
+    return color
+
+
+def _draw_rmuc_team_led_overlay(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    size: tuple[int, int],
+    angle: float,
+    lights: tuple[tuple[float, float, str], ...],
+    color: tuple[int, int, int],
+) -> None:
+    """Draw low-energy team LEDs and local bloom on presentation-only layers."""
+    if not lights or size[0] <= 0 or size[1] <= 0:
+        return
+    led_color = _rmuc_led_color(color)
+    span = max(1, min(size))
+    overlay = pygame.Surface(size, pygame.SRCALPHA)
+    for x_fraction, y_fraction, orientation in lights:
+        x = round(size[0] * (0.5 + x_fraction))
+        y = round(size[1] * (0.5 + y_fraction))
+        if not (0 <= x < size[0] and 0 <= y < size[1]):
+            continue
+        if orientation == "dot":
+            diameter = max(2, round(span * 0.085))
+            lamp = pygame.Rect(0, 0, diameter, diameter)
+            lamp.center = (x, y)
+        elif orientation == "v":
+            lamp = pygame.Rect(
+                0,
+                0,
+                max(2, round(span * 0.055)),
+                max(3, round(span * 0.14)),
+            )
+            lamp.center = (x, y)
+        else:
+            lamp = pygame.Rect(
+                0,
+                0,
+                max(3, round(span * 0.14)),
+                max(2, round(span * 0.055)),
+            )
+            lamp.center = (x, y)
+        glow = lamp.inflate(max(3, round(span * 0.08)), max(3, round(span * 0.08)))
+        pygame.draw.ellipse(overlay, (*led_color, 16), glow)
+        pygame.draw.rect(
+            overlay,
+            (*led_color, 204),
+            lamp,
+            border_radius=max(1, min(lamp.width, lamp.height) // 2),
+        )
+        if orientation != "dot":
+            highlight = _blend_color(led_color, TEXT_COLOR, 0.32)
+            if orientation == "v":
+                pygame.draw.line(
+                    overlay,
+                    (*highlight, 116),
+                    (x, lamp.top + 1),
+                    (x, lamp.bottom - 2),
+                    width=1,
+                )
+            else:
+                pygame.draw.line(
+                    overlay,
+                    (*highlight, 116),
+                    (lamp.left + 1, y),
+                    (lamp.right - 2, y),
+                    width=1,
+                )
+    if angle:
+        overlay = pygame.transform.rotate(overlay, angle)
+    screen.blit(overlay, overlay.get_rect(center=center))
 
 
 def _rmuc_robot_sprites_available(robot_type: str) -> bool:
@@ -3186,11 +3320,18 @@ def _draw_rmuc_robot_sprites(
     color: tuple[int, int, int],
     body_angle: float,
     turret_angle: float,
+    lit: bool = True,
 ) -> bool:
     """Draw presentation-only robot art; sprite pixels never define geometry."""
     parts = _RMUC_ROBOT_SPRITE_PARTS.get(robot_type)
     sizes = _RMUC_ROBOT_SPRITE_SIZES.get(robot_type)
-    if not parts or not sizes or not _rmuc_robot_sprites_available(robot_type):
+    led_layouts = _RMUC_ROBOT_LED_LAYOUTS.get(robot_type)
+    if (
+        not parts
+        or not sizes
+        or not led_layouts
+        or not _rmuc_robot_sprites_available(robot_type)
+    ):
         return False
 
     angles = (-math.degrees(body_angle), -math.degrees(turret_angle))
@@ -3199,11 +3340,18 @@ def _draw_rmuc_robot_sprites(
             f"robots/{part}",
             size=size,
             angle=angles[index],
-            tint=color,
         )
         if rendered is None:
             return False
         screen.blit(rendered, rendered.get_rect(center=center))
+        _draw_rmuc_team_led_overlay(
+            screen,
+            center=center,
+            size=size,
+            angle=angles[index],
+            lights=led_layouts[index] if lit else (),
+            color=color,
+        )
     return True
 
 
@@ -3500,9 +3648,10 @@ def _draw_rmuc_robot_shape(
             screen,
             center=center,
             robot_type=robot_type,
-            color=draw_color,
+            color=color,
             body_angle=body_angle,
             turret_angle=turret_angle,
+            lit=alive,
         )
 
     if muzzle_remaining > 0 and profile.turret_radius > 0:

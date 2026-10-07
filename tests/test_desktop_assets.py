@@ -102,7 +102,7 @@ def test_missing_asset_uses_the_supplied_fallback() -> None:
     ) is fallback
 
 
-def test_first_batch_structure_sprites_keep_transparency_and_team_tints() -> None:
+def test_structure_sprites_keep_transparency_and_asset_manager_tints() -> None:
     manager = AssetManager(ASSET_ROOT)
     for name in ("structures/base.png", "structures/outpost.png"):
         sprite = manager.load(name)
@@ -126,6 +126,38 @@ def test_first_batch_structure_sprites_keep_transparency_and_team_tints() -> Non
     )
     assert red is not None and blue is not None
     assert red.get_at((36, 31)) != blue.get_at((36, 31))
+
+
+def test_rmuc_team_lighting_is_local_and_uses_red_or_blue() -> None:
+    from tarsgo_simulator.desktop import app
+
+    pygame.font.init()
+    cases = (
+        (app.TEAM_RED_COLOR, (250, 63, 71), "red"),
+        (app.TEAM_BLUE_COLOR, (72, 157, 255), "blue"),
+    )
+    for team_color, expected_led, dominant in cases:
+        screen = pygame.Surface((100, 80), pygame.SRCALPHA, 32)
+        screen.fill((0, 0, 0, 255))
+        app._draw_rmuc_team_led_overlay(
+            screen,
+            center=(50, 40),
+            size=(40, 24),
+            angle=0.0,
+            lights=((0.0, 0.0, "h"),),
+            color=team_color,
+        )
+
+        pixel = screen.get_at((50, 40))
+        assert app._rmuc_led_color(team_color) == expected_led
+        assert pixel[0] > pixel[2] if dominant == "red" else pixel[2] > pixel[0]
+        assert screen.get_at((5, 5))[:3] == (0, 0, 0)
+        colored_pixels = sum(
+            screen.get_at((x, y))[:3] != (0, 0, 0)
+            for x in range(screen.get_width())
+            for y in range(screen.get_height())
+        )
+        assert 0 < colored_pixels < 200
 
 
 def test_robot_sprite_set_is_complete_transparent_and_presentation_only() -> None:

@@ -19,11 +19,15 @@ were used. The assets are distributed under the repository MIT license.
 | `drone.png` | Drone with four large wire-mesh rotor guards, rendered with `body_angle`. |
 
 Every image has a transparent background. Black anodized aluminum,
-carbon-fiber, perforated CNC plates, exposed motors, wiring and sensors, and
-small red/blue indicator accents define the shared style. The robots keep
-open competition-engineering structures instead of enclosed armor. Hero,
-Infantry, and Sentry use separate chassis and turret layers so their body and
-weapon directions remain independent.
+carbon-fiber, perforated CNC plates, exposed motors, wiring and sensors define
+the shared style. The robots keep open competition-engineering structures
+instead of enclosed armor. Hero, Infantry, and Sentry use separate chassis
+and turret layers so their body and weapon directions remain independent.
+
+The desktop renderer adds small, steady referee-system LED strips to the
+chassis and turret layers. It colors those strips red or blue from the robot's
+existing team identity, with a faint local bloom. It does not tint or illuminate
+the rest of the robot art. Dead robots have their team LEDs switched off.
 
 Source prompts describe orthographic top-down competition sprites with black
 anodized-aluminum frames, carbon-fiber parts, CNC cutouts, visible motors,
