@@ -1,4 +1,5 @@
 import importlib
+import math
 from pathlib import Path
 import sys
 
@@ -409,6 +410,33 @@ def test_structure_and_shield_rendering_helpers_do_not_crash() -> None:
     )
 
     assert base_size > outpost_size
+
+
+def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    screen_a, _font, small_font = _surface_and_fonts()
+    screen_b = pygame.Surface(screen_a.get_size(), pygame.SRCALPHA)
+    screen_b.fill((0, 0, 0, 0))
+    screen_a.fill((0, 0, 0, 0))
+
+    for screen, angle in ((screen_a, 0.0), (screen_b, math.pi / 3)):
+        app._draw_rmuc_structure(
+            screen,
+            small_font,
+            structure_type="outpost",
+            center=(180, 180),
+            color=app.TEAM_RED_COLOR,
+            alive=True,
+            hp=1500,
+            max_hp=1500,
+            status="",
+            animation_time=0.0,
+            debug_geometry=False,
+            rotor_angle=angle,
+        )
+
+    assert pygame.image.tostring(screen_a, "RGBA") != pygame.image.tostring(screen_b, "RGBA")
 
 
 def test_badge_rendering_helper_stays_inside_width() -> None:

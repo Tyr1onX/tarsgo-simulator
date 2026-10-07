@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import secrets
 from typing import TYPE_CHECKING
 
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
@@ -52,6 +53,10 @@ SHIELD_IMPACT_DURATION = 0.20
 MAX_SCREEN_SHAKE_AMPLITUDE = 2.25
 MAX_SCREEN_SHAKE_DURATION = 0.14
 SCREEN_SHAKE_COOLDOWN = 0.08
+OUTPOST_ROTATION_SPEED = 0.8 * math.pi
+OUTPOST_ROTATION_RAMP_SECONDS = 5.0
+OUTPOST_ROTATION_STOP_SECONDS = 180.0
+OUTPOST_ROTATION_RETURN_SECONDS = 10.0
 
 
 def robot_visual_profile(robot_type: str) -> RobotVisualProfile:
@@ -205,6 +210,65 @@ class VisualStructureState:
 
 
 @dataclass
+class OutpostRotorVisualState:
+    """Presentation-only pose for the Outpost's rotating middle armor."""
+
+    direction: int
+    angle: float = 0.0
+    stop_time: float | None = None
+    destroyed_at_stop: bool = False
+
+    def advance(
+        self,
+        elapsed_time: float,
+        *,
+        alive: bool,
+        opponent_base_hp: int,
+    ) -> None:
+        now = max(0.0, elapsed_time)
+        if self.stop_time is None:
+            if not alive:
+                self.stop_time = now
+                self.destroyed_at_stop = True
+            elif opponent_base_hp <= 2000:
+                self.stop_time = now
+            elif now >= OUTPOST_ROTATION_STOP_SECONDS:
+                self.stop_time = OUTPOST_ROTATION_STOP_SECONDS
+
+        if self.stop_time is None:
+            self.angle = _wrap_angle(self.direction * _outpost_active_angle(now))
+            return
+
+        stopped_angle = _wrap_angle(
+            self.direction * _outpost_active_angle(self.stop_time)
+        )
+        if self.destroyed_at_stop:
+            self.angle = stopped_angle
+            return
+
+        return_progress = min(
+            1.0,
+            max(0.0, (now - self.stop_time) / OUTPOST_ROTATION_RETURN_SECONDS),
+        )
+        # Smoothly ease the armor back to its official starting pose over 10 s.
+        smooth_return = return_progress * return_progress * (
+            3.0 - 2.0 * return_progress
+        )
+        self.angle = stopped_angle * (1.0 - smooth_return)
+
+
+def _outpost_active_angle(elapsed_time: float) -> float:
+    elapsed = max(0.0, elapsed_time)
+    acceleration = OUTPOST_ROTATION_SPEED / OUTPOST_ROTATION_RAMP_SECONDS
+    if elapsed <= OUTPOST_ROTATION_RAMP_SECONDS:
+        return 0.5 * acceleration * elapsed * elapsed
+    ramp_angle = 0.5 * OUTPOST_ROTATION_SPEED * OUTPOST_ROTATION_RAMP_SECONDS
+    return ramp_angle + OUTPOST_ROTATION_SPEED * (
+        elapsed - OUTPOST_ROTATION_RAMP_SECONDS
+    )
+
+
+@dataclass
 class VisualProjectile:
     start: tuple[float, float]
     end: tuple[float, float]
@@ -276,6 +340,7 @@ class MoveMarker:
 class CombatVisualState:
     robots: dict[str, VisualRobotState] = field(default_factory=dict)
     structures: dict[str, VisualStructureState] = field(default_factory=dict)
+    outpost_rotors: dict[str, OutpostRotorVisualState] = field(default_factory=dict)
     projectiles: list[VisualProjectile] = field(default_factory=list)
     impacts: list[ImpactEffect] = field(default_factory=list)
     move_markers: list[MoveMarker] = field(default_factory=list)
@@ -288,6 +353,8 @@ class CombatVisualState:
 
     def reset(self, match: "Match") -> None:
         structure_statuses = self._structure_statuses(match)
+        outposts = [structure for structure in match.structures if structure.type == "outpost"]
+        rotation_direction = secrets.choice((-1, 1))
         self.robots = {
             robot.id: VisualRobotState(
                 position=robot.position,
@@ -303,6 +370,10 @@ class CombatVisualState:
                 shield=parse_virtual_shield(structure_statuses.get(structure.id, "")),
             )
             for structure in match.structures
+        }
+        self.outpost_rotors = {
+            outpost.id: OutpostRotorVisualState(direction=rotation_direction)
+            for outpost in outposts
         }
         self.projectiles.clear()
         self.impacts.clear()
@@ -370,6 +441,7 @@ class CombatVisualState:
 
     def after_match_update(self, match: "Match", dt: float) -> None:
         dt = max(0.0, dt)
+        self._advance_outpost_rotors(match)
         self.shake_remaining = max(0.0, self.shake_remaining - dt)
         self.shake_cooldown_remaining = max(
             0.0,
@@ -553,6 +625,35 @@ class CombatVisualState:
 
         for robot_id, robot in robot_by_id.items():
             self.robots[robot_id].cooldown = robot.attack_cooldown
+
+    def _advance_outpost_rotors(self, match: "Match") -> None:
+        bases_by_team = {
+            structure.team: structure
+            for structure in match.structures
+            if structure.type == "base"
+        }
+        for outpost in match.structures:
+            if outpost.type != "outpost":
+                continue
+            rotor = self.outpost_rotors.setdefault(
+                outpost.id,
+                OutpostRotorVisualState(direction=1),
+            )
+            opponent_base = next(
+                (
+                    base
+                    for team_id, base in bases_by_team.items()
+                    if team_id != outpost.team
+                ),
+                None,
+            )
+            rotor.advance(
+                match.elapsed_time,
+                alive=outpost.alive,
+                opponent_base_hp=(
+                    opponent_base.hp if opponent_base is not None else 5000
+                ),
+            )
 
     @staticmethod
     def _structure_statuses(match: "Match") -> dict[str, str]:

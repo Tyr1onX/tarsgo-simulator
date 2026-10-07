@@ -12,6 +12,9 @@ from tarsgo_simulator.desktop.visuals import (
     MAX_SCREEN_SHAKE_AMPLITUDE,
     MAX_SCREEN_SHAKE_DURATION,
     MoveMarker,
+    OUTPOST_ROTATION_RETURN_SECONDS,
+    OUTPOST_ROTATION_SPEED,
+    OutpostRotorVisualState,
     VisualProjectile,
     VisualRobotState,
     VisualStructureState,
@@ -306,6 +309,71 @@ def test_screen_shake_is_capped_rate_limited_and_auto_decays() -> None:
     visuals.after_match_update(match, MAX_SCREEN_SHAKE_DURATION + 0.01)
     assert visuals.screen_shake_offset() == (0, 0)
     assert visuals.shake_remaining == 0
+
+
+def test_outpost_rotor_accelerates_and_returns_to_its_initial_pose() -> None:
+    rotor = OutpostRotorVisualState(direction=1)
+
+    rotor.advance(2.5, alive=True, opponent_base_hp=5000)
+    assert rotor.angle == pytest.approx(math.pi / 2)
+    rotor.advance(5.0, alive=True, opponent_base_hp=5000)
+    assert rotor.angle == pytest.approx(0.0, abs=1e-9)
+    rotor.advance(6.0, alive=True, opponent_base_hp=5000)
+    assert rotor.angle == pytest.approx(OUTPOST_ROTATION_SPEED)
+
+    rotor.advance(26.0, alive=True, opponent_base_hp=2000)
+    assert rotor.stop_time == pytest.approx(26.0)
+    stopped_angle = rotor.angle
+    rotor.advance(26.0 + OUTPOST_ROTATION_RETURN_SECONDS / 2, alive=True, opponent_base_hp=2000)
+    assert abs(rotor.angle) < abs(stopped_angle)
+    rotor.advance(26.0 + OUTPOST_ROTATION_RETURN_SECONDS, alive=True, opponent_base_hp=5000)
+    assert rotor.angle == pytest.approx(0.0, abs=1e-9)
+    assert rotor.stop_time == pytest.approx(26.0)
+
+
+def test_outpost_rotor_direction_is_shared_per_match_and_visual_only() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    outposts = [structure for structure in match.structures if structure.type == "outpost"]
+    original_positions = {structure.id: structure.position for structure in match.structures}
+    original_hp = {structure.id: structure.hp for structure in match.structures}
+
+    assert len(outposts) == 2
+    directions = {visuals.outpost_rotors[item.id].direction for item in outposts}
+    assert len(directions) == 1
+    assert directions <= {-1, 1}
+
+    match.elapsed_time = 31.0
+    visuals.after_match_update(match, 0.0)
+
+    assert all(abs(visuals.outpost_rotors[item.id].angle) > 0.1 for item in outposts)
+    assert {structure.id: structure.position for structure in match.structures} == original_positions
+    assert {structure.id: structure.hp for structure in match.structures} == original_hp
+
+
+def test_outpost_rotor_stops_on_destruction_and_does_not_restart_after_rebuild() -> None:
+    rotor = OutpostRotorVisualState(direction=-1)
+    rotor.advance(31.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(32.0, alive=False, opponent_base_hp=5000)
+    destroyed_pose = rotor.angle
+
+    rotor.advance(40.0, alive=True, opponent_base_hp=5000)
+
+    assert rotor.stop_time == pytest.approx(32.0)
+    assert rotor.destroyed_at_stop
+    assert rotor.angle == pytest.approx(destroyed_pose)
+
+
+def test_outpost_rotor_stops_at_three_minutes() -> None:
+    rotor = OutpostRotorVisualState(direction=1)
+    rotor.advance(179.0, alive=True, opponent_base_hp=5000)
+    assert rotor.stop_time is None
+
+    rotor.advance(180.0, alive=True, opponent_base_hp=5000)
+    assert rotor.stop_time == pytest.approx(180.0)
+    rotor.advance(190.0, alive=True, opponent_base_hp=5000)
+    assert rotor.angle == pytest.approx(0.0, abs=1e-9)
 
 
 def test_move_marker_expires() -> None:
