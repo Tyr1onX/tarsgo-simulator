@@ -4,7 +4,11 @@ import pygame
 import pytest
 
 from tarsgo_simulator.core.match import Match
-from tarsgo_simulator.desktop.assets import AssetManager, resolve_asset_root
+from tarsgo_simulator.desktop.assets import (
+    AssetManager,
+    quantize_transform_angle,
+    resolve_asset_root,
+)
 from tarsgo_simulator.desktop.polish import structure_display_size
 
 
@@ -91,6 +95,36 @@ def test_asset_manager_loads_alpha_png_and_caches_source_and_transforms(
     assert original.get_size() == (8, 6)
 
 
+def test_asset_rotation_is_quantized_and_scaled_source_is_reused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_alpha_png(tmp_path / "field" / "rotating.png")
+    manager = AssetManager(tmp_path)
+    smoothscale = pygame.transform.smoothscale
+    scale_calls = 0
+
+    def count_smoothscale(surface: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
+        nonlocal scale_calls
+        scale_calls += 1
+        return smoothscale(surface, size)
+
+    monkeypatch.setattr(pygame.transform, "smoothscale", count_smoothscale)
+    first = manager.render("field/rotating.png", size=(32, 24), angle=3.2)
+    same_bucket = manager.render("field/rotating.png", size=(32, 24), angle=4.1)
+    other_bucket = manager.render("field/rotating.png", size=(32, 24), angle=8.0)
+
+    assert first is same_bucket
+    assert other_bucket is not first
+    assert scale_calls == 1
+    assert quantize_transform_angle(3.2) == quantize_transform_angle(4.1)
+    assert quantize_transform_angle(359.6) == 0.0
+
+    manager.clear_cache()
+    manager.render("field/rotating.png", size=(32, 24), angle=3.2)
+    assert scale_calls == 2
+
+
 def test_missing_asset_uses_the_supplied_fallback() -> None:
     fallback = pygame.Surface((10, 8), pygame.SRCALPHA)
     manager = AssetManager("/definitely/missing/rmuc-assets")
@@ -158,6 +192,83 @@ def test_rmuc_team_lighting_is_local_and_uses_red_or_blue() -> None:
             for y in range(screen.get_height())
         )
         assert 0 < colored_pixels < 200
+
+
+def test_rmuc_static_field_cache_matches_uncached_scene_pixels() -> None:
+    from tarsgo_simulator.desktop import app
+
+    pygame.font.init()
+    match = Match.from_scenario(RMUC_SCENARIO)
+    viewport = app._viewport_for_match(match)
+    field_rect = pygame.Rect(
+        round(viewport.origin[0]),
+        round(viewport.origin[1]),
+        round(viewport.screen_size[0]),
+        round(viewport.screen_size[1]),
+    )
+    font = app.ui_font(12)
+    cached = pygame.Surface(app.WINDOW_SIZE)
+    cached.fill(app.BACKGROUND)
+    cache = app.RMUCStaticFieldCache()
+    cache.draw(
+        cached,
+        font,
+        match,
+        field_rect,
+        viewport,
+        debug_geometry=False,
+    )
+    cache.draw_terrain(cached)
+
+    reference = pygame.Surface(app.WINDOW_SIZE)
+    reference.fill(app.BACKGROUND)
+    app._draw_rmuc_battlefield(reference, field_rect)
+    app._draw_rmuc_field_regions(
+        reference,
+        field_rect,
+        viewport,
+        match.map.zones,
+    )
+    for obstacle in match.map.obstacles:
+        obstacle_rect = app._world_rect_to_screen(
+            viewport,
+            obstacle.x,
+            obstacle.y,
+            obstacle.width,
+            obstacle.height,
+        )
+        app._draw_rmuc_obstacle(reference, obstacle_rect)
+    app._draw_rmuc_terrain(
+        reference,
+        font,
+        field_rect,
+        viewport,
+        terrain_features=match.map.terrain_features,
+        terrain_connections=match.map.terrain_connections,
+        zones=match.map.zones,
+        debug_geometry=False,
+    )
+
+    assert pygame.image.tostring(cached, "RGB") == pygame.image.tostring(
+        reference,
+        "RGB",
+    )
+
+    cached_base_surface = cache._surface
+    shaken_viewport = app.Viewport(
+        origin=(viewport.origin[0] + 1, viewport.origin[1] - 1),
+        scale=viewport.scale,
+        world_size=viewport.world_size,
+    )
+    cache.draw(
+        pygame.Surface(app.WINDOW_SIZE),
+        font,
+        match,
+        field_rect.move(1, -1),
+        shaken_viewport,
+        debug_geometry=False,
+    )
+    assert cache._surface is cached_base_surface
 
 
 def test_robot_sprite_set_is_complete_transparent_and_presentation_only() -> None:

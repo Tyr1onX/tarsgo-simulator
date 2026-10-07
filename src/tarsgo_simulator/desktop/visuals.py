@@ -98,6 +98,7 @@ class VisualRobotState:
     position: tuple[float, float]
     hp: int
     cooldown: float
+    previous_position: tuple[float, float] | None = None
     alive: bool = True
     body_angle: float = 0.0
     turret_angle: float = 0.0
@@ -118,6 +119,7 @@ class VisualRobotState:
         new_position: tuple[float, float],
         dt: float,
     ) -> None:
+        self.previous_position = self.position
         dx = new_position[0] - self.position[0]
         dy = new_position[1] - self.position[1]
         if math.hypot(dx, dy) > 1e-6:
@@ -129,6 +131,15 @@ class VisualRobotState:
                 response=9.0,
             )
         self.position = new_position
+
+    def interpolated_position(self, alpha: float) -> tuple[float, float]:
+        """Interpolate presentation between adjacent fixed simulation states."""
+        previous = self.previous_position or self.position
+        weight = min(1.0, max(0.0, alpha))
+        return (
+            previous[0] + (self.position[0] - previous[0]) * weight,
+            previous[1] + (self.position[1] - previous[1]) * weight,
+        )
 
     def advance_turret(self, dt: float) -> None:
         if self.target_hold_remaining > 0 and self.target_position is not None:

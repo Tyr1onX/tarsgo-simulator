@@ -37,6 +37,21 @@ def _match() -> Match:
     return Match.from_scenario(RMUC_SCENARIO)
 
 
+def test_fixed_step_accumulator_preserves_elapsed_time_and_render_fraction() -> None:
+    accumulator = _app()._FixedStepAccumulator()
+    accumulator.add(0.05)
+    consumed = 0
+    while accumulator.consume_step():
+        consumed += 1
+
+    assert consumed == 3
+    assert accumulator.interpolation_alpha == pytest.approx(0.0)
+
+    accumulator.add(accumulator.step * 0.5)
+    assert accumulator.interpolation_alpha == pytest.approx(0.5)
+    assert not accumulator.consume_step()
+
+
 def test_rmuc_default_zone_rendering_hides_internal_debug_geometry() -> None:
     app = _app()
     assert app._rmuc_zone_style(

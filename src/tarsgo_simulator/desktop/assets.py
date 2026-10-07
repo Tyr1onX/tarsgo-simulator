@@ -10,7 +10,14 @@ import pygame
 
 
 ASSET_BUNDLE_DIRECTORY = Path("assets") / "rmuc"
-_TRANSFORM_CACHE_LIMIT = 128
+_TRANSFORM_CACHE_LIMIT = 1024
+_PREPARED_CACHE_LIMIT = 32
+_ANGLE_QUANTUM_DEGREES = 3.0
+
+
+def quantize_transform_angle(angle: float) -> float:
+    """Snap presentation rotations to the nearest three degree cache bucket."""
+    return round(round(float(angle) / _ANGLE_QUANTUM_DEGREES) * _ANGLE_QUANTUM_DEGREES, 3) % 360.0
 
 
 def resolve_asset_root(
@@ -55,6 +62,9 @@ class AssetManager:
             else resolve_asset_root(bundle_path=getattr(sys, "_MEIPASS", None))
         )
         self._source_cache: dict[str, pygame.Surface] = {}
+        self._prepared_cache: OrderedDict[
+            tuple[object, ...], pygame.Surface
+        ] = OrderedDict()
         self._transform_cache: OrderedDict[
             tuple[object, ...], pygame.Surface
         ] = OrderedDict()
@@ -120,7 +130,7 @@ class AssetManager:
         normalized_size = None if size is None else tuple(int(value) for value in size)
         if normalized_size is not None and any(value <= 0 for value in normalized_size):
             raise ValueError("asset display size must be positive")
-        normalized_angle = round(float(angle) % 360.0, 3)
+        normalized_angle = quantize_transform_angle(angle)
         normalized_tint = None if tint is None else tuple(int(c) for c in tint)
         transform_key = (key, normalized_size, normalized_angle, normalized_tint)
         cached = self._transform_cache.get(transform_key)
@@ -130,7 +140,16 @@ class AssetManager:
 
         rendered = source
         if normalized_size is not None and rendered.get_size() != normalized_size:
-            rendered = pygame.transform.smoothscale(rendered, normalized_size)
+            prepared_key = (key, normalized_size)
+            prepared = self._prepared_cache.get(prepared_key)
+            if prepared is None:
+                prepared = pygame.transform.smoothscale(rendered, normalized_size)
+                self._prepared_cache[prepared_key] = prepared
+                if len(self._prepared_cache) > _PREPARED_CACHE_LIMIT:
+                    self._prepared_cache.popitem(last=False)
+            else:
+                self._prepared_cache.move_to_end(prepared_key)
+            rendered = prepared
         if normalized_angle:
             rendered = pygame.transform.rotate(rendered, normalized_angle)
         if normalized_tint is not None:
@@ -153,6 +172,7 @@ class AssetManager:
     def clear_cache(self) -> None:
         """Drop loaded and transformed surfaces, useful for reloads and tests."""
         self._source_cache.clear()
+        self._prepared_cache.clear()
         self._transform_cache.clear()
 
 

@@ -174,6 +174,12 @@ def test_visual_orientation_update_does_not_mutate_gameplay_position() -> None:
     assert visual.position != original_position
     assert visual.body_angle > 0
     assert visual.body_angle < math.pi / 2
+    assert visual.previous_position == original_position
+    assert visual.interpolated_position(0.0) == original_position
+    assert visual.interpolated_position(1.0) == visual.position
+    midpoint = visual.interpolated_position(0.5)
+    assert midpoint[0] == pytest.approx(original_position[0])
+    assert midpoint[1] == pytest.approx(original_position[1] + 50.0)
 
 
 def test_cosmetic_projectile_creation_from_committed_shot_observation() -> None:

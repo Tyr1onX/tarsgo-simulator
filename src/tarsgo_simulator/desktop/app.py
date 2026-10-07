@@ -1,6 +1,7 @@
 """Minimal Pygame front end for training and partial rules-lab matches."""
 
 import argparse
+from collections import OrderedDict
 from functools import lru_cache
 import math
 from pathlib import Path
@@ -9,7 +10,10 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
-from tarsgo_simulator.desktop.assets import ASSET_MANAGER
+from tarsgo_simulator.desktop.assets import (
+    ASSET_MANAGER,
+    quantize_transform_angle,
+)
 from tarsgo_simulator.desktop.fonts import ui_font
 from tarsgo_simulator.desktop.icon import render_app_icon
 from tarsgo_simulator.desktop.polish import (
@@ -75,6 +79,8 @@ DEFENSE_ZONE_COLOR = (100, 159, 185)
 HUD_HEIGHT = 68
 WINDOW_MARGIN = 32
 WINDOW_SIZE = (1100, 780)
+SIMULATION_HZ = 60
+SIMULATION_DT = 1.0 / SIMULATION_HZ
 FIELD_TOP = 82
 FIELD_VIEW_RECT = (
     WINDOW_MARGIN,
@@ -96,6 +102,30 @@ RMUC_PANEL_RECT = (
     RMUC_PANEL_WIDTH,
     WINDOW_SIZE[1] - 200,
 )
+
+
+class _FixedStepAccumulator:
+    """Track wall time while advancing simulation in fixed-size steps."""
+
+    def __init__(self, step: float = SIMULATION_DT) -> None:
+        self.step = step
+        self.accumulated = 0.0
+
+    def add(self, elapsed: float) -> None:
+        self.accumulated += max(0.0, elapsed)
+
+    def consume_step(self) -> bool:
+        if self.accumulated + 1e-12 < self.step:
+            return False
+        self.accumulated = max(0.0, self.accumulated - self.step)
+        return True
+
+    def reset(self) -> None:
+        self.accumulated = 0.0
+
+    @property
+    def interpolation_alpha(self) -> float:
+        return min(1.0, self.accumulated / self.step)
 ZONE_STYLE = {
     "red-supply": (RED_SUPPLY_COLOR, "RED SUPPLY"),
     "blue-supply": (BLUE_SUPPLY_COLOR, "BLUE SUPPLY"),
@@ -198,10 +228,12 @@ def main(scenario_path: str | Path | None = None) -> None:
         inspector_open = False
         visual_state = CombatVisualState()
         visual_state.reset(match)
+        static_field_cache = RMUCStaticFieldCache()
+        simulation_clock = _FixedStepAccumulator()
         running = True
 
         while running:
-            dt = clock.tick(60) / 1000.0
+            frame_dt = clock.tick(SIMULATION_HZ) / 1000.0
             for event in pygame.event.get():
                 if (
                     _is_rmuc_rules_lab(match)
@@ -222,6 +254,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                     elif event.key == pygame.K_r:
                         match.reset()
                         visual_state.reset(match)
+                        simulation_clock.reset()
                         selected_robot_ids.clear()
                         selection_start = None
                         selection_current = None
@@ -374,9 +407,12 @@ def main(scenario_path: str | Path | None = None) -> None:
                     selection_current = None
                     selection_shift = False
 
-            visual_state.begin_frame(match)
-            match.update(dt)
-            visual_state.after_match_update(match, dt)
+            simulation_clock.add(frame_dt)
+            while simulation_clock.consume_step():
+                visual_state.begin_frame(match)
+                match.update(SIMULATION_DT)
+                visual_state.after_match_update(match, SIMULATION_DT)
+            interpolation_alpha = simulation_clock.interpolation_alpha
             live_selectable_ids = {
                 robot.id
                 for robot in match.robots
@@ -406,6 +442,8 @@ def main(scenario_path: str | Path | None = None) -> None:
                 inspector_open=inspector_open,
                 visual_state=visual_state,
                 hud_font=hud_font,
+                interpolation_alpha=interpolation_alpha,
+                static_field_cache=static_field_cache,
             )
             pygame.display.flip()
     finally:
@@ -2408,6 +2446,95 @@ def _draw_rmuc_obstacle(
         pygame.draw.rect(screen, (48, 59, 64), inset, width=1, border_radius=3)
 
 
+class RMUCStaticFieldCache:
+    """Cache the viewport-specific floor, regions, markings, and barriers."""
+
+    def __init__(self) -> None:
+        self._key: tuple[object, ...] | None = None
+        self._surface: pygame.Surface | None = None
+        self._terrain_surface: pygame.Surface | None = None
+        self._surface_rect = pygame.Rect(0, 0, 0, 0)
+
+    def draw(
+        self,
+        screen: pygame.Surface,
+        legend_font: pygame.font.Font,
+        match: Match,
+        field_rect: pygame.Rect,
+        viewport: Viewport,
+        *,
+        debug_geometry: bool,
+    ) -> None:
+        padding = 14
+        surface_rect = field_rect.inflate(padding * 2, padding * 2)
+        key = (
+            id(match.map),
+            surface_rect.size,
+            viewport.scale,
+            viewport.world_size,
+            debug_geometry,
+        )
+        if key != self._key:
+            surface = pygame.Surface(surface_rect.size, pygame.SRCALPHA, 32)
+            local_field_rect = field_rect.move(-surface_rect.x, -surface_rect.y)
+            local_viewport = Viewport(
+                origin=(
+                    viewport.origin[0] - surface_rect.x,
+                    viewport.origin[1] - surface_rect.y,
+                ),
+                scale=viewport.scale,
+                world_size=viewport.world_size,
+            )
+            _draw_rmuc_battlefield(surface, local_field_rect)
+            if not debug_geometry:
+                _draw_rmuc_field_regions(
+                    surface,
+                    local_field_rect,
+                    local_viewport,
+                    match.map.zones,
+                )
+            for obstacle in match.map.obstacles:
+                obstacle_rect = _world_rect_to_screen(
+                    local_viewport,
+                    obstacle.x,
+                    obstacle.y,
+                    obstacle.width,
+                    obstacle.height,
+                )
+                if not debug_geometry:
+                    _draw_rmuc_obstacle(surface, obstacle_rect)
+                else:
+                    pygame.draw.rect(
+                        surface,
+                        OBSTACLE_COLOR,
+                        obstacle_rect,
+                        border_radius=3,
+                    )
+            terrain_surface = pygame.Surface(surface_rect.size, pygame.SRCALPHA, 32)
+            _draw_rmuc_terrain(
+                terrain_surface,
+                legend_font,
+                local_field_rect,
+                local_viewport,
+                terrain_features=match.map.terrain_features,
+                terrain_connections=match.map.terrain_connections,
+                zones=match.map.zones,
+                debug_geometry=debug_geometry,
+            )
+            self._key = key
+            self._surface = surface
+            self._terrain_surface = terrain_surface
+            self._surface_rect = surface_rect
+
+        if self._surface is not None:
+            screen.blit(self._surface, self._surface_rect.topleft)
+
+    def draw_terrain(self, screen: pygame.Surface) -> None:
+        """Draw cached fixed terrain markings above animated zone overlays."""
+        if self._terrain_surface is not None:
+            screen.blit(self._terrain_surface, self._surface_rect.topleft)
+
+
 def _zone_family_color(family: str) -> tuple[int, int, int]:
     return {
         "resource": RESOURCE_COLOR,
@@ -3354,19 +3481,13 @@ def _rmuc_led_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
     return color
 
 
-def _draw_rmuc_team_led_overlay(
-    screen: pygame.Surface,
-    *,
-    center: tuple[int, int],
+@lru_cache(maxsize=64)
+def _rmuc_team_led_surface(
     size: tuple[int, int],
-    angle: float,
     lights: tuple[tuple[float, float, str], ...],
-    color: tuple[int, int, int],
-) -> None:
-    """Draw low-energy team LEDs and local bloom on presentation-only layers."""
-    if not lights or size[0] <= 0 or size[1] <= 0:
-        return
-    led_color = _rmuc_led_color(color)
+    led_color: tuple[int, int, int],
+) -> pygame.Surface:
+    """Precompose one unrotated team-light layer for a robot sprite part."""
     span = max(1, min(size))
     overlay = pygame.Surface(size, pygame.SRCALPHA)
     for x_fraction, y_fraction, orientation in lights:
@@ -3420,8 +3541,40 @@ def _draw_rmuc_team_led_overlay(
                     (lamp.right - 2, y),
                     width=1,
                 )
-    if angle:
-        overlay = pygame.transform.rotate(overlay, angle)
+    return overlay
+
+
+_RMUC_LED_ROTATED_CACHE: OrderedDict[
+    tuple[object, ...], pygame.Surface
+] = OrderedDict()
+_RMUC_LED_ROTATED_CACHE_LIMIT = 512
+
+
+def _draw_rmuc_team_led_overlay(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    size: tuple[int, int],
+    angle: float,
+    lights: tuple[tuple[float, float, str], ...],
+    color: tuple[int, int, int],
+) -> None:
+    """Draw low-energy team LEDs and local bloom on presentation-only layers."""
+    if not lights or size[0] <= 0 or size[1] <= 0:
+        return
+    led_color = _rmuc_led_color(color)
+    angle_bucket = quantize_transform_angle(angle)
+    cache_key = (size, lights, led_color, angle_bucket)
+    overlay = _RMUC_LED_ROTATED_CACHE.get(cache_key)
+    if overlay is None:
+        overlay = _rmuc_team_led_surface(size, lights, led_color)
+        if angle_bucket:
+            overlay = pygame.transform.rotate(overlay, angle_bucket)
+        _RMUC_LED_ROTATED_CACHE[cache_key] = overlay
+        if len(_RMUC_LED_ROTATED_CACHE) > _RMUC_LED_ROTATED_CACHE_LIMIT:
+            _RMUC_LED_ROTATED_CACHE.popitem(last=False)
+    else:
+        _RMUC_LED_ROTATED_CACHE.move_to_end(cache_key)
     screen.blit(overlay, overlay.get_rect(center=center))
 
 
@@ -4092,6 +4245,8 @@ def _draw(
     inspector_open: bool = False,
     visual_state: CombatVisualState | None = None,
     hud_font: pygame.font.Font | None = None,
+    interpolation_alpha: float = 1.0,
+    static_field_cache: RMUCStaticFieldCache | None = None,
 ) -> None:
     screen.fill(BACKGROUND)
     hud_font = hud_font or small_font
@@ -4217,33 +4372,41 @@ def _draw(
     )
     animation_time = pygame.time.get_ticks() / 1000.0
     if is_rmuc:
-        _draw_rmuc_battlefield(
-            screen,
-            field_rect,
-        )
-        if not debug_geometry:
-            _draw_rmuc_field_regions(
+        if static_field_cache is None:
+            _draw_rmuc_battlefield(screen, field_rect)
+            if not debug_geometry:
+                _draw_rmuc_field_regions(
+                    screen,
+                    field_rect,
+                    viewport,
+                    match.map.zones,
+                )
+        else:
+            static_field_cache.draw(
                 screen,
+                hud_font,
+                match,
                 field_rect,
                 viewport,
-                match.map.zones,
+                debug_geometry=debug_geometry,
             )
     else:
         pygame.draw.rect(screen, FIELD_COLOR, field_rect)
         pygame.draw.rect(screen, FIELD_BORDER, field_rect, width=2)
 
-    for obstacle in match.map.obstacles:
-        obstacle_rect = _world_rect_to_screen(
-            viewport,
-            obstacle.x,
-            obstacle.y,
-            obstacle.width,
-            obstacle.height,
-        )
-        if is_rmuc and not debug_geometry:
-            _draw_rmuc_obstacle(screen, obstacle_rect)
-        else:
-            pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
+    if not (is_rmuc and static_field_cache is not None):
+        for obstacle in match.map.obstacles:
+            obstacle_rect = _world_rect_to_screen(
+                viewport,
+                obstacle.x,
+                obstacle.y,
+                obstacle.width,
+                obstacle.height,
+            )
+            if is_rmuc and not debug_geometry:
+                _draw_rmuc_obstacle(screen, obstacle_rect)
+            else:
+                pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle_rect, border_radius=3)
 
     selected_types = _selected_robot_types(match, selected_robot_ids)
     selected_positions = [
@@ -4312,16 +4475,19 @@ def _draw(
         )
 
     if is_rmuc:
-        _draw_rmuc_terrain(
-            screen,
-            hud_font,
-            field_rect,
-            viewport,
-            terrain_features=match.map.terrain_features,
-            terrain_connections=match.map.terrain_connections,
-            zones=match.map.zones,
-            debug_geometry=debug_geometry,
-        )
+        if static_field_cache is None:
+            _draw_rmuc_terrain(
+                screen,
+                hud_font,
+                field_rect,
+                viewport,
+                terrain_features=match.map.terrain_features,
+                terrain_connections=match.map.terrain_connections,
+                zones=match.map.zones,
+                debug_geometry=debug_geometry,
+            )
+        else:
+            static_field_cache.draw_terrain(screen)
 
     structure_statuses = (
         {
@@ -4437,7 +4603,15 @@ def _draw(
     map_centers = {
         robot.id: tuple(
             round(value)
-            for value in viewport.world_to_screen(robot.position)
+            for value in viewport.world_to_screen(
+                visual_state.robots[robot.id].interpolated_position(
+                    interpolation_alpha
+                )
+                if is_rmuc
+                and visual_state is not None
+                and robot.id in visual_state.robots
+                else robot.position
+            )
         )
         for robot in match.robots
     }
