@@ -55,6 +55,7 @@ class ProjectileImpact:
     surface: str = "unknown"
     outcome: str = "damage"
     armor_face: str | None = None
+    normal: tuple[float, float] = (0.0, 0.0)
 
 
 class ProjectileSystem:
@@ -361,6 +362,7 @@ class ProjectileSystem:
                         surface=surface,
                         outcome=outcome,
                         armor_face=armor_face,
+                        normal=normal,
                     )
                 )
                 self.total_impacts += 1

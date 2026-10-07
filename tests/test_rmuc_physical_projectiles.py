@@ -225,6 +225,7 @@ def test_robot_damage_requires_swept_contact_with_rotating_armor_plate() -> None
     assert aligned_target.hp == aligned_hp - 20
     assert aligned_system.impacts[0].surface == "armor"
     assert aligned_system.impacts[0].armor_face == "rear"
+    assert aligned_system.impacts[0].normal[0] < 0
     assert aligned_system.impacts[0].outcome == "damage"
 
     spun_match, spun_target, spun_hp, spun_system = _swept_robot_contact(math.pi / 4)

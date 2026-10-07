@@ -8,6 +8,7 @@ import secrets
 from typing import TYPE_CHECKING
 
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
+from tarsgo_simulator.core.projectiles import ProjectileImpact
 from tarsgo_simulator.desktop.polish import parse_virtual_shield
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ MAX_SCREEN_SHAKE_AMPLITUDE = 2.25
 MAX_SCREEN_SHAKE_DURATION = 0.14
 SCREEN_SHAKE_COOLDOWN = 0.08
 MAX_ACTIVE_DART_VISUALS = 8
+MAX_REBOUND_PROJECTILES = 96
 MAX_ACTIVE_IMPACTS = 24
 MAX_VISIBLE_IMPACT_PARTICLES = 384
 _DART_GATE_OPENING_SECONDS = 7.0
@@ -388,6 +390,88 @@ class PhysicalProjectileVisual:
 
 
 @dataclass
+class ReboundProjectileVisual:
+    """Short-lived, deterministic ground-contact presentation; never a hitbox."""
+
+    start: tuple[float, float]
+    velocity: tuple[float, float]
+    caliber: str
+    age: float = 0.0
+
+    @classmethod
+    def from_contact(cls, contact: ProjectileImpact) -> "ReboundProjectileVisual":
+        dx, dy = contact.direction
+        incoming_speed = math.hypot(dx, dy)
+        if incoming_speed <= 1e-6:
+            return cls(contact.position, (0.0, 0.0), contact.caliber)
+        nx, ny = contact.normal
+        normal_length = math.hypot(nx, ny)
+        if normal_length <= 1e-6:
+            nx, ny = -dx / incoming_speed, -dy / incoming_speed
+        else:
+            nx, ny = nx / normal_length, ny / normal_length
+        dot = dx * nx + dy * ny
+        reflected = (dx - 2 * dot * nx, dy - 2 * dot * ny)
+        restitution = 0.073 if contact.caliber == "17mm" else 0.052
+        if contact.surface in {"chassis", "frame", "wheel", "obstacle"}:
+            restitution *= 0.8
+        return cls(
+            contact.position,
+            (reflected[0] * restitution, reflected[1] * restitution),
+            contact.caliber,
+        )
+
+    @property
+    def flight_duration(self) -> float:
+        return 0.28 if self.caliber == "17mm" else 0.37
+
+    @property
+    def roll_duration(self) -> float:
+        return 0.21 if self.caliber == "17mm" else 0.27
+
+    @property
+    def fade_start(self) -> float:
+        return self.flight_duration + self.roll_duration + 0.12
+
+    @property
+    def lifetime(self) -> float:
+        return self.fade_start + 0.24
+
+    @property
+    def expired(self) -> bool:
+        return self.age >= self.lifetime
+
+    @property
+    def height(self) -> float:
+        t = min(self.age, self.flight_duration)
+        initial = 110.0 if self.caliber == "17mm" else 155.0
+        gravity = 8_500.0
+        upward = 0.5 * gravity * self.flight_duration - initial / self.flight_duration
+        return max(0.0, initial + upward * t - 0.5 * gravity * t * t)
+
+    @property
+    def position(self) -> tuple[float, float]:
+        flight = min(self.age, self.flight_duration)
+        roll = min(max(0.0, self.age - self.flight_duration), self.roll_duration)
+        # Ease to a complete stop on the ground; no randomness or residual drift.
+        traveled_time = flight + 0.18 * (roll - roll * roll / (2 * self.roll_duration))
+        return (
+            self.start[0] + self.velocity[0] * traveled_time,
+            self.start[1] + self.velocity[1] * traveled_time,
+        )
+
+    @property
+    def opacity(self) -> float:
+        return max(
+            0.0,
+            min(1.0, (self.lifetime - self.age) / (self.lifetime - self.fade_start)),
+        )
+
+    def advance(self, dt: float) -> None:
+        self.age += max(0.0, dt)
+
+
+@dataclass
 class DartVisual:
     """Presentation of a referee-recorded Dart launch; never resolves a hit."""
 
@@ -603,6 +687,7 @@ class CombatVisualState:
     outpost_rotors: dict[str, OutpostRotorVisualState] = field(default_factory=dict)
     projectiles: list[VisualProjectile] = field(default_factory=list)
     physical_projectiles: dict[int, PhysicalProjectileVisual] = field(default_factory=dict)
+    rebound_projectiles: list[ReboundProjectileVisual] = field(default_factory=list)
     dart_launchers: dict[str, DartLauncherVisualState] = field(default_factory=dict)
     dart_projectiles: list[DartVisual] = field(default_factory=list)
     impacts: list[ImpactEffect] = field(default_factory=list)
@@ -649,6 +734,7 @@ class CombatVisualState:
         }
         self.projectiles.clear()
         self.physical_projectiles.clear()
+        self.rebound_projectiles.clear()
         self.dart_projectiles.clear()
         self.dart_launchers = {
             team_id: DartLauncherVisualState(
@@ -952,44 +1038,21 @@ class CombatVisualState:
 
         self.projectiles = active_projectiles
 
+        for rebound in self.rebound_projectiles:
+            rebound.advance(dt)
+        self.rebound_projectiles = [
+            rebound for rebound in self.rebound_projectiles if not rebound.expired
+        ]
         if getattr(match, "uses_physical_projectiles", False):
-            for contact in match.projectile_impacts:
-                profile = projectile_visual_profile(contact.caliber)
-                impact = ImpactEffect(
-                    position=contact.position,
-                    caliber=contact.caliber,
-                    remaining=profile.impact_duration,
-                    duration=profile.impact_duration,
-                    target_kind=contact.target_kind,
-                    attacker_team_id=contact.shooter_team_id,
-                    direction=contact.direction,
-                    event_sequence=contact.projectile_id,
-                    surface=contact.surface,
-                    outcome=contact.outcome,
-                )
-                self.impacts.append(impact)
-                self._cap_impacts()
-                if contact.target_id in self.robots and contact.outcome == "damage":
-                    robot_state = self.robots[contact.target_id]
-                    robot_state.impact_remaining = max(
-                        robot_state.impact_remaining,
-                        profile.impact_duration,
-                    )
-                    robot_state.impact_caliber = contact.caliber
-                elif contact.target_id in self.structures and contact.outcome == "damage":
-                    structure_state = self.structures[contact.target_id]
-                    structure_state.impact_remaining = max(
-                        structure_state.impact_remaining,
-                        profile.impact_duration,
-                    )
-                    structure_state.impact_caliber = contact.caliber
-                if contact.outcome == "damage" and (
-                    contact.caliber == "42mm" or contact.target_kind == "structure"
-                ):
-                    amplitude = 1.55 if contact.caliber == "42mm" else 0.65
-                    if contact.target_kind == "structure":
-                        amplitude += 0.35
-                    self.trigger_screen_shake(amplitude, 0.11)
+            self.rebound_projectiles.extend(
+                ReboundProjectileVisual.from_contact(contact)
+                for contact in match.projectile_impacts
+                if contact.caliber in {"17mm", "42mm"}
+            )
+            if len(self.rebound_projectiles) > MAX_REBOUND_PROJECTILES:
+                del self.rebound_projectiles[
+                    : len(self.rebound_projectiles) - MAX_REBOUND_PROJECTILES
+                ]
 
         for impact in self.impacts:
             impact.advance(dt)

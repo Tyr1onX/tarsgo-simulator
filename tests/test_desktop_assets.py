@@ -136,6 +136,18 @@ def test_missing_asset_uses_the_supplied_fallback() -> None:
     ) is fallback
 
 
+def test_both_projectile_sprites_are_transparent_cached_pngs() -> None:
+    manager = AssetManager(ASSET_ROOT)
+    for caliber, display_size in (("17mm", 7), ("42mm", 11)):
+        sprite = manager.load(f"projectiles/{caliber}.png")
+        assert sprite is not None
+        assert sprite.get_at((0, 0)).a == 0
+        assert sprite.get_at(sprite.get_rect().center).a == 255
+        resized = manager.render(f"projectiles/{caliber}.png", size=(display_size, display_size))
+        assert resized is not None
+        assert resized.get_size() == (display_size, display_size)
+
+
 def test_structure_sprites_keep_transparency_and_asset_manager_tints() -> None:
     manager = AssetManager(ASSET_ROOT)
     for name in ("structures/base.png", "structures/outpost.png"):

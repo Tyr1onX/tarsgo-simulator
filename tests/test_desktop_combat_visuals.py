@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.projectiles import ProjectileImpact
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
     DartLauncherVisualState,
@@ -13,12 +14,14 @@ from tarsgo_simulator.desktop.visuals import (
     ImpactEffect,
     MAX_ACTIVE_DART_VISUALS,
     MAX_ACTIVE_IMPACTS,
+    MAX_REBOUND_PROJECTILES,
     MAX_VISIBLE_IMPACT_PARTICLES,
     MAX_SCREEN_SHAKE_AMPLITUDE,
     MAX_SCREEN_SHAKE_DURATION,
     MoveMarker,
     OUTPOST_ROTATION_RETURN_SECONDS,
     OUTPOST_ROTATION_SPEED,
+    ReboundProjectileVisual,
     OutpostRotorVisualState,
     VisualProjectile,
     VisualRobotState,
@@ -869,8 +872,10 @@ def test_physical_projectile_impact_feedback_uses_simulated_contact() -> None:
     visuals.after_match_update(match, 1.0 / 60.0)
 
     assert visuals.physical_projectiles == {}
-    assert len(visuals.impacts) == 1
-    assert visuals.robots[target.id].impact_remaining > 0
+    assert visuals.impacts == []
+    assert len(visuals.rebound_projectiles) == 1
+    assert visuals.rebound_projectiles[0].caliber == "42mm"
+    assert visuals.robots[target.id].impact_remaining == 0
     assert target.hp < target.max_hp
 
 
@@ -897,10 +902,108 @@ def test_immune_physical_hit_has_absorbed_feedback_without_damage_flash() -> Non
         visuals.after_match_update(match, 1.0 / 60.0)
 
     assert target.hp == target.max_hp
-    assert visuals.impacts[-1].outcome == "immune"
-    assert visuals.impacts[-1].surface == "armor"
-    assert {particle.kind for particle in visuals.impacts[-1].particles} >= {"absorbed"}
+    assert visuals.impacts == []
+    assert len(visuals.rebound_projectiles) == 1
+    assert visuals.rebound_projectiles[0].caliber == "42mm"
     assert visuals.robots[target.id].impact_remaining == 0.0
+
+
+@pytest.mark.parametrize("caliber", ("17mm", "42mm"))
+@pytest.mark.parametrize("surface", ("armor", "frame", "obstacle"))
+def test_rebound_is_deterministic_and_rolls_to_rest(caliber: str, surface: str) -> None:
+    contact = ProjectileImpact(
+        projectile_id=1,
+        shooter_id="shooter",
+        shooter_team_id=RMUC_RED_TEAM,
+        caliber=caliber,
+        position=(12000.0, 6200.0),
+        direction=(25000.0, 3000.0),
+        target_id=None if surface == "obstacle" else "target",
+        target_kind="obstacle" if surface == "obstacle" else "robot",
+        applied_damage=0,
+        surface=surface,
+        normal=(-1.0, 0.0),
+    )
+    rebound = ReboundProjectileVisual.from_contact(contact)
+    repeated = ReboundProjectileVisual.from_contact(contact)
+    assert rebound == repeated
+    assert rebound.velocity[0] < 0  # Reflected back from the contact plane.
+    assert rebound.velocity[1] > 0
+    assert rebound.height > 0
+
+    rebound.advance(rebound.flight_duration / 2)
+    assert rebound.height > 0
+    assert rebound.position[0] < contact.position[0]
+    rebound.advance(rebound.flight_duration / 2)
+    assert rebound.height == pytest.approx(0.0, abs=1e-8)
+    landed = rebound.position
+    rebound.advance(rebound.roll_duration)
+    assert rebound.position[0] < landed[0]
+    at_rest = rebound.position
+    rebound.advance(0.12)
+    assert rebound.position == pytest.approx(at_rest)
+    assert rebound.opacity == pytest.approx(1.0)
+    rebound.advance(0.12)
+    assert rebound.opacity == pytest.approx(0.5)
+    rebound.advance(0.12)
+    assert rebound.opacity == pytest.approx(0.0)
+    assert rebound.expired
+
+
+def test_rebound_size_and_motion_are_caliber_specific() -> None:
+    payload = dict(
+        projectile_id=1, shooter_id="shooter", shooter_team_id=RMUC_RED_TEAM,
+        position=(1000.0, 1200.0), direction=(25000.0, 0.0),
+        target_id="target", target_kind="robot", applied_damage=20,
+        surface="armor", normal=(-1.0, 0.0),
+    )
+    small = ReboundProjectileVisual.from_contact(ProjectileImpact(caliber="17mm", **payload))
+    large = ReboundProjectileVisual.from_contact(ProjectileImpact(caliber="42mm", **payload))
+    assert small.flight_duration < large.flight_duration
+    assert small.velocity[0] < large.velocity[0]
+    assert small.lifetime < large.lifetime
+
+
+def test_rebound_budget_and_retirement_never_touch_referee() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    original_hp = tuple(robot.hp for robot in match.robots)
+    original_ammo = {
+        key: value.allowed
+        for key, value in match.ruleset._projectile_allowance_by_robot.items()
+    }
+    original_heat = {
+        key: state.heat
+        for key, state in match.ruleset._shooting_heat_by_robot.items()
+    }
+    match.projectile_system.impacts[:] = [
+        ProjectileImpact(
+            projectile_id=i + 1, shooter_id="shooter",
+            shooter_team_id=RMUC_RED_TEAM, caliber="17mm" if i % 2 else "42mm",
+            position=(12000.0 + i, 6500.0), direction=(25000.0, 0.0),
+            target_id=None, target_kind="obstacle", applied_damage=0,
+            surface="obstacle", normal=(-1.0, 0.0),
+        )
+        for i in range(MAX_REBOUND_PROJECTILES * 3)
+    ]
+    visuals.begin_frame(match)
+    visuals.after_match_update(match, 0.0)
+    assert len(visuals.rebound_projectiles) == MAX_REBOUND_PROJECTILES
+    assert visuals.impacts == []
+    assert tuple(robot.hp for robot in match.robots) == original_hp
+    assert {
+        key: value.allowed
+        for key, value in match.ruleset._projectile_allowance_by_robot.items()
+    } == original_ammo
+
+    match.projectile_system.impacts.clear()
+    visuals.after_match_update(match, 2.0)
+    assert visuals.rebound_projectiles == []
+    assert {
+        key: state.heat
+        for key, state in match.ruleset._shooting_heat_by_robot.items()
+    } == original_heat
 
 
 def test_shielded_structure_impact_is_visual_only() -> None:
