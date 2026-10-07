@@ -29,6 +29,7 @@ from tarsgo_simulator.desktop.polish import (
 from tarsgo_simulator.desktop.viewport import Viewport
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
+    MAX_VISIBLE_IMPACT_PARTICLES,
     low_hp_warning_strength,
     projectile_visual_profile,
     robot_visual_profile,
@@ -2898,7 +2899,13 @@ def _draw_rmuc_structure(
     profile = structure_visual_profile(structure_type)
     draw_color = color if alive else _blend_color(MUTED_COLOR, ARENA_FLOOR_DARK, 0.38)
     if alive and impact_remaining > 0:
-        flash_mix = 0.68 if impact_caliber == "42mm" else 0.38
+        flash_mix = (
+            0.68
+            if impact_caliber == "42mm"
+            else 0.54
+            if impact_caliber == "dart"
+            else 0.38
+        )
         draw_color = _blend_color(draw_color, IMPACT_COLOR, flash_mix)
     body_color = _blend_color(draw_color, ARENA_FLOOR_DARK, 0.58)
     edge_color = draw_color if alive else _blend_color(MUTED_COLOR, ARENA_GRID, 0.35)
@@ -3142,16 +3149,6 @@ def _draw_rmuc_structure(
                 center[1] + round(math.sin(angle) * (impact_radius + 5)),
             )
             pygame.draw.line(screen, SHIELD_COLOR, start, end, width=2)
-    elif impact_remaining > 0:
-        ring_radius = size + (7 if impact_caliber == "42mm" else 4)
-        pygame.draw.circle(
-            screen,
-            IMPACT_COLOR,
-            center,
-            ring_radius,
-            width=3 if impact_caliber == "42mm" else 2,
-        )
-
     bar_width = body_width + 14
     bar_rect = pygame.Rect(
         center[0] - bar_width // 2,
@@ -4005,15 +4002,6 @@ def _draw_rmuc_robot_shape(
             warning_radius,
             width=1,
         )
-    if impact_remaining > 0:
-        impact_radius = radius + (7 if impact_caliber == "42mm" else 4)
-        pygame.draw.circle(
-            screen,
-            IMPACT_COLOR,
-            center,
-            impact_radius,
-            width=3 if impact_caliber == "42mm" else 2,
-        )
     if robot_type != "drone":
         _draw_robot_lifecycle_effects(
             screen,
@@ -4036,10 +4024,195 @@ def _draw_rmuc_robot_shape(
     return radius
 
 
+def _rmuc_dart_launcher_anchors(
+    match: Match,
+) -> tuple[tuple[str, tuple[float, float], int], ...]:
+    """Return art-only anchors at the official short ends of the field.
+
+    Figure 4-4 marks the two Dart stations at opposite short ends near opposite
+    long-edge corners. Figure 4-5 specifies that their facing follows the long
+    field edge. These non-dimensioned presentation anchors stay outside the
+    map model: they are not structures, collision, LOS, or gameplay geometry.
+    """
+    bases = [structure for structure in match.structures if structure.type == "base"]
+    center_x = match.map.width * 0.5
+    inset = min(700.0, match.map.width * 0.025)
+    anchors = []
+    for base in sorted(bases, key=lambda structure: structure.position[0]):
+        direction = 1 if base.position[0] < center_x else -1
+        x = inset if direction > 0 else match.map.width - inset
+        y_fraction = 0.22 if direction > 0 else 0.78
+        anchors.append(
+            (base.team, (x, match.map.height * y_fraction), direction)
+        )
+    return tuple(anchors)
+
+
+def _draw_rmuc_dart_launcher(
+    screen: pygame.Surface,
+    viewport: Viewport,
+    center_world: tuple[float, float],
+    direction: int,
+    team_color: tuple[int, int, int],
+    state,
+) -> None:
+    """Draw a compact, open-frame top-down Dart station from the photo reference."""
+    center_point = viewport.world_to_screen(center_world)
+    center = (round(center_point[0]), round(center_point[1]))
+    px = viewport.scale
+
+    def length(mm: float, minimum: int = 1) -> int:
+        return max(minimum, round(mm * px))
+
+    def along(mm: float) -> tuple[int, int]:
+        return (center[0] + direction * length(mm, 0), center[1])
+
+    def across(mm: float) -> tuple[int, int]:
+        return (center[0], center[1] + length(mm, 0))
+
+    frame_w = length(1680, 34)
+    frame_h = length(650, 17)
+    half_h = frame_h // 2
+    shadow = pygame.Rect(0, 0, frame_w + 5, frame_h + 4)
+    shadow.center = (center[0] + 1, center[1] + 2)
+    pygame.draw.rect(screen, (10, 14, 18), shadow, border_radius=3)
+
+    deck = pygame.Rect(0, 0, frame_w, frame_h)
+    deck.center = center
+    pygame.draw.rect(screen, (25, 31, 36), deck, border_radius=3)
+    pygame.draw.rect(screen, (143, 153, 158), deck, width=1, border_radius=3)
+
+    rail_offset = max(4, length(205))
+    rail_start = along(-710)
+    rail_end = along(710)
+    for side in (-1, 1):
+        rail_y = center[1] + side * rail_offset
+        pygame.draw.line(
+            screen,
+            (67, 78, 85),
+            (rail_start[0], rail_y),
+            (rail_end[0], rail_y),
+            width=max(2, length(58)),
+        )
+        pygame.draw.line(
+            screen,
+            (191, 200, 203),
+            (rail_start[0], rail_y - 1),
+            (rail_end[0], rail_y - 1),
+            width=1,
+        )
+        for hole_mm in (-560, -300, -40, 220, 480, 660):
+            hole = along(hole_mm)
+            point = (hole[0], rail_y)
+            pygame.draw.circle(screen, (18, 23, 27), point, max(1, length(34)))
+
+    # Open CNC carrier plate and its cross-members leave the rails visible.
+    inner = pygame.Rect(0, 0, length(820, 18), length(350, 10))
+    inner.center = center
+    pygame.draw.rect(screen, (47, 56, 62), inner, border_radius=2)
+    pygame.draw.rect(screen, (116, 128, 134), inner, width=1, border_radius=2)
+    for s in (-570, -225, 120, 465):
+        left = along(s)
+        pygame.draw.line(
+            screen,
+            (124, 136, 141),
+            (left[0], center[1] - half_h + 3),
+            (left[0], center[1] + half_h - 3),
+            width=max(1, length(34)),
+        )
+
+    motor_center = along(-615)
+    motor = pygame.Rect(0, 0, length(250, 8), length(310, 10))
+    motor.center = motor_center
+    pygame.draw.rect(screen, (16, 21, 25), motor, border_radius=2)
+    pygame.draw.rect(screen, (158, 168, 171), motor, width=1, border_radius=2)
+    pygame.draw.line(
+        screen,
+        (205, 211, 211),
+        (motor.left + 2, motor.centery),
+        (motor.right - 2, motor.centery),
+        width=1,
+    )
+
+    # The carriage accelerates down the rails only after a rule-reported launch.
+    carriage_s = -250 + round(520 * state.launch_progress)
+    carriage_center = along(carriage_s)
+    carriage = pygame.Rect(0, 0, length(285, 9), length(480, 13))
+    carriage.center = carriage_center
+    pygame.draw.rect(screen, (31, 38, 43), carriage, border_radius=2)
+    pygame.draw.rect(screen, (196, 204, 207), carriage, width=1, border_radius=2)
+    for dy in (-length(150), length(150)):
+        wheel = (carriage_center[0], carriage_center[1] + dy)
+        pygame.draw.circle(screen, (15, 20, 24), wheel, max(2, length(92)))
+        pygame.draw.circle(screen, (136, 148, 153), wheel, max(1, length(42)))
+
+    # Gate leaves slide apart during the seven-second opening phase.
+    gate_s = 640
+    gate_center = along(gate_s)
+    gate_offset = round(length(195) * state.gate_open)
+    gate_color = (179, 190, 193) if state.gate_open > 0.5 else (93, 105, 111)
+    gate_leaf = max(2, length(58))
+    for sign in (-1, 1):
+        end_y = gate_center[1] + sign * (length(100) + gate_offset)
+        pygame.draw.line(
+            screen,
+            gate_color,
+            (gate_center[0], gate_center[1] + sign * length(38)),
+            (gate_center[0], end_y),
+            width=gate_leaf,
+        )
+
+    if state.ammo > 0:
+        dart_start = along(310)
+        dart_end = along(575)
+        pygame.draw.line(screen, (208, 214, 211), dart_start, dart_end, width=max(2, length(40)))
+        pygame.draw.line(screen, team_color, along(500), dart_end, width=1)
+
+    # Exposed power/data loom and a restrained team referee/status LED.
+    cable_points = [along(-650), across(half_h - 3), along(-160)]
+    pygame.draw.lines(screen, (13, 18, 22), False, cable_points, width=max(2, length(42)))
+    pygame.draw.lines(screen, (156, 77, 67), False, [cable_points[0], cable_points[1]], width=1)
+    led_color = _blend_color(team_color, (24, 31, 36), 0.88)
+    if state.phase in {"opening", "firing"}:
+        led_color = _blend_color(team_color, (231, 238, 240), 0.22)
+    led_y = center[1] + half_h - max(2, length(60))
+    pygame.draw.line(
+        screen,
+        led_color,
+        (deck.left + 5, led_y),
+        (deck.right - 5, led_y),
+        width=max(1, length(36)),
+    )
+    if state.launch_pulse_remaining > 0:
+        pulse = along(745)
+        pygame.draw.circle(screen, (223, 233, 235), pulse, max(2, length(92)))
+
+
+def _draw_rmuc_dart_launchers(
+    screen: pygame.Surface,
+    viewport: Viewport,
+    match: Match,
+    visual_state: CombatVisualState,
+) -> None:
+    for team_id, position, direction in _rmuc_dart_launcher_anchors(match):
+        state = visual_state.dart_launchers.get(team_id)
+        if state is None:
+            continue
+        _draw_rmuc_dart_launcher(
+            screen,
+            viewport,
+            position,
+            direction,
+            _rmuc_team_color(match, team_id),
+            state,
+        )
+
+
 def _draw_visual_projectiles(
     screen: pygame.Surface,
     viewport: Viewport,
     visual_state: CombatVisualState,
+    match: Match | None = None,
 ) -> None:
     for projectile in visual_state.projectiles:
         profile = projectile.profile
@@ -4092,53 +4265,138 @@ def _draw_visual_projectiles(
             profile.head_radius,
         )
 
+    for dart in visual_state.dart_projectiles:
+        progress = dart.progress
+        direction_x = dart.end[0] - dart.start[0]
+        direction_y = dart.end[1] - dart.start[1]
+        distance = max(1.0, math.hypot(direction_x, direction_y))
+        direction_x /= distance
+        direction_y /= distance
+        head_world = dart.position
+        head = viewport.world_to_screen(head_world)
+        arc_lift = math.sin(math.pi * progress) * 170.0
+        head = (head[0], head[1] - viewport.world_length_to_screen(arc_lift))
+        perpendicular = (-direction_y, direction_x)
+        tail_fraction = max(0.0, progress - 0.075)
+        tail_world = (
+            dart.start[0] + (dart.end[0] - dart.start[0]) * tail_fraction,
+            dart.start[1] + (dart.end[1] - dart.start[1]) * tail_fraction,
+        )
+        tail = viewport.world_to_screen(tail_world)
+        tail = (tail[0], tail[1] - viewport.world_length_to_screen(math.sin(math.pi * tail_fraction) * 170.0))
+        team_color = _rmuc_team_color(match, dart.team_id) if match is not None else TEAM_RED_COLOR
+        pygame.draw.line(
+            screen,
+            _blend_color(team_color, ARENA_FLOOR, 0.45),
+            (round(tail[0]), round(tail[1])),
+            (round(head[0]), round(head[1])),
+            width=3,
+        )
+        pygame.draw.line(
+            screen,
+            (221, 229, 230),
+            (round(tail[0]), round(tail[1])),
+            (round(head[0]), round(head[1])),
+            width=1,
+        )
+        head_point = (round(head[0]), round(head[1]))
+        rear = (round(head[0] - direction_x * 8), round(head[1] - direction_y * 8))
+        fin_a = (
+            round(rear[0] - direction_x * 3 + perpendicular[0] * 2),
+            round(rear[1] - direction_y * 3 + perpendicular[1] * 2),
+        )
+        fin_b = (
+            round(rear[0] - direction_x * 3 - perpendicular[0] * 2),
+            round(rear[1] - direction_y * 3 - perpendicular[1] * 2),
+        )
+        pygame.draw.line(screen, (23, 29, 34), rear, head_point, width=4)
+        pygame.draw.line(screen, (194, 204, 207), rear, head_point, width=2)
+        pygame.draw.line(screen, team_color, rear, fin_a, width=2)
+        pygame.draw.line(screen, team_color, rear, fin_b, width=2)
+        pygame.draw.circle(screen, (238, 242, 239), head_point, 2)
+
+    particle_budget = MAX_VISIBLE_IMPACT_PARTICLES
     for impact in visual_state.impacts:
         point = viewport.world_to_screen(impact.position)
         center = (round(point[0]), round(point[1]))
-        profile = projectile_visual_profile(impact.caliber)
+        elapsed = max(0.0, impact.duration - impact.remaining)
         if impact.shielded:
-            radius = round(9 + impact.progress * 13)
+            radius = round(5 + impact.progress * 6)
             pygame.draw.circle(
                 screen,
-                SHIELD_COLOR,
+                _blend_color(SHIELD_COLOR, ARENA_FLOOR, 0.24),
                 center,
                 radius,
-                width=3,
-            )
-            pygame.draw.circle(
-                screen,
-                _blend_color(SHIELD_COLOR, TEXT_COLOR, 0.35),
-                center,
-                max(3, radius // 3),
                 width=1,
             )
-            continue
-
-        radius = round(
-            (5 if profile.caliber == "17mm" else 9)
-            + impact.progress * (7 if profile.caliber == "17mm" else 14)
+        team_color = (
+            _rmuc_team_color(match, impact.attacker_team_id)
+            if match is not None and impact.attacker_team_id
+            else TEAM_RED_COLOR
         )
+        impact_strength = {"17mm": 0.45, "42mm": 0.72, "dart": 0.95}.get(
+            impact.caliber,
+            0.45,
+        )
+        core_color = _blend_color((232, 224, 201), ARENA_FLOOR, 0.25)
         pygame.draw.circle(
             screen,
-            IMPACT_COLOR,
+            core_color,
             center,
-            radius,
-            width=2 if profile.caliber == "17mm" else 3,
+            1 if impact.caliber == "17mm" else 2,
         )
-        if profile.caliber == "42mm":
-            inner = max(3, round(radius * 0.35))
-            pygame.draw.circle(screen, WARNING_COLOR, center, inner)
-            ray = radius + 5
-            for angle in (0, math.pi / 2, math.pi, 3 * math.pi / 2):
-                start = (
-                    center[0] + round(math.cos(angle) * (radius - 2)),
-                    center[1] + round(math.sin(angle) * (radius - 2)),
-                )
-                end = (
-                    center[0] + round(math.cos(angle) * ray),
-                    center[1] + round(math.sin(angle) * ray),
-                )
-                pygame.draw.line(screen, IMPACT_COLOR, start, end, width=2)
+        for particle in impact.particles:
+            if particle_budget <= 0:
+                break
+            if elapsed >= particle.lifetime:
+                continue
+            particle_budget -= 1
+            progress = min(1.0, elapsed / particle.lifetime)
+            travel = particle.speed * elapsed * (1.0 - 0.32 * progress)
+            world_x = impact.position[0] + particle.direction_x * travel
+            world_y = impact.position[1] + particle.direction_y * travel
+            if particle.kind == "dust":
+                world_y += 5.0 * progress / max(1e-6, viewport.scale)
+                base_color = (142, 150, 151)
+                color = _blend_color(base_color, ARENA_FLOOR, 0.52 + 0.28 * progress)
+                radius = max(1, round((1.1 + impact_strength * 1.0) * (1.0 - 0.45 * progress)))
+                dust = viewport.world_to_screen((world_x, world_y))
+                pygame.draw.circle(screen, color, (round(dust[0]), round(dust[1])), radius)
+                continue
+
+            base_color = (
+                team_color
+                if particle.kind == "team"
+                else (167, 181, 187)
+                if particle.kind == "metal"
+                else (246, 210, 144)
+            )
+            fade = (
+                0.48 + 0.30 * progress
+                if particle.kind == "team"
+                else 0.25 + 0.52 * progress
+                if particle.kind == "metal"
+                else 0.18 + 0.48 * progress
+            )
+            color = _blend_color(
+                base_color,
+                ARENA_FLOOR,
+                min(0.92, fade),
+            )
+            particle_point = viewport.world_to_screen((world_x, world_y))
+            point = (round(particle_point[0]), round(particle_point[1]))
+            length_px = max(
+                1,
+                round(viewport.world_length_to_screen(particle.length * (1.0 - 0.72 * progress))),
+            )
+            tail = (
+                round(point[0] - particle.direction_x * length_px),
+                round(point[1] - particle.direction_y * length_px),
+            )
+            if particle.kind == "team":
+                pygame.draw.circle(screen, color, point, 1 if impact.caliber != "dart" else 2)
+            else:
+                pygame.draw.line(screen, color, tail, point, width=1)
 
 
 def _draw_move_markers(
@@ -4489,6 +4747,9 @@ def _draw(
         else:
             static_field_cache.draw_terrain(screen)
 
+        if visual_state is not None:
+            _draw_rmuc_dart_launchers(screen, viewport, match, visual_state)
+
     structure_statuses = (
         {
             structure_id: (hp, max_hp, status)
@@ -4794,7 +5055,7 @@ def _draw(
                 )
 
     if is_rmuc and visual_state is not None:
-        _draw_visual_projectiles(screen, viewport, visual_state)
+        _draw_visual_projectiles(screen, viewport, visual_state, match)
         _draw_move_markers(screen, viewport, visual_state)
         if debug_geometry:
             _draw_selected_paths(
