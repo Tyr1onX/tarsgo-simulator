@@ -18,6 +18,7 @@ from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
     DamageableTarget,
     ProjectileParameters,
+    ProjectileRobotHitboxParameters,
 )
 
 
@@ -51,6 +52,9 @@ class ProjectileImpact:
     target_id: str | None
     target_kind: str
     applied_damage: int
+    surface: str = "unknown"
+    outcome: str = "damage"
+    armor_face: str | None = None
 
 
 class ProjectileSystem:
@@ -63,6 +67,13 @@ class ProjectileSystem:
         self.max_active_projectiles = 0
         self.total_launched = 0
         self.total_impacts = 0
+        self.robot_contacts = 0
+        self.armor_hits = 0
+        self.friendly_armor_contacts = 0
+        self.nonarmor_contacts = 0
+        self.misses = 0
+        self.applied_damage = 0
+        self._shooter_stats: dict[str, dict[str, int]] = {}
 
     def reset(self) -> None:
         self.projectiles.clear()
@@ -71,6 +82,13 @@ class ProjectileSystem:
         self.max_active_projectiles = 0
         self.total_launched = 0
         self.total_impacts = 0
+        self.robot_contacts = 0
+        self.armor_hits = 0
+        self.friendly_armor_contacts = 0
+        self.nonarmor_contacts = 0
+        self.misses = 0
+        self.applied_damage = 0
+        self._shooter_stats.clear()
 
     def update_aim(
         self,
@@ -225,6 +243,11 @@ class ProjectileSystem:
             shooter.attack_cooldown = parameters.firing_interval
             on_attack_committed(shooter)
             launched.append(projectile_id)
+            shooter_stats = self._shooter_stats.setdefault(
+                shooter.id,
+                {"shots_fired": 0, "armor_hits": 0, "applied_damage": 0},
+            )
+            shooter_stats["shots_fired"] += 1
 
         self.total_launched += len(launched)
         self.max_active_projectiles = max(
@@ -242,6 +265,7 @@ class ProjectileSystem:
         *,
         apply_damage: Callable[[DamageableTarget, int, Robot], int],
         projectile_ids: Iterable[int] | None = None,
+        robot_hitboxes: ProjectileRobotHitboxParameters | None = None,
     ) -> None:
         """Advance selected projectiles continuously and settle first contacts."""
         self.impacts.clear()
@@ -272,14 +296,34 @@ class ProjectileSystem:
                 robots,
                 structures,
                 game_map,
+                robot_hitboxes,
             )
             if collision is not None:
-                fraction, target, target_kind, normal = collision
+                fraction, target, target_kind, normal, surface, armor_face = collision
                 point = (
                     start[0] + (end[0] - start[0]) * fraction,
                     start[1] + (end[1] - start[1]) * fraction,
                 )
                 applied = 0
+                outcome = "obstacle" if target is None else "friendly_contact"
+                if target_kind == "robot":
+                    self.robot_contacts += 1
+                    if surface == "armor":
+                        if target is not None and target.team != projectile.shooter_team_id:
+                            self.armor_hits += 1
+                            shooter_stats = self._shooter_stats.setdefault(
+                                projectile.shooter_id,
+                                {"shots_fired": 0, "armor_hits": 0, "applied_damage": 0},
+                            )
+                            shooter_stats["armor_hits"] += 1
+                        else:
+                            self.friendly_armor_contacts += 1
+                    else:
+                        self.nonarmor_contacts += 1
+                    shooter_stats = self._shooter_stats.setdefault(
+                        projectile.shooter_id,
+                        {"shots_fired": 0, "armor_hits": 0, "applied_damage": 0},
+                    )
                 if target is not None and target.team != projectile.shooter_team_id:
                     shooter = robot_by_id.get(projectile.shooter_id)
                     impact_speed = abs(
@@ -287,8 +331,22 @@ class ProjectileSystem:
                         + projectile.velocity[1] * normal[1]
                     )
                     required_speed = 12_000.0 if projectile.caliber == "17mm" else 10_000.0
-                    if shooter is not None and impact_speed > required_speed:
+                    if target_kind == "robot" and surface != "armor":
+                        outcome = "non_armor"
+                    elif shooter is None or impact_speed <= required_speed:
+                        outcome = "ineffective"
+                    else:
+                        hp_before = target.hp
                         applied = apply_damage(target, projectile.damage, shooter)
+                        if applied > 0:
+                            outcome = "damage"
+                            self.applied_damage += applied
+                            if target_kind == "robot":
+                                shooter_stats["applied_damage"] += applied
+                        elif target.hp == hp_before:
+                            outcome = "immune"
+                        else:
+                            outcome = "absorbed"
                 self.impacts.append(
                     ProjectileImpact(
                         projectile_id=projectile.id,
@@ -300,6 +358,9 @@ class ProjectileSystem:
                         target_id=target.id if target is not None else None,
                         target_kind=target_kind,
                         applied_damage=applied,
+                        surface=surface,
+                        outcome=outcome,
+                        armor_face=armor_face,
                     )
                 )
                 self.total_impacts += 1
@@ -309,6 +370,8 @@ class ProjectileSystem:
             projectile.traveled += distance
             if projectile.traveled + 1e-9 < projectile.effective_range:
                 active.append(projectile)
+            else:
+                self.misses += 1
 
         self.projectiles = active
 
@@ -412,23 +475,24 @@ def _first_collision(
     robots: list[Robot],
     structures: list[Structure],
     game_map: GameMap,
-) -> tuple[float, DamageableTarget | None, str, tuple[float, float]] | None:
+    robot_hitboxes: ProjectileRobotHitboxParameters | None = None,
+) -> tuple[float, DamageableTarget | None, str, tuple[float, float], str, str | None] | None:
     candidates: list[
-        tuple[float, int, str, DamageableTarget | None, tuple[float, float]]
+        tuple[float, int, str, DamageableTarget | None, tuple[float, float], str, str | None]
     ] = []
     for robot in robots:
         if not robot.alive or robot.aerial or robot.id == shooter_id:
             continue
-        hit = _moving_circle_contact(
-            start,
-            end,
-            robot.position,
-            game_map.collision_radius + projectile_radius,
-        )
+        # Conservative broad phase only. Movement collision never decides
+        # whether a projectile contact is armor.
+        if _distance_to_segment(robot.position, start, end) > (
+            game_map.collision_radius + projectile_radius
+        ):
+            continue
+        hit = _robot_contact(start, end, projectile_radius, robot, robot_hitboxes)
         if hit is not None:
-            fraction, point = hit
-            normal = _unit_vector(point[0] - robot.position[0], point[1] - robot.position[1])
-            candidates.append((fraction, 0, robot.id, robot, normal))
+            fraction, normal, surface, armor_face = hit
+            candidates.append((fraction, 0, robot.id, robot, normal, surface, armor_face))
 
     for structure in structures:
         if not structure.alive or structure.footprint is None:
@@ -436,13 +500,13 @@ def _first_collision(
         hit = _structure_contact(start, end, projectile_radius, structure)
         if hit is not None:
             fraction, normal = hit
-            candidates.append((fraction, 1, structure.id, structure, normal))
+            candidates.append((fraction, 1, structure.id, structure, normal, "structure", None))
 
     for index, obstacle in enumerate(game_map.obstacles):
         hit = _rectangle_contact(start, end, projectile_radius, obstacle)
         if hit is not None:
             fraction, normal = hit
-            candidates.append((fraction, 2, f"obstacle-{index:04d}", None, normal))
+            candidates.append((fraction, 2, f"obstacle-{index:04d}", None, normal, "obstacle", None))
 
     # The perimeter is solid for a radius-sized projectile.
     bounds = Rectangle(
@@ -454,15 +518,114 @@ def _first_collision(
     boundary = _boundary_contact(start, end, bounds)
     if boundary is not None:
         fraction, normal = boundary
-        candidates.append((fraction, 3, "field-boundary", None, normal))
+        candidates.append((fraction, 3, "field-boundary", None, normal, "obstacle", None))
 
     if not candidates:
         return None
-    fraction, _priority, _identity, target, normal = min(candidates)
+    fraction, _priority, _identity, target, normal, surface, armor_face = min(candidates)
     target_kind = "robot" if isinstance(target, Robot) else (
         "structure" if isinstance(target, Structure) else "obstacle"
     )
-    return fraction, target, target_kind, normal
+    return fraction, target, target_kind, normal, surface, armor_face
+
+
+def _robot_contact(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    projectile_radius: float,
+    robot: Robot,
+    hitboxes: ProjectileRobotHitboxParameters | None,
+) -> tuple[float, tuple[float, float], str, str | None] | None:
+    """Sweep against explicit armor plates and a separate non-armor frame."""
+    if hitboxes is None:
+        return None
+    radius = hitboxes.chassis_radius
+    panel_offset = hitboxes.armor_panel_offset
+    panel_width = hitboxes.armor_panel_width
+    panel_depth = hitboxes.armor_panel_depth
+    wheel_offset = hitboxes.wheel_center_offset
+    wheel_radius = hitboxes.wheel_radius
+
+    cosine, sine = math.cos(robot.chassis_angle), math.sin(robot.chassis_angle)
+
+    def local(point: tuple[float, float]) -> tuple[float, float]:
+        dx, dy = point[0] - robot.position[0], point[1] - robot.position[1]
+        return dx * cosine + dy * sine, -dx * sine + dy * cosine
+
+    def world_normal(normal: tuple[float, float]) -> tuple[float, float]:
+        return (
+            normal[0] * cosine - normal[1] * sine,
+            normal[0] * sine + normal[1] * cosine,
+        )
+
+    local_start, local_end = local(start), local(end)
+    contacts: list[tuple[float, int, tuple[float, float], str, str | None]] = []
+    frame_hit = _moving_circle_contact(
+        local_start,
+        local_end,
+        (0.0, 0.0),
+        radius + projectile_radius,
+    )
+    if frame_hit is not None:
+        fraction, point = frame_hit
+        contacts.append(
+            (
+                fraction,
+                1,
+                world_normal(_unit_vector(point[0], point[1])),
+                "chassis",
+                None,
+            )
+        )
+
+    for wheel_x in (-wheel_offset, wheel_offset):
+        for wheel_y in (-wheel_offset, wheel_offset):
+            wheel_hit = _moving_circle_contact(
+                local_start,
+                local_end,
+                (wheel_x, wheel_y),
+                wheel_radius + projectile_radius,
+            )
+            if wheel_hit is not None:
+                fraction, point = wheel_hit
+                contacts.append(
+                    (
+                        fraction,
+                        1,
+                        world_normal(
+                            _unit_vector(point[0] - wheel_x, point[1] - wheel_y)
+                        ),
+                        "wheel",
+                        None,
+                    )
+                )
+
+    half_depth, half_width = panel_depth / 2, panel_width / 2
+    panels = (
+        ("front", panel_offset, 0.0, half_depth, half_width),
+        ("rear", -panel_offset, 0.0, half_depth, half_width),
+        ("right", 0.0, panel_offset, half_width, half_depth),
+        ("left", 0.0, -panel_offset, half_width, half_depth),
+    )
+    for face, center_x, center_y, half_x, half_y in panels:
+        rectangle = Rectangle(
+            center_x - half_x,
+            center_y - half_y,
+            half_x * 2,
+            half_y * 2,
+        )
+        hit = _rectangle_contact(local_start, local_end, projectile_radius, rectangle)
+        if hit is not None:
+            fraction, normal = hit
+            contacts.append((fraction, 0, world_normal(normal), "armor", face))
+
+    if not contacts:
+        return None
+    fraction, _priority, normal, surface, face = min(
+        contacts,
+        key=lambda item: (item[0], item[1], item[4] or ""),
+    )
+    return fraction, normal, surface, face
 
 
 def _structure_contact(

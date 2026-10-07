@@ -4360,13 +4360,30 @@ def _draw_visual_projectiles(
             impact.caliber,
             0.45,
         )
-        core_color = _blend_color((232, 224, 201), ARENA_FLOOR, 0.25)
-        pygame.draw.circle(
-            screen,
-            core_color,
-            center,
-            1 if impact.caliber == "17mm" else 2,
-        )
+        if impact.outcome in {"immune", "absorbed"}:
+            # Referee absorption has a cool, compact contact mark; it never
+            # receives the warm damage flash used for a valid hit.
+            radius = 3 + round(impact.progress * 4)
+            immune_color = _blend_color((155, 220, 235), ARENA_FLOOR, 0.48)
+            box = pygame.Rect(center[0] - radius, center[1] - radius, radius * 2, radius * 2)
+            pygame.draw.arc(screen, immune_color, box, 0.12, 1.18, width=1)
+            pygame.draw.arc(screen, immune_color, box, 3.28, 4.34, width=1)
+        else:
+            flash_color = (
+                (224, 231, 230)
+                if impact.surface in {"armor", "chassis"}
+                else (206, 210, 214)
+                if impact.surface in {"structure", "dart-target"}
+                else (155, 160, 156)
+                if impact.surface in {"wheel", "obstacle"}
+                else (212, 194, 160)
+            )
+            pygame.draw.circle(
+                screen,
+                _blend_color(flash_color, ARENA_FLOOR, 0.25 + 0.55 * impact.progress),
+                center,
+                1 if impact.caliber == "17mm" else 2,
+            )
         for particle in impact.particles:
             if particle_budget <= 0:
                 break
@@ -4377,11 +4394,17 @@ def _draw_visual_projectiles(
             travel = particle.speed * elapsed * (1.0 - 0.32 * progress)
             world_x = impact.position[0] + particle.direction_x * travel
             world_y = impact.position[1] + particle.direction_y * travel
-            if particle.kind == "dust":
+            if particle.kind in {"dust", "smoke"}:
                 world_y += 5.0 * progress / max(1e-6, viewport.scale)
-                base_color = (142, 150, 151)
+                base_color = (130, 139, 143) if particle.kind == "smoke" else (142, 150, 151)
                 color = _blend_color(base_color, ARENA_FLOOR, 0.52 + 0.28 * progress)
-                radius = max(1, round((1.1 + impact_strength * 1.0) * (1.0 - 0.45 * progress)))
+                radius = max(
+                    1,
+                    round(
+                        (1.1 + impact_strength * (1.25 if particle.kind == "smoke" else 1.0))
+                        * (1.0 - 0.45 * progress)
+                    ),
+                )
                 dust = viewport.world_to_screen((world_x, world_y))
                 pygame.draw.circle(screen, color, (round(dust[0]), round(dust[1])), radius)
                 continue
@@ -4389,6 +4412,10 @@ def _draw_visual_projectiles(
             base_color = (
                 team_color
                 if particle.kind == "team"
+                else (166, 219, 232)
+                if particle.kind == "absorbed"
+                else (155, 161, 160)
+                if particle.kind == "debris"
                 else (167, 181, 187)
                 if particle.kind == "metal"
                 else (246, 210, 144)
@@ -4396,6 +4423,8 @@ def _draw_visual_projectiles(
             fade = (
                 0.48 + 0.30 * progress
                 if particle.kind == "team"
+                else 0.28 + 0.60 * progress
+                if particle.kind == "absorbed"
                 else 0.25 + 0.52 * progress
                 if particle.kind == "metal"
                 else 0.18 + 0.48 * progress
@@ -4415,7 +4444,7 @@ def _draw_visual_projectiles(
                 round(point[0] - particle.direction_x * length_px),
                 round(point[1] - particle.direction_y * length_px),
             )
-            if particle.kind == "team":
+            if particle.kind in {"team", "absorbed"}:
                 pygame.draw.circle(screen, color, point, 1 if impact.caliber != "dart" else 2)
             else:
                 pygame.draw.line(screen, color, tail, point, width=1)

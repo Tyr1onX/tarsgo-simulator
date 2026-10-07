@@ -280,6 +280,26 @@ def test_impact_particles_are_deterministic_bounded_and_caliber_specific() -> No
     assert MAX_ACTIVE_IMPACTS * len(dart.particles) > MAX_VISIBLE_IMPACT_PARTICLES
 
 
+def test_immune_and_nonarmor_contacts_use_compact_surface_specific_feedback() -> None:
+    damage = ImpactEffect((0.0, 0.0), "42mm", 0.22, 0.22)
+    immune = ImpactEffect(
+        (0.0, 0.0), "42mm", 0.22, 0.22, surface="armor", outcome="immune"
+    )
+    chassis = ImpactEffect(
+        (0.0, 0.0), "17mm", 0.12, 0.12, surface="chassis", outcome="non_armor"
+    )
+    obstacle = ImpactEffect(
+        (0.0, 0.0), "17mm", 0.12, 0.12, surface="obstacle", outcome="obstacle"
+    )
+
+    assert len(immune.particles) < len(damage.particles)
+    assert "absorbed" in {particle.kind for particle in immune.particles}
+    assert len(chassis.particles) < len(
+        ImpactEffect((0.0, 0.0), "17mm", 0.12, 0.12).particles
+    )
+    assert "debris" in {particle.kind for particle in obstacle.particles}
+
+
 def test_dart_visuals_follow_rule_launch_and_separate_referee_hit() -> None:
     match = _match()
     for robot in match.robots:
@@ -778,6 +798,35 @@ def test_physical_projectile_impact_feedback_uses_simulated_contact() -> None:
     assert len(visuals.impacts) == 1
     assert visuals.robots[target.id].impact_remaining > 0
     assert target.hp < target.max_hp
+
+
+def test_immune_physical_hit_has_absorbed_feedback_without_damage_flash() -> None:
+    match = _match()
+    attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
+    target = next(item for item in match.robots if item.id == "opponent-hero")
+    attacker.position = (10000.0, 7500.0)
+    target.position = (10500.0, 7500.0)
+    match.ruleset._robot_lifecycle_by_robot[target.id].invincible_remaining = 5.0
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        if robot not in (attacker, target) and robot.type != "drone":
+            robot.position = (4000.0 + len(robot.id) * 20.0, 1000.0)
+    attacker.attack_cooldown = 0.0
+    match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
+
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    for _ in range(3):
+        visuals.begin_frame(match)
+        match.update(1.0 / 60.0)
+        visuals.after_match_update(match, 1.0 / 60.0)
+
+    assert target.hp == target.max_hp
+    assert visuals.impacts[-1].outcome == "immune"
+    assert visuals.impacts[-1].surface == "armor"
+    assert {particle.kind for particle in visuals.impacts[-1].particles} >= {"absorbed"}
+    assert visuals.robots[target.id].impact_remaining == 0.0
 
 
 def test_shielded_structure_impact_is_visual_only() -> None:
