@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -328,6 +329,7 @@ def test_invincible_base_does_not_absorb_target_selection() -> None:
             robot.path.clear()
 
     attacker.position = (24500.0, 7500.0)
+    attacker.turret_angle = math.pi
     attacker.attack_cooldown = 0.0
     match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
     target_robot.position = (23200.0, 7500.0)

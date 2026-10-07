@@ -43,6 +43,13 @@ _STUCK_REPATH_COOLDOWN_SECONDS = 1.5
 _STUCK_PROGRESS_EPSILON = 0.05
 
 
+def _stable_spin_direction(robot_id: str, team_id: str) -> int:
+    """Assign a repeatable spin direction without Python's randomized hash."""
+    key = f"{team_id}:{robot_id}"
+    value = sum((index + 1) * ord(char) for index, char in enumerate(key))
+    return 1 if value % 2 == 0 else -1
+
+
 @dataclass(slots=True)
 class _AIPathPlan:
     robot_id: str
@@ -146,6 +153,10 @@ class Match:
                     damage=parameters.damage,
                     type=definition.type,
                     aerial=aerial,
+                    chassis_spin_direction=_stable_spin_direction(
+                        definition.id,
+                        team.team_id,
+                    ),
                 )
             )
         self._validate_spawn_separation()
@@ -817,6 +828,19 @@ class Match:
                     projectile.id for projectile in self.projectiles
                 )
                 parameters_for = getattr(self.ruleset, "projectile_parameters_for")
+                aim_parameters_for = getattr(
+                    self.ruleset,
+                    "aim_motion_parameters_for",
+                )
+                self.projectile_system.update_aim(
+                    dt,
+                    self.robots,
+                    self.structures,
+                    self.map,
+                    can_target=self.ruleset.can_target,
+                    parameters_for=parameters_for,
+                    aim_parameters_for=aim_parameters_for,
+                )
                 self.projectile_system.launch_ready_shots(
                     self.robots,
                     self.structures,
@@ -1028,6 +1052,14 @@ class Match:
             if movement_allowed[robot.id]:
                 robot.commit_movement(proposals[robot.id])
             moved = math.dist(start, robot.position) > 1e-8
+            robot.velocity = (
+                (
+                    (robot.position[0] - start[0]) / dt,
+                    (robot.position[1] - start[1]) / dt,
+                )
+                if dt > 0
+                else (0.0, 0.0)
+            )
             if moved and robot.id in avoidance_moves:
                 self._movement_counters["local_avoidance_moves"] += 1
             blocked = intended_to_move[robot.id] and not moved

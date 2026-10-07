@@ -213,6 +213,15 @@ def test_physical_projectile_visual_follows_simulation_state() -> None:
     assert projectile.caliber == "42mm"
     assert projectile.position == match.projectiles[0].position
     assert visuals.robots[attacker.id].muzzle_remaining > 0
+    robot_visual = visuals.robots[attacker.id]
+    assert robot_visual.body_angle == pytest.approx(attacker.chassis_angle)
+    assert robot_visual.turret_angle == pytest.approx(attacker.turret_angle)
+    assert robot_visual.interpolated_body_angle(1.0) == pytest.approx(
+        attacker.chassis_angle
+    )
+    assert robot_visual.interpolated_turret_angle(1.0) == pytest.approx(
+        attacker.turret_angle
+    )
 
 
 def test_cosmetic_projectile_expires_without_touching_match_state() -> None:

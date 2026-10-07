@@ -14,7 +14,14 @@ from tarsgo_simulator.core.map import (
 )
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import Structure
-from tarsgo_simulator.rules.protocol import DamageableTarget, ProjectileParameters
+from tarsgo_simulator.rules.protocol import (
+    AimMotionParameters,
+    DamageableTarget,
+    ProjectileParameters,
+)
+
+
+_CHASSIS_SPIN_ROBOT_TYPES = {"hero", "infantry", "sentry"}
 
 
 @dataclass(slots=True)
@@ -65,6 +72,83 @@ class ProjectileSystem:
         self.total_launched = 0
         self.total_impacts = 0
 
+    def update_aim(
+        self,
+        dt: float,
+        robots: list[Robot],
+        structures: list[Structure],
+        game_map: GameMap,
+        *,
+        can_target: Callable[[DamageableTarget], bool],
+        parameters_for: Callable[[Robot], ProjectileParameters | None],
+        aim_parameters_for: Callable[[Robot], AimMotionParameters],
+    ) -> None:
+        """Track visible targets from current state and last-tick velocity only."""
+        step = max(0.0, dt)
+        robot_targets = [robot for robot in robots if robot.alive and not robot.aerial]
+        structure_targets = [structure for structure in structures if structure.alive]
+        for shooter in robots:
+            parameters = parameters_for(shooter)
+            if not shooter.alive or parameters is None:
+                shooter.aim_target_id = None
+                shooter.aim_point = None
+                shooter.chassis_angular_velocity = 0.0
+                continue
+
+            target = _nearest_visible_target(
+                shooter,
+                robot_targets,
+                structure_targets,
+                game_map,
+                can_target,
+                min(shooter.attack_range, parameters.effective_range),
+            )
+            if target is None:
+                shooter.aim_target_id = None
+                shooter.aim_point = None
+                shooter.chassis_angular_velocity = 0.0
+                _face_motion(shooter, step, aim_parameters_for(shooter).turret_turn_rate)
+                continue
+
+            target_velocity = (
+                target.velocity if isinstance(target, Robot) else (0.0, 0.0)
+            )
+            aim_point = predictive_intercept_point(
+                shooter.position,
+                target.position,
+                target_velocity,
+                parameters.speed,
+                min(shooter.attack_range, parameters.effective_range),
+            )
+            shooter.aim_target_id = target.id
+            shooter.aim_point = aim_point
+
+            motion = aim_parameters_for(shooter)
+            if (
+                not shooter.aerial
+                and shooter.type in _CHASSIS_SPIN_ROBOT_TYPES
+            ):
+                shooter.chassis_angular_velocity = (
+                    motion.chassis_spin_rate * shooter.chassis_spin_direction
+                )
+                shooter.chassis_angle = _wrap_angle(
+                    shooter.chassis_angle
+                    + shooter.chassis_angular_velocity * step
+                )
+            else:
+                shooter.chassis_angular_velocity = 0.0
+                _face_motion(shooter, step, motion.turret_turn_rate)
+
+            desired_turret_angle = math.atan2(
+                aim_point[1] - shooter.position[1],
+                aim_point[0] - shooter.position[0],
+            )
+            shooter.turret_angle = _approach_angle(
+                shooter.turret_angle,
+                desired_turret_angle,
+                motion.turret_turn_rate * step,
+            )
+
     def launch_ready_shots(
         self,
         robots: list[Robot],
@@ -105,17 +189,10 @@ class ProjectileSystem:
                 candidates.append((distance, target.id, target))
             if not candidates:
                 continue
-
-            _distance, _target_id, target = min(
-                candidates,
-                key=lambda item: (item[0], item[1]),
+            direction = (
+                math.cos(shooter.turret_angle),
+                math.sin(shooter.turret_angle),
             )
-            dx = target.position[0] - shooter.position[0]
-            dy = target.position[1] - shooter.position[1]
-            length = math.hypot(dx, dy)
-            if length <= 1e-9:
-                continue
-            direction = (dx / length, dy / length)
             muzzle_offset = (
                 game_map.collision_radius
                 + parameters.radius
@@ -234,6 +311,97 @@ class ProjectileSystem:
                 active.append(projectile)
 
         self.projectiles = active
+
+
+def predictive_intercept_point(
+    shooter_position: tuple[float, float],
+    target_position: tuple[float, float],
+    target_velocity: tuple[float, float],
+    projectile_speed: float,
+    maximum_range: float,
+) -> tuple[float, float]:
+    """Solve a constant-velocity intercept without consulting a target path."""
+    rx = target_position[0] - shooter_position[0]
+    ry = target_position[1] - shooter_position[1]
+    vx, vy = target_velocity
+    speed = max(0.0, projectile_speed)
+    a = vx * vx + vy * vy - speed * speed
+    b = 2.0 * (rx * vx + ry * vy)
+    c = rx * rx + ry * ry
+    if speed <= 1e-9 or c <= 1e-18:
+        return target_position
+
+    times: list[float] = []
+    if abs(a) <= 1e-12:
+        if abs(b) > 1e-12:
+            times.append(-c / b)
+    else:
+        discriminant = b * b - 4.0 * a * c
+        if discriminant >= 0:
+            root = math.sqrt(discriminant)
+            times.extend(((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)))
+
+    valid_times = [
+        value
+        for value in times
+        if value > 1e-9 and value * speed <= max(0.0, maximum_range) + 1e-6
+    ]
+    if not valid_times:
+        return target_position
+    flight_time = min(valid_times)
+    return (
+        target_position[0] + vx * flight_time,
+        target_position[1] + vy * flight_time,
+    )
+
+
+def _nearest_visible_target(
+    shooter: Robot,
+    robots: list[Robot],
+    structures: list[Structure],
+    game_map: GameMap,
+    can_target: Callable[[DamageableTarget], bool],
+    maximum_range: float,
+) -> Robot | Structure | None:
+    candidates: list[tuple[float, str, Robot | Structure]] = []
+    for target in [*robots, *structures]:
+        if target.id == shooter.id or target.team == shooter.team or not can_target(target):
+            continue
+        distance = math.dist(shooter.position, target.position)
+        if distance > maximum_range:
+            continue
+        structure_id = target.id if isinstance(target, Structure) else None
+        if not game_map.has_line_of_sight(
+            shooter.position,
+            target.position,
+            structure_id,
+        ):
+            continue
+        candidates.append((distance, target.id, target))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _face_motion(robot: Robot, dt: float, turn_rate: float) -> None:
+    if math.hypot(*robot.velocity) <= 1e-9 or dt <= 0:
+        return
+    desired = math.atan2(robot.velocity[1], robot.velocity[0])
+    delta = _wrap_angle(desired - robot.chassis_angle)
+    maximum_delta = max(0.0, turn_rate * dt)
+    delta = max(-maximum_delta, min(maximum_delta, delta))
+    robot.chassis_angular_velocity = delta / dt
+    robot.chassis_angle = _wrap_angle(robot.chassis_angle + delta)
+
+
+def _approach_angle(current: float, target: float, maximum_delta: float) -> float:
+    delta = _wrap_angle(target - current)
+    delta = max(-max(0.0, maximum_delta), min(max(0.0, maximum_delta), delta))
+    return _wrap_angle(current + delta)
+
+
+def _wrap_angle(angle: float) -> float:
+    return (angle + math.pi) % math.tau - math.pi
 
 
 def _first_collision(

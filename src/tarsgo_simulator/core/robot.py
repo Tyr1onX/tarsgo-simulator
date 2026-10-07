@@ -25,6 +25,13 @@ class Robot:
     path: list[tuple[float, float]] = field(default_factory=list)
     attack_cooldown: float = 0.0
     alive: bool = True
+    velocity: tuple[float, float] = (0.0, 0.0)
+    chassis_angle: float = 0.0
+    turret_angle: float = 0.0
+    chassis_angular_velocity: float = 0.0
+    chassis_spin_direction: int = 1
+    aim_target_id: str | None = None
+    aim_point: tuple[float, float] | None = None
 
     def set_path(self, path: list[tuple[float, float]]) -> None:
         self.path = list(path)
