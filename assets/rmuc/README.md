@@ -9,8 +9,8 @@ used to calculate gameplay state.
 | Path | Use | Source |
 | --- | --- | --- |
 | `field/floor-surface.png` | Arena floor material | Original project asset generated for PR #67 on 2026-10-06. Prompt: orthographic top-down graphite-gray matte composite panels with large restrained seams, a subtle brushed technical surface, sparse cool-white and muted-blue details; no arena objects, markings, symbols, text, logos, neon, or hexagons. |
-| `structures/base.png` | Base sprite | Original project asset generated for this simulator on 2026-10-06. Prompt: isolated, transparent, orthographic armored arena base with charcoal metal, silver edges, amber lights, and restrained red/blue panels; no marks, logos, text, or external references. |
-| `structures/outpost.png` | Outpost sprite | Original project asset generated for this simulator on 2026-10-06. Prompt: isolated, transparent, orthographic circular arena outpost with a segmented metal ring, central hub, amber lights, and restrained red/blue panels; no marks, logos, text, or external references. |
+| `structures/base.png` | Base sprite | Original project asset regenerated for this simulator on 2026-10-07. Top-down six-sided open field module with black anodized frame, silver-gray CNC braces, a quiet mounting bay, and no glowing core. |
+| `structures/outpost.png` | Outpost sprite | Original project asset regenerated for this simulator on 2026-10-07. Top-down circular open frame with black anodized beams, silver CNC plates, visible compact motors, and a non-glowing sensor hub. |
 | `robots/*.png` | Five RMUC robot types and layered weapon art | Original project assets generated with the built-in image-generation tool on 2026-10-07, guided by the user's real RMUC robot photos. Role-specific prompts and file mapping are documented in `robots/README.md`. |
 
 These are self-created assets produced with the built-in image-generation tool
@@ -18,6 +18,11 @@ from the prompts above. The robot sprites use the user's private real-robot
 photos as structural references; those source photos are not copied into this
 repository. No third-party or network-sourced materials were used. The assets
 are distributed under the repository license in `LICENSE`.
+
+Base and Outpost now use neutral black/silver hardware in the same material
+language as the robots. Small red or blue referee-system LEDs are overlaid at
+runtime; the underlying structure and robot sprite pixels remain neutral and
+are never used to derive team state.
 
 ## Rendering boundary
 
