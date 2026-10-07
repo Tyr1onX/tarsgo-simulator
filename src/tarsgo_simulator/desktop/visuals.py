@@ -48,7 +48,9 @@ PROJECTILE_VISUAL_PROFILES = {
     "dart": ProjectileVisualProfile("dart", 0.72, 3, 3, 0.10, 0.46),
 }
 
-DESTROY_VISUAL_DURATION = 0.46
+DESTROY_VISUAL_DURATION = 0.28
+DEATH_VIBRATION_DURATION = 0.12
+DEATH_SPARK_DURATION = 0.20
 RESPAWN_VISUAL_DURATION = 0.68
 SHIELD_IMPACT_DURATION = 0.20
 MAX_SCREEN_SHAKE_AMPLITUDE = 2.25
@@ -176,6 +178,8 @@ class VisualRobotState:
 
     def advance_turret(self, dt: float) -> None:
         self.previous_turret_angle = self.turret_angle
+        if not self.alive:
+            return
         if self.target_hold_remaining > 0 and self.target_position is not None:
             dx = self.target_position[0] - self.position[0]
             dy = self.target_position[1] - self.position[1]
@@ -206,10 +210,34 @@ class VisualRobotState:
         if self.alive and not alive:
             self.destroy_remaining = DESTROY_VISUAL_DURATION
             self.respawn_remaining = 0.0
+            self.muzzle_remaining = 0.0
+            self.target_hold_remaining = 0.0
+            self.previous_position = self.position
+            self.previous_body_angle = self.body_angle
+            self.previous_turret_angle = self.turret_angle
         elif not self.alive and alive:
             self.respawn_remaining = RESPAWN_VISUAL_DURATION
             self.destroy_remaining = 0.0
         self.alive = alive
+
+    def snap_to(
+        self,
+        position: tuple[float, float],
+        *,
+        chassis_angle: float | None = None,
+        turret_angle: float | None = None,
+    ) -> None:
+        """Reset presentation interpolation after the rules respawn teleport."""
+        self.position = position
+        self.previous_position = position
+        if chassis_angle is not None:
+            self.body_angle = _wrap_angle(chassis_angle)
+        self.previous_body_angle = self.body_angle
+        if turret_angle is not None:
+            self.turret_angle = _wrap_angle(turret_angle)
+        else:
+            self.turret_angle = self.body_angle
+        self.previous_turret_angle = self.turret_angle
 
     @property
     def destroy_progress(self) -> float:
@@ -471,32 +499,32 @@ class ImpactEffect:
     def __post_init__(self) -> None:
         caliber = self.caliber if self.caliber in {"17mm", "42mm", "dart"} else "17mm"
         count, min_speed, max_speed, min_life, max_life, spread = {
-            "17mm": (8, 220.0, 620.0, 0.07, 0.15, 2.2),
-            "42mm": (18, 360.0, 980.0, 0.10, 0.28, 2.55),
-            "dart": (26, 760.0, 2050.0, 0.15, 0.48, 1.95),
+            "17mm": (4, 360.0, 900.0, 0.045, 0.105, 1.45),
+            "42mm": (10, 720.0, 1800.0, 0.075, 0.22, 2.05),
+            "dart": (14, 1050.0, 2350.0, 0.10, 0.30, 1.75),
         }[caliber]
         if self.outcome in {"immune", "absorbed"}:
-            count = max(4, count // 3)
-            min_speed *= 0.45
-            max_speed *= 0.62
-            min_life *= 0.7
+            count = max(2, count // 3)
+            min_speed *= 0.38
+            max_speed *= 0.52
+            min_life *= 0.70
             max_life *= 0.72
-            spread *= 0.78
+            spread *= 0.68
         elif self.surface in {"wheel", "obstacle"} or self.outcome == "obstacle":
-            count = max(4, count // 2)
-            min_speed *= 0.58
-            max_speed *= 0.70
-            min_life *= 0.65
-            max_life *= 0.72
-        elif self.outcome == "non_armor" or self.surface == "chassis":
-            count = max(4, count // 2)
-            min_speed *= 0.68
-            max_speed *= 0.72
-            min_life *= 0.75
+            count = max(2, count // 2)
+            min_speed *= 0.50
+            max_speed *= 0.64
+            min_life *= 0.68
+            max_life *= 0.74
+        elif self.outcome == "non_armor" or self.surface in {"chassis", "frame"}:
+            count = max(2, count // 2)
+            min_speed *= 0.56
+            max_speed *= 0.66
+            min_life *= 0.72
             max_life *= 0.78
         elif self.surface in {"structure", "dart-target"}:
-            count = min(count + 4, 30)
-        length_scale = {"17mm": 0.48, "42mm": 0.72, "dart": 1.35}[caliber]
+            count = min(count + 2, 16)
+        length_scale = {"17mm": 0.66, "42mm": 0.92, "dart": 1.0}[caliber]
         direction_angle = math.atan2(self.direction[1], self.direction[0])
         seed = (
             sum((index + 1) * ord(char) for index, char in enumerate(self.attacker_team_id))
@@ -512,16 +540,21 @@ class ImpactEffect:
             speed_unit = (index * 0.4142135623730951 + seed * 0.021) % 1.0
             life_unit = (index * 0.7320508075688772 + seed * 0.017) % 1.0
             angle = direction_angle + (unit - 0.5) * spread
-            if self.outcome in {"immune", "absorbed"} and index % 3 == 0:
+            if self.outcome in {"immune", "absorbed"}:
                 kind = "absorbed"
-            elif index % 7 == 5 and self.surface in {"structure", "dart-target"}:
-                kind = "smoke"
-            elif self.surface in {"wheel", "obstacle"} and index % 2 == 0:
+            elif self.surface in {"wheel", "obstacle"} and index % 3 == 0:
                 kind = "debris"
-            elif index % 7 in (3, 4):
+            elif self.surface in {"wheel", "obstacle"}:
                 kind = "dust"
-            elif index % 7 == 6:
-                kind = "team"
+            elif index % 5 == 4 and (
+                caliber != "17mm"
+                or self.surface in {"structure", "dart-target"}
+            ):
+                kind = "smoke"
+            elif self.outcome == "non_armor" or self.surface in {"chassis", "frame"}:
+                kind = "metal" if index % 2 == 0 else "dust"
+            elif index % 4 == 3 and caliber != "17mm":
+                kind = "dust"
             elif index % 3 == 0:
                 kind = "metal"
             else:
@@ -533,7 +566,7 @@ class ImpactEffect:
                     direction_y=math.sin(angle),
                     speed=min_speed + (max_speed - min_speed) * speed_unit,
                     lifetime=min_life + (max_life - min_life) * life_unit,
-                    length=(45.0 + 340.0 * unit) * length_scale,
+                    length=(120.0 + 240.0 * unit) * length_scale,
                     kind=kind,
                 )
             )
@@ -744,29 +777,39 @@ class CombatVisualState:
                 ),
             )
             previous_hp = state.hp
+            was_alive = state.alive
             physical_aim = getattr(match, "uses_physical_projectiles", False)
-            state.advance_motion(
-                robot.position,
-                dt,
-                chassis_angle=robot.chassis_angle if physical_aim else None,
-            )
-            if physical_aim:
-                state.previous_turret_angle = state.turret_angle
-                state.turret_angle = _wrap_angle(robot.turret_angle)
-                if robot.aim_point is not None:
-                    state.target_position = robot.aim_point
-                    state.target_hold_remaining = max(
-                        state.target_hold_remaining,
-                        0.30,
-                    )
-            if robot.aerial:
-                state.hp = robot.hp
-                state.alive = robot.alive
-                state.destroy_remaining = 0.0
-                state.respawn_remaining = 0.0
+            state.register_damage(previous_hp, robot.hp)
+            respawned = not was_alive and robot.alive
+            died = was_alive and not robot.alive
+            if was_alive and robot.alive or died:
+                # Capture the final live pose at death, but never follow
+                # dead chassis or turret state on later simulation ticks.
+                state.advance_motion(
+                    robot.position,
+                    dt,
+                    chassis_angle=robot.chassis_angle if physical_aim else None,
+                )
+                if physical_aim:
+                    state.previous_turret_angle = state.turret_angle
+                    state.turret_angle = _wrap_angle(robot.turret_angle)
+            if respawned:
+                state.register_lifecycle(True)
+                state.snap_to(
+                    robot.position,
+                    chassis_angle=(robot.chassis_angle if physical_aim else None),
+                    turret_angle=(robot.turret_angle if physical_aim else None),
+                )
+                state.target_position = None
+                state.target_hold_remaining = 0.0
             else:
-                state.register_damage(previous_hp, robot.hp)
                 state.register_lifecycle(robot.alive)
+            if robot.alive and physical_aim and robot.aim_point is not None:
+                state.target_position = robot.aim_point
+                state.target_hold_remaining = max(
+                    state.target_hold_remaining,
+                    0.30,
+                )
 
         for structure in match.structures:
             state = self.structures.setdefault(

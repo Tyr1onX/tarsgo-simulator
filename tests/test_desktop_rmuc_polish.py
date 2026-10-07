@@ -412,6 +412,43 @@ def test_structure_and_shield_rendering_helpers_do_not_crash() -> None:
     assert base_size > outpost_size
 
 
+@pytest.mark.parametrize(("alive", "expected_lit"), ((True, True), (False, False)))
+def test_robot_team_leds_follow_life_state_and_dead_muzzle_flash_is_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+    alive: bool,
+    expected_lit: bool,
+) -> None:
+    app = _app()
+    screen, _font, _small_font = _surface_and_fonts()
+    rendered: dict[str, bool] = {}
+
+    monkeypatch.setattr(app, "_rmuc_robot_sprites_available", lambda _robot_type: True)
+
+    def capture_sprites(*_args: object, lit: bool, **_kwargs: object) -> bool:
+        rendered["lit"] = lit
+        return True
+
+    monkeypatch.setattr(app, "_draw_rmuc_robot_sprites", capture_sprites)
+    app._draw_rmuc_robot_shape(
+        screen,
+        center=(64, 64),
+        robot_type="hero",
+        color=app.TEAM_RED_COLOR,
+        body_angle=0.0,
+        turret_angle=0.0,
+        alive=alive,
+        selected=False,
+        animation_time=0.0,
+        muzzle_remaining=0.08,
+        muzzle_caliber="42mm",
+        impact_remaining=0.0,
+    )
+
+    assert rendered["lit"] is expected_lit
+    if not alive:
+        assert screen.get_at((99, 64))[:3] != app.IMPACT_COLOR
+
+
 def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")

@@ -29,6 +29,9 @@ from tarsgo_simulator.desktop.polish import (
 from tarsgo_simulator.desktop.viewport import Viewport
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
+    DEATH_SPARK_DURATION,
+    DEATH_VIBRATION_DURATION,
+    DESTROY_VISUAL_DURATION,
     MAX_VISIBLE_IMPACT_PARTICLES,
     low_hp_warning_strength,
     projectile_visual_profile,
@@ -3346,45 +3349,41 @@ def _draw_robot_lifecycle_effects(
     center: tuple[int, int],
     radius: int,
     color: tuple[int, int, int],
+    body_angle: float,
     alive: bool,
     destroy_remaining: float,
-    destroy_progress: float,
     respawn_remaining: float,
     respawn_progress: float,
 ) -> None:
     if destroy_remaining > 0:
-        burst = radius + 6 + round(18 * destroy_progress)
-        for index in range(8):
-            angle = index * math.tau / 8 + 0.22
-            inner = radius * (0.45 + 0.10 * (index % 2))
-            start = (
-                center[0] + round(math.cos(angle) * inner),
-                center[1] + round(math.sin(angle) * inner),
-            )
-            end = (
-                center[0] + round(math.cos(angle) * burst),
-                center[1] + round(math.sin(angle) * burst),
-            )
-            spark_color = IMPACT_COLOR if index % 2 == 0 else WARNING_COLOR
-            pygame.draw.line(screen, spark_color, start, end, width=2)
-        core_radius = max(2, round(8 * (1.0 - destroy_progress)))
-        pygame.draw.circle(screen, IMPACT_COLOR, center, core_radius)
-    elif not alive:
-        wreck = max(5, radius // 2)
-        pygame.draw.line(
-            screen,
-            ROBOT_OUTLINE,
-            (center[0] - wreck, center[1] - wreck),
-            (center[0] + wreck, center[1] + wreck),
-            width=2,
-        )
-        pygame.draw.line(
-            screen,
-            ROBOT_OUTLINE,
-            (center[0] + wreck, center[1] - wreck),
-            (center[0] - wreck, center[1] + wreck),
-            width=2,
-        )
+        elapsed = DESTROY_VISUAL_DURATION - destroy_remaining
+        if elapsed < DEATH_SPARK_DURATION:
+            fade = max(0.0, 1.0 - elapsed / DEATH_SPARK_DURATION)
+            # A few local electrical arcs at exposed frame joints. Keep them
+            # attached to the intact chassis instead of drawing an explosion.
+            for index, (local_x, local_y, angle, length) in enumerate(
+                (
+                    (-0.28, -0.17, -0.82, 8),
+                    (0.24, -0.12, 0.35, 7),
+                    (-0.10, 0.27, 2.25, 6),
+                )
+            ):
+                x = local_x * radius
+                y = local_y * radius
+                rotated_x = x * math.cos(body_angle) - y * math.sin(body_angle)
+                rotated_y = x * math.sin(body_angle) + y * math.cos(body_angle)
+                start = (
+                    center[0] + round(rotated_x),
+                    center[1] + round(rotated_y),
+                )
+                spark_angle = angle + body_angle
+                span = max(1, round(length * fade))
+                end = (
+                    start[0] + round(math.cos(spark_angle) * span),
+                    start[1] + round(math.sin(spark_angle) * span),
+                )
+                spark_color = (201, 211, 204) if index != 1 else (137, 175, 184)
+                pygame.draw.line(screen, spark_color, start, end, width=1)
 
     if respawn_remaining > 0 and alive:
         layer_radius = radius + 16
@@ -3641,7 +3640,6 @@ def _draw_rmuc_robot_shape(
     impact_remaining: float,
     impact_caliber: str = "17mm",
     destroy_remaining: float = 0.0,
-    destroy_progress: float = 1.0,
     respawn_remaining: float = 0.0,
     respawn_progress: float = 1.0,
     raw_status: str = "",
@@ -3649,6 +3647,14 @@ def _draw_rmuc_robot_shape(
     hp_ratio: float = 1.0,
 ) -> int:
     profile = robot_visual_profile(robot_type)
+    if not alive and destroy_remaining > 0:
+        elapsed = DESTROY_VISUAL_DURATION - destroy_remaining
+        if elapsed < DEATH_VIBRATION_DURATION:
+            envelope = 1.0 - elapsed / DEATH_VIBRATION_DURATION
+            center = (
+                center[0] + round(math.sin(elapsed * 113.0) * 1.4 * envelope),
+                center[1] + round(math.cos(elapsed * 97.0) * 1.1 * envelope),
+            )
     draw_color = color if alive else MUTED_COLOR
     if alive and impact_remaining > 0:
         flash_mix = 0.72 if impact_caliber == "42mm" else 0.44
@@ -3657,7 +3663,7 @@ def _draw_rmuc_robot_shape(
         draw_color = _blend_color(draw_color, SHIELD_COLOR, 0.28)
     robot_sprites_available = _rmuc_robot_sprites_available(robot_type)
     if robot_type == "drone":
-        hover = round(2 * math.sin(animation_time * 3.2))
+        hover = round(2 * math.sin(animation_time * 3.2)) if alive else 0
         center = (center[0], center[1] + hover)
 
     light_color = _blend_color(draw_color, TEXT_COLOR, 0.58)
@@ -3924,7 +3930,7 @@ def _draw_rmuc_robot_shape(
             lit=alive,
         )
 
-    if muzzle_remaining > 0 and profile.turret_radius > 0:
+    if alive and muzzle_remaining > 0 and profile.turret_radius > 0:
         projectile = projectile_visual_profile(muzzle_caliber)
         flash_radius = (
             8 if projectile.caliber == "42mm" else 5
@@ -4002,18 +4008,17 @@ def _draw_rmuc_robot_shape(
             warning_radius,
             width=1,
         )
-    if robot_type != "drone":
-        _draw_robot_lifecycle_effects(
-            screen,
-            center=center,
-            radius=radius,
-            color=color,
-            alive=alive,
-            destroy_remaining=destroy_remaining,
-            destroy_progress=destroy_progress,
-            respawn_remaining=respawn_remaining,
-            respawn_progress=respawn_progress,
-        )
+    _draw_robot_lifecycle_effects(
+        screen,
+        center=center,
+        radius=radius,
+        color=color,
+        body_angle=body_angle,
+        alive=alive,
+        destroy_remaining=destroy_remaining,
+        respawn_remaining=respawn_remaining,
+        respawn_progress=respawn_progress,
+    )
     if selected:
         _draw_selection_feedback(
             screen,
@@ -4351,11 +4356,6 @@ def _draw_visual_projectiles(
                 radius,
                 width=1,
             )
-        team_color = (
-            _rmuc_team_color(match, impact.attacker_team_id)
-            if match is not None and impact.attacker_team_id
-            else TEAM_RED_COLOR
-        )
         impact_strength = {"17mm": 0.45, "42mm": 0.72, "dart": 0.95}.get(
             impact.caliber,
             0.45,
@@ -4369,21 +4369,46 @@ def _draw_visual_projectiles(
             pygame.draw.arc(screen, immune_color, box, 0.12, 1.18, width=1)
             pygame.draw.arc(screen, immune_color, box, 3.28, 4.34, width=1)
         else:
-            flash_color = (
-                (224, 231, 230)
-                if impact.surface in {"armor", "chassis"}
-                else (206, 210, 214)
-                if impact.surface in {"structure", "dart-target"}
-                else (155, 160, 156)
-                if impact.surface in {"wheel", "obstacle"}
-                else (212, 194, 160)
+            if impact.surface == "armor":
+                flash_color = (230, 236, 234)
+            elif impact.surface in {"chassis", "frame"}:
+                flash_color = (189, 198, 198)
+            elif impact.surface in {"structure", "dart-target"}:
+                flash_color = (216, 222, 218)
+            elif impact.surface == "wheel":
+                flash_color = (167, 174, 171)
+            else:
+                # Obstacles and arena edges produce a duller, dustier mark.
+                flash_color = (153, 162, 159)
+            flash_strength = 0.10 + 0.62 * impact.progress
+            flash_radius = {"17mm": 2, "42mm": 3, "dart": 4}.get(
+                impact.caliber,
+                1,
             )
+            flash_radius = max(1, round(flash_radius * (1.0 - 0.45 * impact.progress)))
             pygame.draw.circle(
                 screen,
-                _blend_color(flash_color, ARENA_FLOOR, 0.25 + 0.55 * impact.progress),
+                _blend_color(flash_color, ARENA_FLOOR, flash_strength),
                 center,
-                1 if impact.caliber == "17mm" else 2,
+                flash_radius,
             )
+            if impact.surface == "armor" and impact.caliber != "17mm":
+                # Short, interrupted steel glint; it collapses into the
+                # contact point instead of expanding as a glowing shockwave.
+                base_radius = 4 if impact.caliber == "42mm" else 5
+                radius = max(
+                    2,
+                    round(base_radius * (1.0 - 0.45 * impact.progress)),
+                )
+                box = pygame.Rect(
+                    center[0] - radius,
+                    center[1] - radius,
+                    radius * 2,
+                    radius * 2,
+                )
+                glint = _blend_color((228, 234, 228), ARENA_FLOOR, 0.08 + 0.58 * impact.progress)
+                pygame.draw.arc(screen, glint, box, 0.18, 0.88, width=1)
+                pygame.draw.arc(screen, glint, box, 3.35, 4.05, width=1)
         for particle in impact.particles:
             if particle_budget <= 0:
                 break
@@ -4410,20 +4435,16 @@ def _draw_visual_projectiles(
                 continue
 
             base_color = (
-                team_color
-                if particle.kind == "team"
-                else (166, 219, 232)
+                (166, 195, 202)
                 if particle.kind == "absorbed"
                 else (155, 161, 160)
                 if particle.kind == "debris"
-                else (167, 181, 187)
+                else (188, 201, 203)
                 if particle.kind == "metal"
-                else (246, 210, 144)
+                else (222, 222, 204)
             )
             fade = (
-                0.48 + 0.30 * progress
-                if particle.kind == "team"
-                else 0.28 + 0.60 * progress
+                0.32 + 0.58 * progress
                 if particle.kind == "absorbed"
                 else 0.25 + 0.52 * progress
                 if particle.kind == "metal"
@@ -4975,7 +4996,6 @@ def _draw(
                 impact_remaining=visual_robot.impact_remaining,
                 impact_caliber=visual_robot.impact_caliber,
                 destroy_remaining=visual_robot.destroy_remaining,
-                destroy_progress=visual_robot.destroy_progress,
                 respawn_remaining=visual_robot.respawn_remaining,
                 respawn_progress=visual_robot.respawn_progress,
                 raw_status=robot_statuses.get(robot.id, ""),
