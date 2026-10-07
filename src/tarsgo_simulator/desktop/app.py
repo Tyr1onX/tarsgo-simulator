@@ -4932,8 +4932,12 @@ def _draw(
                 center=center,
                 robot_type=robot.type,
                 color=color,
-                body_angle=visual_robot.body_angle,
-                turret_angle=visual_robot.turret_angle,
+                body_angle=visual_robot.interpolated_body_angle(
+                    interpolation_alpha
+                ),
+                turret_angle=visual_robot.interpolated_turret_angle(
+                    interpolation_alpha
+                ),
                 alive=robot.alive,
                 selected=robot.id in selected_robot_ids,
                 animation_time=animation_time,

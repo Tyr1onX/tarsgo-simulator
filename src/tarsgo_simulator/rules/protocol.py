@@ -38,6 +38,14 @@ class ProjectileParameters:
 
 
 @dataclass(frozen=True)
+class AimMotionParameters:
+    """Rules Lab-only turret and chassis motion rates, in radians/second."""
+
+    turret_turn_rate: float
+    chassis_spin_rate: float
+
+
+@dataclass(frozen=True)
 class MatchResult:
     winner: str | None
 

@@ -441,3 +441,11 @@ lab_projectile_physics:
       nominal_speed_mps: 12
       diameter_mm: 42.5
       firing_interval_seconds: 0.50
+
+# The V1.4.0 manual does not prescribe robot turret slew or chassis-spin rates.
+# These are explicit Rules Lab control approximations; the official 0.8π rad/s
+# Outpost armor rate applies only to the Outpost and is not reused here.
+lab_aim_motion:
+  simulator_approximation:
+    turret_turn_rate_rad_s: 12.0
+    chassis_spin_rate_rad_s: 3.0

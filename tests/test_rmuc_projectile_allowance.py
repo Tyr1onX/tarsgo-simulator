@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,7 @@ def test_committed_structure_attack_consumes_allowance() -> None:
             robot.hp = 0
             robot.path.clear()
     hero.position = (23000.0, 7500.0)
+    hero.turret_angle = math.pi
     hero.attack_cooldown = 0.0
     match.ruleset._projectile_allowance_by_robot[hero.id].allowed = 1
 

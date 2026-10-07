@@ -1,3 +1,5 @@
+import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ from tarsgo_simulator.core.projectiles import (
     Projectile,
     ProjectileImpact,
     ProjectileSystem,
+    predictive_intercept_point,
 )
 from rmuc_test_support import move_ground_robots_to_unbuffed_region
 
@@ -191,6 +194,98 @@ def test_42mm_uses_official_speed_ceiling_but_slower_lab_cadence() -> None:
     assert match.projectile_diagnostics["launched"] == 1
     _ticks(match, 12)
     assert match.projectile_diagnostics["launched"] == 2
+
+
+def test_predictive_aim_leads_from_observed_velocity_and_fires_on_turret_heading() -> None:
+    match = _match()
+    shooter, target = _prepare_duel(match, distance=2000.0)
+    target.speed = 1200.0
+    target.path = [(target.position[0], target.position[1] + 1200.0)]
+    match.config = replace(
+        match.config,
+        scenario=replace(
+            match.config.scenario,
+            player_controlled=frozenset(
+                {*match.config.scenario.player_controlled, shooter.id, target.id}
+            ),
+        ),
+    )
+
+    match.update(TICK)
+
+    assert target.velocity[1] == pytest.approx(1200.0)
+    assert shooter.aim_target_id == target.id
+    assert shooter.aim_point is not None
+    assert shooter.aim_point[1] > target.position[1] + 60.0
+    assert len(match.projectiles) == 1
+    projectile = match.projectiles[0]
+    fired_angle = math.atan2(projectile.velocity[1], projectile.velocity[0])
+    assert fired_angle == pytest.approx(shooter.turret_angle)
+    assert fired_angle > 0.02
+
+
+def test_intercept_uses_caliber_speed_and_falls_back_if_target_is_too_fast() -> None:
+    shooter = (1000.0, 1000.0)
+    target = (2000.0, 1000.0)
+    lateral_velocity = (0.0, 1500.0)
+    aim_17 = predictive_intercept_point(
+        shooter,
+        target,
+        lateral_velocity,
+        projectile_speed=25_000.0,
+        maximum_range=2400.0,
+    )
+    aim_42 = predictive_intercept_point(
+        shooter,
+        target,
+        lateral_velocity,
+        projectile_speed=12_000.0,
+        maximum_range=2400.0,
+    )
+    assert aim_42[1] - target[1] > aim_17[1] - target[1]
+
+    moving_away = predictive_intercept_point(
+        shooter,
+        target,
+        (30_000.0, 0.0),
+        projectile_speed=25_000.0,
+        maximum_range=2400.0,
+    )
+    assert moving_away == target
+
+
+def test_chassis_spin_is_repeatable_while_turret_keeps_tracking_target() -> None:
+    first = _match()
+    second = _match()
+    first_shooter, first_target = _prepare_duel(first)
+    second_shooter, _second_target = _prepare_duel(second)
+    first_shooter.attack_cooldown = 9999.0
+    second_shooter.attack_cooldown = 9999.0
+    initial_angle = first_shooter.chassis_angle
+
+    for _ in range(60):
+        first.update(TICK)
+        second.update(TICK)
+
+    assert first_shooter.chassis_spin_direction == second_shooter.chassis_spin_direction
+    assert first_shooter.chassis_angle == pytest.approx(second_shooter.chassis_angle)
+    assert abs(first_shooter.chassis_angle - initial_angle) > 2.5
+    assert first_shooter.aim_target_id == first_target.id
+    assert abs(first_shooter.turret_angle) < 0.05
+    assert abs(first_shooter.chassis_angular_velocity) == pytest.approx(3.0)
+
+
+def test_engineer_does_not_chassis_spin() -> None:
+    match = _match()
+    engineer = next(robot for robot in match.robots if robot.type == "engineer")
+    target = _robot(match, "opponent-infantry-1")
+    engineer.position = (12000.0, 7500.0)
+    target.position = (14000.0, 7500.0)
+
+    match.update(TICK)
+
+    assert engineer.chassis_angle == 0.0
+    assert engineer.chassis_angular_velocity == 0.0
 
 
 def test_live_projectile_pressure_has_bounded_deterministic_state() -> None:

@@ -10,6 +10,7 @@ from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import Structure
 from tarsgo_simulator.rules.protocol import (
+    AimMotionParameters,
     DamageableTarget,
     MatchResult,
     ProjectileParameters,
@@ -1379,6 +1380,41 @@ class RMUC2026RegionalRules:
                 diameter_mm,
                 firing_interval,
             )
+
+        aim_document = _mapping(document.data, "lab_aim_motion", document)
+        aim_approximation = _mapping(
+            aim_document,
+            "simulator_approximation",
+            document,
+        )
+        if set(aim_document) != {"simulator_approximation"} or set(
+            aim_approximation
+        ) != {"turret_turn_rate_rad_s", "chassis_spin_rate_rad_s"}:
+            raise ConfigError(
+                f"{document.path}: `lab_aim_motion` 必须标明炮塔与底盘速率的 simulator approximation"
+            )
+        turret_turn_rate = _number(
+            aim_approximation,
+            "turret_turn_rate_rad_s",
+            document,
+            "lab_aim_motion.simulator_approximation.turret_turn_rate_rad_s",
+        )
+        chassis_spin_rate = _number(
+            aim_approximation,
+            "chassis_spin_rate_rad_s",
+            document,
+            "lab_aim_motion.simulator_approximation.chassis_spin_rate_rad_s",
+        )
+        if not (0.0 < turret_turn_rate <= 30.0) or not (
+            0.0 < chassis_spin_rate <= 20.0
+        ):
+            raise ConfigError(
+                f"{document.path}: Rules Lab 炮塔和底盘角速度近似值超出有效范围"
+            )
+        self._lab_aim_motion = AimMotionParameters(
+            turret_turn_rate=turret_turn_rate,
+            chassis_spin_rate=chassis_spin_rate,
+        )
 
         robot_lifecycle = _mapping(document.data, "robot_lifecycle", document)
         if set(robot_lifecycle) != {"disengaged_after", "resupply", "respawn"}:
@@ -2818,6 +2854,11 @@ class RMUC2026RegionalRules:
             radius=diameter_mm / 2.0,
             effective_range=self._lab_parameters[robot.type].attack_range,
         )
+
+    def aim_motion_parameters_for(self, robot: Robot) -> AimMotionParameters:
+        """Return the explicitly approximate controller rates used in Rules Lab."""
+        del robot  # Rates are common; chassis spin eligibility is a fixed strategy policy.
+        return self._lab_aim_motion
 
     def structure_parameters(self, structure_type: str) -> StructureParameters:
         try:

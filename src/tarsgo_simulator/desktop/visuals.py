@@ -90,6 +90,12 @@ def _wrap_angle(angle: float) -> float:
     return (angle + math.pi) % (math.tau) - math.pi
 
 
+def _interpolate_angle(previous: float, current: float, alpha: float) -> float:
+    weight = min(1.0, max(0.0, alpha))
+    difference = _wrap_angle(current - previous)
+    return _wrap_angle(previous + difference * weight)
+
+
 def approach_angle(current: float, target: float, dt: float, response: float) -> float:
     """Smooth one visual angle toward another without touching gameplay state."""
     if dt <= 0:
@@ -107,7 +113,9 @@ class VisualRobotState:
     previous_position: tuple[float, float] | None = None
     alive: bool = True
     body_angle: float = 0.0
+    previous_body_angle: float = 0.0
     turret_angle: float = 0.0
+    previous_turret_angle: float = 0.0
     target_position: tuple[float, float] | None = None
     target_hold_remaining: float = 0.0
     muzzle_remaining: float = 0.0
@@ -124,11 +132,16 @@ class VisualRobotState:
         self,
         new_position: tuple[float, float],
         dt: float,
+        *,
+        chassis_angle: float | None = None,
     ) -> None:
         self.previous_position = self.position
+        self.previous_body_angle = self.body_angle
         dx = new_position[0] - self.position[0]
         dy = new_position[1] - self.position[1]
-        if math.hypot(dx, dy) > 1e-6:
+        if chassis_angle is not None:
+            self.body_angle = _wrap_angle(chassis_angle)
+        elif math.hypot(dx, dy) > 1e-6:
             desired = math.atan2(dy, dx)
             self.body_angle = approach_angle(
                 self.body_angle,
@@ -147,7 +160,22 @@ class VisualRobotState:
             previous[1] + (self.position[1] - previous[1]) * weight,
         )
 
+    def interpolated_body_angle(self, alpha: float) -> float:
+        return _interpolate_angle(
+            self.previous_body_angle,
+            self.body_angle,
+            alpha,
+        )
+
+    def interpolated_turret_angle(self, alpha: float) -> float:
+        return _interpolate_angle(
+            self.previous_turret_angle,
+            self.turret_angle,
+            alpha,
+        )
+
     def advance_turret(self, dt: float) -> None:
+        self.previous_turret_angle = self.turret_angle
         if self.target_hold_remaining > 0 and self.target_position is not None:
             dx = self.target_position[0] - self.position[0]
             dy = self.target_position[1] - self.position[1]
@@ -537,6 +565,10 @@ class CombatVisualState:
                 hp=robot.hp,
                 cooldown=robot.attack_cooldown,
                 alive=robot.alive,
+                body_angle=robot.chassis_angle,
+                previous_body_angle=robot.chassis_angle,
+                turret_angle=robot.turret_angle,
+                previous_turret_angle=robot.turret_angle,
             )
             for robot in match.robots
         }
@@ -679,7 +711,21 @@ class CombatVisualState:
                 ),
             )
             previous_hp = state.hp
-            state.advance_motion(robot.position, dt)
+            physical_aim = getattr(match, "uses_physical_projectiles", False)
+            state.advance_motion(
+                robot.position,
+                dt,
+                chassis_angle=robot.chassis_angle if physical_aim else None,
+            )
+            if physical_aim:
+                state.previous_turret_angle = state.turret_angle
+                state.turret_angle = _wrap_angle(robot.turret_angle)
+                if robot.aim_point is not None:
+                    state.target_position = robot.aim_point
+                    state.target_hold_remaining = max(
+                        state.target_hold_remaining,
+                        0.30,
+                    )
             if robot.aerial:
                 state.hp = robot.hp
                 state.alive = robot.alive
@@ -712,6 +758,11 @@ class CombatVisualState:
             damaging = event is not None
             if target_position is None:
                 target_id, target_position = self._infer_visual_target(match, robot.id)
+            if (
+                getattr(match, "uses_physical_projectiles", False)
+                and robot.aim_point is not None
+            ):
+                target_id, target_position = robot.aim_target_id, robot.aim_point
             if target_position is None:
                 continue
 
@@ -749,7 +800,8 @@ class CombatVisualState:
         self._advance_dart_visuals(match, dart_statuses, dt)
 
         for state in self.robots.values():
-            state.advance_turret(dt)
+            if not getattr(match, "uses_physical_projectiles", False):
+                state.advance_turret(dt)
             state.advance_timers(dt)
         for state in self.structures.values():
             state.advance_timers(dt)
