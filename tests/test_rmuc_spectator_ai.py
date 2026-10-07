@@ -211,6 +211,14 @@ def _candidate_by_key(match: Match, robot, key: str):
     )
 
 
+def _finish_path_requests(match: Match) -> None:
+    for _ in range(1000):
+        if not match._path_work_queue:
+            break
+        match._advance_path_requests()
+    assert not match._path_work_queue
+
+
 def test_rmuc_ai_replenishes_and_critical_hp_retreats() -> None:
     match = _match()
     hero = _robot(match, "tarsgo-hero")
@@ -221,11 +229,13 @@ def test_rmuc_ai_replenishes_and_critical_hp_retreats() -> None:
     infantry.position = (910.0, 750.0)
     match._rmuc_ai_step(infantry, match.ruleset.display_state)
     assert match.ai_intent(infantry.id) == "前往补给区"
+    _finish_path_requests(match)
     assert supply.contains(infantry.path[-1])
 
     hero.hp = max(1, hero.max_hp // 5)
     match._rmuc_ai_step(hero, match.ruleset.display_state)
     assert match.ai_intent(hero.id) == "回撤补给"
+    _finish_path_requests(match)
     assert supply.contains(hero.path[-1])
 
 
@@ -343,6 +353,7 @@ def test_protect_engineer_becomes_real_tactical_choice() -> None:
 
     match._rmuc_ai_rng[sentry.id] = _FixedRandom(0.5)
     match._rmuc_ai_step(sentry, match.ruleset.display_state)
+    _finish_path_requests(match)
 
     assert match.ai_intent(sentry.id) == "保护工程"
     assert match._ai_target_keys[sentry.id] == f"support:{engineer.id}"

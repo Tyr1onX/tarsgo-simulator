@@ -1,5 +1,7 @@
 """Single source of truth for the current match state."""
 
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import random
@@ -8,7 +10,7 @@ from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import MatchConfig, load_match_config
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.map import GameMap
-from tarsgo_simulator.core.pathfinding import find_path
+from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
 from tarsgo_simulator.core.robot import MovementProposal, Robot
 from tarsgo_simulator.core.structure import Structure
 from tarsgo_simulator.rules.protocol import DamageableTarget, MatchResult, RuleSet
@@ -30,6 +32,32 @@ _RMUC_ROBOT_NAMES = {
     "sentry": "哨兵",
     "drone": "空中机器人",
 }
+_PATHFINDING_WORK_BUDGET_PER_TICK = 512
+_PATHFINDING_WORK_QUANTUM = 16
+_PATH_CACHE_MAX_ENTRIES = 512
+
+
+@dataclass(slots=True)
+class _AIPathPlan:
+    robot_id: str
+    target_key: str | None
+    goal: tuple[float, float]
+    pending_searches: int = 0
+    structure_id: str | None = None
+    candidates: list[
+        tuple[bool, float, int, list[tuple[float, float]]]
+    ] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _AIPathSearchJob:
+    plan: _AIPathPlan
+    index: int
+    start: tuple[float, float]
+    goal: tuple[float, float]
+    clear_shot: bool
+    search: IncrementalAStar
+    reported_expansions: int = 0
 
 
 class Match:
@@ -146,6 +174,27 @@ class Match:
             robot.id: None
             for robot in self.robots
             if self._ai_controls(robot)
+        }
+        self._ai_path_targets: dict[
+            str,
+            tuple[str | None, tuple[float, float]],
+        ] = {}
+        self._pending_ai_paths: dict[str, _AIPathPlan] = {}
+        self._path_work_queue: deque[_AIPathSearchJob] = deque()
+        self._path_cache: OrderedDict[
+            tuple[tuple[int, int], tuple[int, int]],
+            tuple[tuple[float, float], ...],
+        ] = OrderedDict()
+        self._pathfinding_counters = {
+            "requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "searches_started": 0,
+            "searches_completed": 0,
+            "searches_failed": 0,
+            "node_pops": 0,
+            "node_expansions": 0,
+            "max_queue_length": 0,
         }
         self._ai_sticky_until = {
             robot.id: 0.0
@@ -270,7 +319,7 @@ class Match:
         if target.hp == 0:
             target.alive = False
             if isinstance(target, Robot):
-                target.path.clear()
+                self._clear_ai_path(target)
 
         actual_damage = previous_hp - target.hp
         event_time = self.elapsed_time
@@ -361,6 +410,273 @@ class Match:
         robot.set_path(path)
         return True
 
+    def _advance_path_requests(self) -> None:
+        """Spend a bounded, fair slice of A* work once per simulation tick."""
+        budget = _PATHFINDING_WORK_BUDGET_PER_TICK
+        while budget > 0 and self._path_work_queue:
+            job = self._path_work_queue.popleft()
+            if self._pending_ai_paths.get(job.plan.robot_id) is not job.plan:
+                continue
+            used = job.search.advance(min(_PATHFINDING_WORK_QUANTUM, budget))
+            budget -= used
+            self._pathfinding_counters["node_pops"] += used
+            self._pathfinding_counters["node_expansions"] += (
+                job.search.expanded_nodes - job.reported_expansions
+            )
+            job.reported_expansions = job.search.expanded_nodes
+            if job.search.done:
+                self._finish_ai_path_search(job)
+            else:
+                self._path_work_queue.append(job)
+            if used == 0 and not job.search.done:
+                break
+
+    def _finish_ai_path_search(self, job: _AIPathSearchJob) -> None:
+        plan = job.plan
+        if self._pending_ai_paths.get(plan.robot_id) is not plan:
+            return
+        self._pathfinding_counters["searches_completed"] += 1
+        path = job.search.result
+        if path is None:
+            self._pathfinding_counters["searches_failed"] += 1
+        else:
+            self._store_cached_path(job.start, job.goal, path)
+            self._add_ai_path_candidate(
+                plan,
+                job.index,
+                job.clear_shot,
+                path,
+            )
+        plan.pending_searches -= 1
+        if plan.pending_searches == 0:
+            self._commit_ai_path_plan(plan)
+
+    def _add_ai_path_candidate(
+        self,
+        plan: _AIPathPlan,
+        index: int,
+        clear_shot: bool,
+        path: list[tuple[float, float]],
+    ) -> None:
+        path_length = math.fsum(
+            math.dist(first, second)
+            for first, second in zip(path, path[1:])
+        )
+        plan.candidates.append((not clear_shot, path_length, index, path))
+
+    def _commit_ai_path_plan(self, plan: _AIPathPlan) -> None:
+        robot = next(
+            (item for item in self.robots if item.id == plan.robot_id),
+            None,
+        )
+        if (
+            self._pending_ai_paths.get(plan.robot_id) is not plan
+            or robot is None
+            or not robot.alive
+            or self._ai_target_keys.get(plan.robot_id) != plan.target_key
+        ):
+            return
+        self._pending_ai_paths.pop(plan.robot_id, None)
+        valid_candidates = []
+        for no_clear_shot, _old_length, index, path in plan.candidates:
+            if not path:
+                continue
+            rebased = [robot.position, *path[1:]]
+            if all(
+                self.map.can_traverse(first, second)
+                for first, second in zip(rebased, rebased[1:])
+            ):
+                path_length = math.fsum(
+                    math.dist(first, second)
+                    for first, second in zip(rebased, rebased[1:])
+                )
+                valid_candidates.append(
+                    (no_clear_shot, path_length, index, rebased)
+                )
+        if valid_candidates:
+            path = min(valid_candidates, key=lambda item: item[:3])[3]
+            robot.set_path(path)
+            self._ai_path_targets[plan.robot_id] = (plan.target_key, plan.goal)
+        elif plan.candidates:
+            self._request_ai_path(
+                robot,
+                plan.goal,
+                target_key=plan.target_key,
+                structure_id=plan.structure_id,
+            )
+        else:
+            self._clear_ai_path(robot)
+
+    def _cancel_ai_path_request(self, robot_id: str) -> None:
+        plan = self._pending_ai_paths.pop(robot_id, None)
+        if plan is not None:
+            self._path_work_queue = deque(
+                job for job in self._path_work_queue if job.plan is not plan
+            )
+        self._ai_path_targets.pop(robot_id, None)
+
+    def _clear_ai_path(self, robot: Robot) -> None:
+        self._cancel_ai_path_request(robot.id)
+        robot.path.clear()
+
+    def _path_cache_key(
+        self,
+        start: tuple[float, float],
+        goal: tuple[float, float],
+    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        grid = self.map.path_grid_size
+        return (
+            (math.floor(start[0] / grid), math.floor(start[1] / grid)),
+            (math.floor(goal[0] / grid), math.floor(goal[1] / grid)),
+        )
+
+    def _cached_path(
+        self,
+        start: tuple[float, float],
+        goal: tuple[float, float],
+    ) -> list[tuple[float, float]] | None:
+        if not self.map.is_passable(start) or not self.map.is_passable(goal):
+            self._pathfinding_counters["cache_misses"] += 1
+            return None
+        key = self._path_cache_key(start, goal)
+        cached = self._path_cache.get(key)
+        if cached is None:
+            self._pathfinding_counters["cache_misses"] += 1
+            return None
+        rebased = [start, *cached[1:-1], goal]
+        if len(rebased) == 2 and start == goal:
+            rebased = [start]
+        if not all(
+            self.map.can_traverse(first, second)
+            for first, second in zip(rebased, rebased[1:])
+        ):
+            self._pathfinding_counters["cache_misses"] += 1
+            return None
+        self._path_cache.move_to_end(key)
+        self._pathfinding_counters["cache_hits"] += 1
+        return rebased
+
+    def _store_cached_path(
+        self,
+        start: tuple[float, float],
+        goal: tuple[float, float],
+        path: list[tuple[float, float]],
+    ) -> None:
+        key = self._path_cache_key(start, goal)
+        self._path_cache[key] = tuple(path)
+        self._path_cache.move_to_end(key)
+        while len(self._path_cache) > _PATH_CACHE_MAX_ENTRIES:
+            self._path_cache.popitem(last=False)
+
+    def _request_ai_path(
+        self,
+        robot: Robot,
+        goal: tuple[float, float],
+        *,
+        target_key: str | None,
+        structure_id: str | None = None,
+    ) -> None:
+        self._pathfinding_counters["requests"] += 1
+        tolerance = self.map.path_grid_size / 2
+        tracked = self._ai_path_targets.get(robot.id)
+        if (
+            tracked is not None
+            and tracked[0] == target_key
+            and math.dist(tracked[1], goal) <= tolerance
+            and self._existing_ai_path_is_usable(robot)
+        ):
+            return
+        pending = self._pending_ai_paths.get(robot.id)
+        if (
+            pending is not None
+            and pending.target_key == target_key
+            and math.dist(pending.goal, goal) <= tolerance
+        ):
+            return
+
+        self._cancel_ai_path_request(robot.id)
+        plan = _AIPathPlan(
+            robot_id=robot.id,
+            target_key=target_key,
+            goal=goal,
+            structure_id=structure_id,
+        )
+        self._pending_ai_paths[robot.id] = plan
+        approaches: list[tuple[int, tuple[float, float], bool]]
+        if structure_id is not None:
+            approaches = [
+                (
+                    index,
+                    point,
+                    self.map.has_line_of_sight(
+                        point,
+                        next(
+                            item.position
+                            for item in self.structures
+                            if item.id == structure_id
+                        ),
+                        structure_id,
+                    ),
+                )
+                for index, point in enumerate(
+                    self.map.structure_approach_points(structure_id)
+                )
+            ]
+        else:
+            approaches = [(0, goal, False)]
+
+        for index, endpoint, clear_shot in approaches:
+            start = robot.position
+            cached = self._cached_path(start, endpoint)
+            if cached is not None:
+                self._add_ai_path_candidate(
+                    plan,
+                    index,
+                    clear_shot,
+                    cached,
+                )
+                continue
+            self._pathfinding_counters["searches_started"] += 1
+            search = IncrementalAStar(self.map, start, endpoint)
+            job = _AIPathSearchJob(
+                plan=plan,
+                index=index,
+                start=start,
+                goal=endpoint,
+                clear_shot=clear_shot,
+                search=search,
+            )
+            if search.done:
+                if search.result is None:
+                    self._pathfinding_counters["searches_failed"] += 1
+                else:
+                    self._store_cached_path(start, endpoint, search.result)
+                    self._add_ai_path_candidate(
+                        plan,
+                        index,
+                        clear_shot,
+                        search.result,
+                    )
+                self._pathfinding_counters["searches_completed"] += 1
+                continue
+            plan.pending_searches += 1
+            self._path_work_queue.append(job)
+        self._pathfinding_counters["max_queue_length"] = max(
+            self._pathfinding_counters["max_queue_length"],
+            len(self._path_work_queue),
+        )
+        if plan.pending_searches == 0:
+            self._commit_ai_path_plan(plan)
+
+    def _existing_ai_path_is_usable(self, robot: Robot) -> bool:
+        if not robot.path:
+            return False
+        points = [robot.position, *robot.path]
+        return all(
+            self.map.can_traverse(first, second)
+            for first, second in zip(points, points[1:])
+        )
+
     def update(self, dt: float) -> None:
         if self.finished:
             return
@@ -374,6 +690,7 @@ class Match:
         self._active_update_start_time = self.elapsed_time
         try:
             self._update_ai(dt)
+            self._advance_path_requests()
             for robot in self.robots:
                 robot.update_cooldown(dt)
             self.ruleset.prepare_movement(self, dt)
@@ -528,6 +845,8 @@ class Match:
     ) -> None:
         previous = self._ai_target_keys.get(robot.id)
         self._ai_target_keys[robot.id] = target_key
+        if previous != target_key:
+            self._cancel_ai_path_request(robot.id)
         if not sticky or target_key is None:
             self._ai_sticky_until[robot.id] = self.elapsed_time
         elif target_key != previous:
@@ -553,35 +872,17 @@ class Match:
                 None,
             )
             if structure is not None and self.map.structure_bounds(structure_id):
-                approaches = []
-                for index, point in enumerate(
-                    self.map.structure_approach_points(structure_id)
-                ):
-                    path = find_path(self.map, robot.position, point)
-                    if path is None:
-                        continue
-                    clear_shot = self.map.has_line_of_sight(
-                        point,
-                        structure.position,
-                        structure.id,
-                    )
-                    path_length = math.fsum(
-                        math.dist(first, second)
-                        for first, second in zip(path, path[1:])
-                    )
-                    approaches.append(
-                        (not clear_shot, path_length, index, path)
+                self._request_ai_path(
+                    robot,
+                    goal,
+                    target_key=target_key,
+                    structure_id=structure_id,
                 )
-                if approaches:
-                    path = min(approaches, key=lambda item: item[:3])[3]
-                    robot.set_path(path)
-                else:
-                    robot.path.clear()
                 return
         if math.dist(robot.position, goal) <= self.map.collision_radius:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             return
-        self._set_robot_destination(robot, goal)
+        self._request_ai_path(robot, goal, target_key=target_key)
 
     def _has_line_of_sight_to_ai_target(
         self,
@@ -1295,7 +1596,7 @@ class Match:
         team_coins = dict(display_state.coins).get(robot.team, 0)
 
         if not active:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             if allowance <= 0:
                 self._ai_intents[robot.id] = "空中弹量耗尽"
                 self._remember_ai_decision(robot, None, sticky=False)
@@ -1394,7 +1695,7 @@ class Match:
 
         choice = self._choose_utility_candidate(robot, candidates)
         if choice is None:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             self._ai_intents[robot.id] = "空中巡弋待命"
             self._remember_ai_decision(robot, None, sticky=False)
             return
@@ -1408,7 +1709,7 @@ class Match:
                 target_key,
             )
         ):
-            robot.path.clear()
+            self._clear_ai_path(robot)
             self._ai_intents[robot.id] = intent
             self._remember_ai_decision(robot, target_key)
             return
@@ -1424,7 +1725,7 @@ class Match:
             self._rmuc_drone_ai_step(robot, display_state)
             return
         if not robot.alive:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             self._ai_intents[robot.id] = "等待复活"
             self._remember_ai_decision(robot, None, sticky=False)
             return
@@ -1432,7 +1733,7 @@ class Match:
         side = self._team_side(robot.team)
         supply_zone = self._zone(f"{side}-supply-buff")
         if supply_zone is None:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             self._ai_intents[robot.id] = "待机"
             self._remember_ai_decision(robot, None, sticky=False)
             return
@@ -1470,7 +1771,7 @@ class Match:
             if supply_zone.contains(robot.position):
                 exchange = getattr(self.ruleset, "exchange_projectiles", None)
                 purchased = bool(callable(exchange) and exchange(self, robot))
-                robot.path.clear()
+                self._clear_ai_path(robot)
                 self._ai_intents[robot.id] = (
                     "补充弹量" if purchased else "等待补给"
                 )
@@ -1492,7 +1793,7 @@ class Match:
         candidates = self._rmuc_tactical_candidates(robot, display_state)
         choice = self._choose_utility_candidate(robot, candidates)
         if choice is None:
-            robot.path.clear()
+            self._clear_ai_path(robot)
             self._ai_intents[robot.id] = "待机"
             self._remember_ai_decision(robot, None, sticky=False)
             return
@@ -1509,7 +1810,7 @@ class Match:
                     target_key,
                 )
             ):
-                robot.path.clear()
+                self._clear_ai_path(robot)
                 self._ai_intents[robot.id] = intent
                 self._remember_ai_decision(robot, target_key)
                 return
@@ -1626,7 +1927,7 @@ class Match:
                 if target.alive and target.team != robot.team
             ]
             if not robot.alive or not targets:
-                robot.path.clear()
+                self._clear_ai_path(robot)
                 self._ai_replan_elapsed[robot.id] = 0.0
                 continue
 
@@ -1641,7 +1942,7 @@ class Match:
             if distance <= robot.attack_range and self.map.has_line_of_sight(
                 robot.position, target.position
             ):
-                robot.path.clear()
+                self._clear_ai_path(robot)
                 self._ai_replan_elapsed[robot.id] = 0.0
                 continue
 

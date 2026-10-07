@@ -20,6 +20,7 @@ import pygame
 
 from tarsgo_simulator.core import match as match_module
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.pathfinding import IncrementalAStar
 from tarsgo_simulator.desktop import app
 from tarsgo_simulator.desktop.assets import (
     ASSET_MANAGER,
@@ -41,6 +42,10 @@ class Measurements:
         self.cache_misses = 0
         self.asset_render_depth = 0
         self.current_update_ai_ns = 0
+        self.matches: list[Match] = []
+        self.search_started_ns: dict[IncrementalAStar, int] = {}
+        self.search_cpu_ns: dict[IncrementalAStar, int] = {}
+        self.completed_searches: set[IncrementalAStar] = set()
 
     def add(self, key: str, elapsed_ns: int) -> None:
         self.samples.setdefault(key, []).append(elapsed_ns / 1_000_000)
@@ -113,6 +118,57 @@ def _install_instrumentation(measurements: Measurements, frame_count: int, fps: 
 
     Match._update_ai = timed_ai
     restorers.append(lambda: setattr(Match, "_update_ai", original_ai))
+
+    original_match_init = Match.__init__
+
+    def tracked_match_init(self, *args, **kwargs):
+        original_match_init(self, *args, **kwargs)
+        measurements.matches.append(self)
+
+    Match.__init__ = tracked_match_init
+    restorers.append(lambda: setattr(Match, "__init__", original_match_init))
+
+    original_path_service = Match._advance_path_requests
+
+    def timed_path_service(self):
+        started = time.perf_counter_ns()
+        try:
+            return original_path_service(self)
+        finally:
+            measurements.add("path_budget_service", time.perf_counter_ns() - started)
+
+    Match._advance_path_requests = timed_path_service
+    restorers.append(
+        lambda: setattr(Match, "_advance_path_requests", original_path_service)
+    )
+
+    original_advance = IncrementalAStar.advance
+
+    def timed_advance(self, work_budget):
+        measurements.search_started_ns.setdefault(self, time.perf_counter_ns())
+        started = time.perf_counter_ns()
+        try:
+            return original_advance(self, work_budget)
+        finally:
+            elapsed = time.perf_counter_ns() - started
+            measurements.search_cpu_ns[self] = (
+                measurements.search_cpu_ns.get(self, 0) + elapsed
+            )
+            measurements.add("path_search_slice", elapsed)
+            if self.done and self not in measurements.completed_searches:
+                measurements.completed_searches.add(self)
+                measurements.add(
+                    "astar_search_cpu",
+                    measurements.search_cpu_ns[self],
+                )
+                measurements.add(
+                    "astar_search_wall",
+                    time.perf_counter_ns()
+                    - measurements.search_started_ns[self],
+                )
+
+    IncrementalAStar.advance = timed_advance
+    restorers.append(lambda: setattr(IncrementalAStar, "advance", original_advance))
 
     for name, key in (
         ("_draw", "render_draw"),
@@ -248,6 +304,23 @@ def main() -> None:
         if key.startswith("asset_transform_")
     )
     cache_total = measurements.cache_hits + measurements.cache_misses
+    pathfinding_counters = {
+        key: sum(match._pathfinding_counters[key] for match in measurements.matches)
+        for key in (
+            "requests",
+            "cache_hits",
+            "cache_misses",
+            "searches_started",
+            "searches_completed",
+            "searches_failed",
+            "node_pops",
+            "node_expansions",
+        )
+    }
+    pathfinding_counters["max_queue_length"] = max(
+        (match._pathfinding_counters["max_queue_length"] for match in measurements.matches),
+        default=0,
+    )
     result = {
         "scenario": str(args.scenario),
         "window_size": list(app.WINDOW_SIZE),
@@ -264,6 +337,7 @@ def main() -> None:
             "hit_rate": measurements.cache_hits / cache_total if cache_total else 0.0,
             "transform_calls": transform_calls,
         },
+        "pathfinding_scheduler": pathfinding_counters,
         "phases": {
             key: {"calls": measurements.counts.get(key, 0), **_summary(values)}
             for key, values in sorted(measurements.samples.items())
