@@ -4214,6 +4214,28 @@ def _draw_visual_projectiles(
     visual_state: CombatVisualState,
     match: Match | None = None,
 ) -> None:
+    for projectile in visual_state.physical_projectiles.values():
+        start = viewport.world_to_screen(projectile.previous_position)
+        end = viewport.world_to_screen(projectile.position)
+        team_color = (
+            _rmuc_team_color(match, projectile.attacker_team_id)
+            if match
+            else TEAM_RED_COLOR
+        )
+        pygame.draw.line(
+            screen,
+            _blend_color(team_color, ARENA_FLOOR, 0.36),
+            (round(start[0]), round(start[1])),
+            (round(end[0]), round(end[1])),
+            width=1 if projectile.caliber == "17mm" else 2,
+        )
+        pygame.draw.circle(
+            screen,
+            (230, 236, 231),
+            (round(end[0]), round(end[1])),
+            2 if projectile.caliber == "17mm" else 3,
+        )
+
     for projectile in visual_state.projectiles:
         profile = projectile.profile
         progress = projectile.progress

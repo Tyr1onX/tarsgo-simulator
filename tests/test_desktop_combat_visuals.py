@@ -187,25 +187,31 @@ def test_visual_orientation_update_does_not_mutate_gameplay_position() -> None:
     assert midpoint[1] == pytest.approx(original_position[1] + 50.0)
 
 
-def test_cosmetic_projectile_creation_from_committed_shot_observation() -> None:
+def test_physical_projectile_visual_follows_simulation_state() -> None:
     match = _match()
     attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
     target = next(item for item in match.robots if item.id == "opponent-hero")
-    target.position = (attacker.position[0] + 100.0, attacker.position[1])
+    attacker.position = (10000.0, 7500.0)
+    target.position = (10500.0, 7500.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        if robot not in (attacker, target) and robot.type != "drone":
+            robot.position = (4000.0 + len(robot.id) * 20.0, 1000.0)
+    attacker.attack_cooldown = 0.0
+    match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
 
     visuals = CombatVisualState()
     visuals.reset(match)
     visuals.begin_frame(match)
-    attacker.attack_cooldown = attacker.attack_interval
+    match.update(1.0 / 60.0)
+    visuals.after_match_update(match, 1.0 / 60.0)
 
-    visuals.after_match_update(match, 0.016)
-
-    assert len(visuals.projectiles) == 1
-    projectile = visuals.projectiles[0]
+    assert visuals.projectiles == []
+    assert len(visuals.physical_projectiles) == 1
+    projectile = next(iter(visuals.physical_projectiles.values()))
     assert projectile.caliber == "42mm"
-    assert projectile.start == attacker.position
-    assert projectile.end == target.position
-    assert not projectile.damaging
+    assert projectile.position == match.projectiles[0].position
     assert visuals.robots[attacker.id].muzzle_remaining > 0
 
 
@@ -732,37 +738,37 @@ def test_damage_ghost_bar_tracks_recent_hp_loss_locally() -> None:
     assert visual.ghost_hp(60) == pytest.approx(60.0)
 
 
-def test_damaging_projectile_delays_impact_feedback_until_visual_arrival() -> None:
+def test_physical_projectile_impact_feedback_uses_simulated_contact() -> None:
     match = _match()
     attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
     target = next(item for item in match.robots if item.id == "opponent-hero")
-    target.position = (attacker.position[0] + 100.0, attacker.position[1])
+    attacker.position = (10000.0, 7500.0)
+    target.position = (10500.0, 7500.0)
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        if robot not in (attacker, target) and robot.type != "drone":
+            robot.position = (4000.0 + len(robot.id) * 20.0, 1000.0)
+    attacker.attack_cooldown = 0.0
+    match.ruleset._projectile_allowance_by_robot[attacker.id].allowed = 1
 
     visuals = CombatVisualState()
     visuals.reset(match)
     visuals.begin_frame(match)
-    attacker.attack_cooldown = attacker.attack_interval
-    match.apply_damage(target, 10, source_robot=attacker)
+    match.update(1.0 / 60.0)
+    visuals.after_match_update(match, 1.0 / 60.0)
 
-    visuals.after_match_update(match, 0.01)
-
-    assert len(visuals.projectiles) == 1
-    assert visuals.projectiles[0].damaging
+    assert len(visuals.physical_projectiles) == 1
     assert visuals.impacts == []
 
     visuals.begin_frame(match)
-    attacker.attack_cooldown = max(
-        0.0,
-        attacker.attack_cooldown - projectile_visual_profile("42mm").lifetime,
-    )
-    visuals.after_match_update(
-        match,
-        projectile_visual_profile("42mm").lifetime,
-    )
+    match.update(1.0 / 60.0)
+    visuals.after_match_update(match, 1.0 / 60.0)
 
-    assert visuals.projectiles == []
+    assert visuals.physical_projectiles == {}
     assert len(visuals.impacts) == 1
     assert visuals.robots[target.id].impact_remaining > 0
+    assert target.hp < target.max_hp
 
 
 def test_shielded_structure_impact_is_visual_only() -> None:

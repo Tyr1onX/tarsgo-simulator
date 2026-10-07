@@ -12,6 +12,7 @@ from tarsgo_simulator.core.structure import Structure
 from tarsgo_simulator.rules.protocol import (
     DamageableTarget,
     MatchResult,
+    ProjectileParameters,
     RobotParameters,
     RuleSetDisplayState,
     StructureParameters,
@@ -1316,6 +1317,68 @@ class RMUC2026RegionalRules:
             )
             self._projectile_by_type[robot_type] = projectile
             self._chassis_power_limit_by_type[robot_type] = chassis_power_limit
+
+        physics_document = _mapping(
+            document.data,
+            "lab_projectile_physics",
+            document,
+        )
+        approximation = _mapping(
+            physics_document,
+            "simulator_approximation",
+            document,
+        )
+        if set(physics_document) != {"simulator_approximation"} or set(
+            approximation
+        ) != {"17mm", "42mm"}:
+            raise ConfigError(
+                f"{document.path}: `lab_projectile_physics` 必须明确标记 17mm/42mm simulator approximation"
+            )
+        official_velocity_caps = {"17mm": 25.0, "42mm": 12.0}
+        self._lab_projectile_physics: dict[str, tuple[float, float, float]] = {}
+        for caliber in ("17mm", "42mm"):
+            profile = _mapping(approximation, caliber, document)
+            expected_diameter = 16.8 if caliber == "17mm" else 42.5
+            if set(profile) != {
+                "nominal_speed_mps",
+                "diameter_mm",
+                "firing_interval_seconds",
+            }:
+                raise ConfigError(
+                    f"{document.path}: `lab_projectile_physics.simulator_approximation.{caliber}` 字段不完整"
+                )
+            speed_mps = _number(
+                profile,
+                "nominal_speed_mps",
+                document,
+                f"lab_projectile_physics.simulator_approximation.{caliber}.nominal_speed_mps",
+            )
+            diameter_mm = _number(
+                profile,
+                "diameter_mm",
+                document,
+                f"lab_projectile_physics.simulator_approximation.{caliber}.diameter_mm",
+            )
+            firing_interval = _number(
+                profile,
+                "firing_interval_seconds",
+                document,
+                f"lab_projectile_physics.simulator_approximation.{caliber}.firing_interval_seconds",
+            )
+            if (
+                speed_mps <= 0
+                or speed_mps > official_velocity_caps[caliber]
+                or abs(diameter_mm - expected_diameter) > 1e-9
+                or firing_interval <= 0
+            ):
+                raise ConfigError(
+                    f"{document.path}: {caliber} projectile approximation must use a positive speed within the V1.4.0 ceiling and its official diameter"
+                )
+            self._lab_projectile_physics[caliber] = (
+                speed_mps,
+                diameter_mm,
+                firing_interval,
+            )
 
         robot_lifecycle = _mapping(document.data, "robot_lifecycle", document)
         if set(robot_lifecycle) != {"disengaged_after", "resupply", "respawn"}:
@@ -2738,6 +2801,23 @@ class RMUC2026RegionalRules:
                 f"{self._document.path}: rmuc-2026-region-v1.4.0 "
                 f"不支持机器人类型 `{robot_type}`"
             ) from exc
+
+    def projectile_parameters_for(
+        self,
+        robot: Robot,
+    ) -> ProjectileParameters | None:
+        """Return the explicit Rules Lab approximation for this launcher."""
+        caliber = self._projectile_by_type.get(robot.type)
+        if caliber is None:
+            return None
+        speed_mps, diameter_mm, firing_interval = self._lab_projectile_physics[caliber]
+        return ProjectileParameters(
+            caliber=caliber,
+            speed=speed_mps * 1000.0,
+            firing_interval=firing_interval,
+            radius=diameter_mm / 2.0,
+            effective_range=self._lab_parameters[robot.type].attack_range,
+        )
 
     def structure_parameters(self, structure_type: str) -> StructureParameters:
         try:

@@ -127,6 +127,8 @@ def test_drone_attack_uses_existing_combat_damage_path() -> None:
     allowance_before = rules._projectile_allowance_by_robot[drone.id].allowed
 
     match.update(0.01)
+    assert target.hp == target_before
+    match.update(1.0 / 60.0)
 
     assert target_before - target.hp == 20
     assert rules._projectile_allowance_by_robot[drone.id].allowed == allowance_before - 1

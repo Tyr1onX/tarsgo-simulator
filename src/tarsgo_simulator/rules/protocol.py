@@ -27,6 +27,17 @@ class RobotParameters:
 
 
 @dataclass(frozen=True)
+class ProjectileParameters:
+    """Rules Lab projectile profile in the match's world units."""
+
+    caliber: str
+    speed: float
+    firing_interval: float
+    radius: float
+    effective_range: float
+
+
+@dataclass(frozen=True)
 class MatchResult:
     winner: str | None
 

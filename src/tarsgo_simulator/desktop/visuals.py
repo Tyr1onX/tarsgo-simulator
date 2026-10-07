@@ -320,6 +320,17 @@ class VisualProjectile:
         self.age += max(0.0, dt)
 
 
+@dataclass(frozen=True)
+class PhysicalProjectileVisual:
+    """A presentation snapshot copied from a real simulation projectile."""
+
+    projectile_id: int
+    previous_position: tuple[float, float]
+    position: tuple[float, float]
+    caliber: str
+    attacker_team_id: str
+
+
 @dataclass
 class DartVisual:
     """Presentation of a referee-recorded Dart launch; never resolves a hit."""
@@ -500,6 +511,7 @@ class CombatVisualState:
     structures: dict[str, VisualStructureState] = field(default_factory=dict)
     outpost_rotors: dict[str, OutpostRotorVisualState] = field(default_factory=dict)
     projectiles: list[VisualProjectile] = field(default_factory=list)
+    physical_projectiles: dict[int, PhysicalProjectileVisual] = field(default_factory=dict)
     dart_launchers: dict[str, DartLauncherVisualState] = field(default_factory=dict)
     dart_projectiles: list[DartVisual] = field(default_factory=list)
     impacts: list[ImpactEffect] = field(default_factory=list)
@@ -540,6 +552,7 @@ class CombatVisualState:
             for outpost in outposts
         }
         self.projectiles.clear()
+        self.physical_projectiles.clear()
         self.dart_projectiles.clear()
         self.dart_launchers = {
             team_id: DartLauncherVisualState(
@@ -709,17 +722,29 @@ class CombatVisualState:
             state.target_hold_remaining = max(0.30, profile.lifetime + 0.12)
             state.muzzle_remaining = profile.flash_duration
             state.muzzle_caliber = caliber
-            self.projectiles.append(
-                VisualProjectile(
-                    start=robot.position,
-                    end=target_position,
-                    caliber=caliber,
-                    attacker_team_id=robot.team,
-                    target_id=target_id,
-                    damaging=damaging,
-                    shielded=target_id in shield_drops,
+            if not getattr(match, "uses_physical_projectiles", False):
+                self.projectiles.append(
+                    VisualProjectile(
+                        start=robot.position,
+                        end=target_position,
+                        caliber=caliber,
+                        attacker_team_id=robot.team,
+                        target_id=target_id,
+                        damaging=damaging,
+                        shielded=target_id in shield_drops,
+                    )
                 )
+
+        self.physical_projectiles = {
+            projectile.id: PhysicalProjectileVisual(
+                projectile_id=projectile.id,
+                previous_position=projectile.previous_position,
+                position=projectile.position,
+                caliber=projectile.caliber,
+                attacker_team_id=projectile.shooter_team_id,
             )
+            for projectile in getattr(match, "projectiles", ())
+        }
 
         self._advance_dart_visuals(match, dart_statuses, dt)
 
@@ -798,6 +823,41 @@ class CombatVisualState:
                 self.trigger_screen_shake(amplitude, 0.11)
 
         self.projectiles = active_projectiles
+
+        if getattr(match, "uses_physical_projectiles", False):
+            for contact in match.projectile_impacts:
+                profile = projectile_visual_profile(contact.caliber)
+                impact = ImpactEffect(
+                    position=contact.position,
+                    caliber=contact.caliber,
+                    remaining=profile.impact_duration,
+                    duration=profile.impact_duration,
+                    target_kind=contact.target_kind,
+                    attacker_team_id=contact.shooter_team_id,
+                    direction=contact.direction,
+                    event_sequence=contact.projectile_id,
+                )
+                self.impacts.append(impact)
+                self._cap_impacts()
+                if contact.target_id in self.robots:
+                    robot_state = self.robots[contact.target_id]
+                    robot_state.impact_remaining = max(
+                        robot_state.impact_remaining,
+                        profile.impact_duration,
+                    )
+                    robot_state.impact_caliber = contact.caliber
+                elif contact.target_id in self.structures:
+                    structure_state = self.structures[contact.target_id]
+                    structure_state.impact_remaining = max(
+                        structure_state.impact_remaining,
+                        profile.impact_duration,
+                    )
+                    structure_state.impact_caliber = contact.caliber
+                if contact.caliber == "42mm" or contact.target_kind == "structure":
+                    amplitude = 1.55 if contact.caliber == "42mm" else 0.65
+                    if contact.target_kind == "structure":
+                        amplitude += 0.35
+                    self.trigger_screen_shake(amplitude, 0.11)
 
         for impact in self.impacts:
             impact.advance(dt)

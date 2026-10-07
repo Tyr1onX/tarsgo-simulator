@@ -424,3 +424,20 @@ lab_robot_parameters:
   drone:
     damage: 20
     projectile: 17mm
+
+# Rules Lab-only continuous projectile model. The manual defines projectile
+# diameters and launcher velocity ceilings, but not simulated planar speed,
+# effective range, or a universal firing cadence. Nominal flight speed uses
+# the official normal-mode ceiling (no decay, no deployment-mode 42mm state);
+# cadence values and using attack_range as maximum flight distance are explicit
+# simulator approximations, not official firing-rate/range claims.
+lab_projectile_physics:
+  simulator_approximation:
+    17mm:
+      nominal_speed_mps: 25
+      diameter_mm: 16.8
+      firing_interval_seconds: 0.05
+    42mm:
+      nominal_speed_mps: 12
+      diameter_mm: 42.5
+      firing_interval_seconds: 0.50
