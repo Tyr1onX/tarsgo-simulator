@@ -43,6 +43,8 @@ TRAINING_SCENARIO = (
     / "scenarios"
     / "first-steps.yaml"
 )
+RMUC_RED_TEAM = "tarsgo-rmuc-2026-region"
+RMUC_BLUE_TEAM = "opponent-rmuc-2026-region"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -314,19 +316,27 @@ def test_screen_shake_is_capped_rate_limited_and_auto_decays() -> None:
 def test_outpost_rotor_accelerates_and_returns_to_its_initial_pose() -> None:
     rotor = OutpostRotorVisualState(direction=1)
 
-    rotor.advance(2.5, alive=True, opponent_base_hp=5000)
+    rotor.advance(2.5, alive=True, opponent_base_armor_deployed=False)
     assert rotor.angle == pytest.approx(math.pi / 2)
-    rotor.advance(5.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(5.0, alive=True, opponent_base_armor_deployed=False)
     assert rotor.angle == pytest.approx(0.0, abs=1e-9)
-    rotor.advance(6.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(6.0, alive=True, opponent_base_armor_deployed=False)
     assert rotor.angle == pytest.approx(OUTPOST_ROTATION_SPEED)
 
-    rotor.advance(26.0, alive=True, opponent_base_hp=2000)
+    rotor.advance(26.0, alive=True, opponent_base_armor_deployed=True)
     assert rotor.stop_time == pytest.approx(26.0)
     stopped_angle = rotor.angle
-    rotor.advance(26.0 + OUTPOST_ROTATION_RETURN_SECONDS / 2, alive=True, opponent_base_hp=2000)
+    rotor.advance(
+        26.0 + OUTPOST_ROTATION_RETURN_SECONDS / 2,
+        alive=True,
+        opponent_base_armor_deployed=True,
+    )
     assert abs(rotor.angle) < abs(stopped_angle)
-    rotor.advance(26.0 + OUTPOST_ROTATION_RETURN_SECONDS, alive=True, opponent_base_hp=5000)
+    rotor.advance(
+        26.0 + OUTPOST_ROTATION_RETURN_SECONDS,
+        alive=True,
+        opponent_base_armor_deployed=False,
+    )
     assert rotor.angle == pytest.approx(0.0, abs=1e-9)
     assert rotor.stop_time == pytest.approx(26.0)
 
@@ -354,11 +364,11 @@ def test_outpost_rotor_direction_is_shared_per_match_and_visual_only() -> None:
 
 def test_outpost_rotor_stops_on_destruction_and_does_not_restart_after_rebuild() -> None:
     rotor = OutpostRotorVisualState(direction=-1)
-    rotor.advance(31.0, alive=True, opponent_base_hp=5000)
-    rotor.advance(32.0, alive=False, opponent_base_hp=5000)
+    rotor.advance(31.0, alive=True, opponent_base_armor_deployed=False)
+    rotor.advance(32.0, alive=False, opponent_base_armor_deployed=False)
     destroyed_pose = rotor.angle
 
-    rotor.advance(40.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(40.0, alive=True, opponent_base_armor_deployed=False)
 
     assert rotor.stop_time == pytest.approx(32.0)
     assert rotor.destroyed_at_stop
@@ -367,13 +377,121 @@ def test_outpost_rotor_stops_on_destruction_and_does_not_restart_after_rebuild()
 
 def test_outpost_rotor_stops_at_three_minutes() -> None:
     rotor = OutpostRotorVisualState(direction=1)
-    rotor.advance(179.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(179.0, alive=True, opponent_base_armor_deployed=False)
     assert rotor.stop_time is None
 
-    rotor.advance(180.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(180.0, alive=True, opponent_base_armor_deployed=False)
     assert rotor.stop_time == pytest.approx(180.0)
-    rotor.advance(190.0, alive=True, opponent_base_hp=5000)
+    rotor.advance(190.0, alive=True, opponent_base_armor_deployed=False)
     assert rotor.angle == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("armor_source", ["hp", "dart", "enemy_fortress"])
+def test_outpost_rotor_stops_for_each_official_base_armor_source(
+    armor_source: str,
+) -> None:
+    match = _match()
+    rules = match.ruleset
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+
+    blue_base = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "base"
+    )
+
+    if armor_source == "hp":
+        blue_outpost = next(
+            structure
+            for structure in match.structures
+            if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+        )
+        match.apply_damage(
+            blue_outpost,
+            100000,
+            source_team_id=RMUC_RED_TEAM,
+        )
+        match.update(0.0)
+        assert match.apply_damage(
+            blue_base,
+            3000,
+            source_team_id=RMUC_RED_TEAM,
+        ) == 3000
+        match.update(0.0)
+        assert blue_base.hp == 2000
+    elif armor_source == "dart":
+        blue_outpost = next(
+            structure
+            for structure in match.structures
+            if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+        )
+        match.apply_damage(
+            blue_outpost,
+            100000,
+            source_team_id=RMUC_RED_TEAM,
+        )
+        match.update(0.0)
+        assert not blue_outpost.alive
+
+        dart_state = rules._dart_system_by_team[RMUC_RED_TEAM]
+        match.update(30.0)
+        assert rules.open_dart_gate(match, RMUC_RED_TEAM, "fixed")
+        match.update(dart_state.gate_full_open_at - match.elapsed_time)
+        assert rules.fire_dart(match, RMUC_RED_TEAM)
+        assert rules.record_dart_hit(match, RMUC_RED_TEAM)
+
+        match.update(240.0 - match.elapsed_time)
+        assert rules.open_dart_gate(match, RMUC_RED_TEAM, "random-moving")
+        match.update(dart_state.gate_full_open_at - match.elapsed_time)
+        assert rules.fire_dart(match, RMUC_RED_TEAM)
+        assert rules.record_dart_hit(match, RMUC_RED_TEAM)
+        assert blue_base.hp > 2000
+    else:
+        blue_outpost = next(
+            structure
+            for structure in match.structures
+            if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+        )
+        match.apply_damage(
+            blue_outpost,
+            100000,
+            source_team_id=RMUC_RED_TEAM,
+        )
+        match.update(0.0)
+        assert not blue_outpost.alive
+
+        infantry = next(
+            robot
+            for robot in match.robots
+            if robot.id == "tarsgo-infantry-1"
+        )
+        zone = rules._fortress_zone_by_team[RMUC_BLUE_TEAM]
+        infantry.position = (zone.x + zone.width / 2, zone.y + zone.height / 2)
+        match.elapsed_time = 180.0
+        match.update(0.0)
+        match.update(20.0)
+        assert blue_base.hp > 2000
+
+    assert rules._team_states[RMUC_BLUE_TEAM].base_armor_deployed
+
+    # Run the visual state at a common pre-timeout timestamp so every case
+    # exercises the armor flag, including the Fortress route after 180 s.
+    match.elapsed_time = 31.0
+    visuals.after_match_update(match, 0.0)
+    red_outpost = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_RED_TEAM and structure.type == "outpost"
+    )
+    rotor = visuals.outpost_rotors[red_outpost.id]
+    assert red_outpost.alive
+    assert rotor.stop_time == pytest.approx(31.0)
+    assert not rotor.destroyed_at_stop
 
 
 def test_move_marker_expires() -> None:

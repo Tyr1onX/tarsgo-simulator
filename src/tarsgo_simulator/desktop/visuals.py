@@ -223,14 +223,14 @@ class OutpostRotorVisualState:
         elapsed_time: float,
         *,
         alive: bool,
-        opponent_base_hp: int,
+        opponent_base_armor_deployed: bool,
     ) -> None:
         now = max(0.0, elapsed_time)
         if self.stop_time is None:
             if not alive:
                 self.stop_time = now
                 self.destroyed_at_stop = True
-            elif opponent_base_hp <= 2000:
+            elif opponent_base_armor_deployed:
                 self.stop_time = now
             elif now >= OUTPOST_ROTATION_STOP_SECONDS:
                 self.stop_time = OUTPOST_ROTATION_STOP_SECONDS
@@ -632,6 +632,7 @@ class CombatVisualState:
             for structure in match.structures
             if structure.type == "base"
         }
+        team_states = getattr(match.ruleset, "_team_states", {})
         for outpost in match.structures:
             if outpost.type != "outpost":
                 continue
@@ -647,11 +648,16 @@ class CombatVisualState:
                 ),
                 None,
             )
+            opponent_base_state = (
+                team_states.get(opponent_base.team)
+                if opponent_base is not None
+                else None
+            )
             rotor.advance(
                 match.elapsed_time,
                 alive=outpost.alive,
-                opponent_base_hp=(
-                    opponent_base.hp if opponent_base is not None else 5000
+                opponent_base_armor_deployed=bool(
+                    getattr(opponent_base_state, "base_armor_deployed", False)
                 ),
             )
 
