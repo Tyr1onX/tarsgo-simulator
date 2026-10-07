@@ -17,58 +17,129 @@ def find_path(
     goal: tuple[float, float],
 ) -> list[tuple[float, float]] | None:
     """Return world-coordinate waypoints, including start and goal."""
-    if not game_map.is_passable(start) or not game_map.is_passable(goal):
-        return None
+    search = IncrementalAStar(game_map, start, goal)
+    while not search.done:
+        search.advance(4096)
+    return search.result
 
-    grid_size = game_map.path_grid_size
-    start_cell = _cell_for(start, grid_size)
-    goal_cell = _cell_for(goal, grid_size)
-    if start_cell == goal_cell:
-        return [start] if start == goal else [start, goal] if game_map.can_traverse(start, goal) else None
 
-    open_nodes: list[tuple[float, int, tuple[int, int]]] = []
-    sequence = count()
-    heappush(open_nodes, (_heuristic(start_cell, goal_cell), next(sequence), start_cell))
-    came_from: dict[tuple[int, int], tuple[int, int]] = {}
-    costs = {start_cell: 0.0}
-    visited: set[tuple[int, int]] = set()
+class IncrementalAStar:
+    """A deterministic A* search that can be advanced under a work budget.
 
-    while open_nodes:
-        _, _, current = heappop(open_nodes)
-        if current in visited:
-            continue
-        visited.add(current)
+    ``advance`` counts every heap pop, including stale entries, so callers can
+    put a hard bound on the amount of pathfinding work done in one tick.
+    ``find_path`` above still drains the same search synchronously for callers
+    that need the original blocking API.
+    """
 
-        if current == goal_cell:
-            cells = _reconstruct(came_from, current)
-            points = [start]
-            points.extend(_center(cell, grid_size) for cell in cells)
-            points.append(goal)
-            if not all(
-                game_map.can_traverse(a, b)
-                for a, b in zip(points, points[1:])
-            ):
-                return None
-            return _smooth_path(points, game_map)
+    def __init__(
+        self,
+        game_map: GameMap,
+        start: tuple[float, float],
+        goal: tuple[float, float],
+    ) -> None:
+        self.game_map = game_map
+        self.start = start
+        self.goal = goal
+        self.done = False
+        self.result: list[tuple[float, float]] | None = None
+        self.heap_pops = 0
+        self.expanded_nodes = 0
 
-        current_point = _center(current, grid_size)
-        for dx, dy in _NEIGHBORS:
-            neighbor = (current[0] + dx, current[1] + dy)
-            neighbor_point = _center(neighbor, grid_size)
-            if neighbor in visited or not game_map.can_traverse(current_point, neighbor_point):
-                continue
+        if not game_map.is_passable(start) or not game_map.is_passable(goal):
+            self.done = True
+            return
 
-            new_cost = costs[current] + 1.0
-            if new_cost >= costs.get(neighbor, math.inf):
-                continue
-            costs[neighbor] = new_cost
-            came_from[neighbor] = current
-            heappush(
-                open_nodes,
-                (new_cost + _heuristic(neighbor, goal_cell), next(sequence), neighbor),
+        self.grid_size = game_map.path_grid_size
+        self.start_cell = _cell_for(start, self.grid_size)
+        self.goal_cell = _cell_for(goal, self.grid_size)
+        if self.start_cell == self.goal_cell:
+            self.done = True
+            self.result = (
+                [start]
+                if start == goal
+                else [start, goal]
+                if game_map.can_traverse(start, goal)
+                else None
             )
+            return
 
-    return None
+        self.open_nodes: list[tuple[float, int, tuple[int, int]]] = []
+        self.sequence = count()
+        heappush(
+            self.open_nodes,
+            (
+                _heuristic(self.start_cell, self.goal_cell),
+                next(self.sequence),
+                self.start_cell,
+            ),
+        )
+        self.came_from: dict[tuple[int, int], tuple[int, int]] = {}
+        self.costs = {self.start_cell: 0.0}
+        self.visited: set[tuple[int, int]] = set()
+
+    def advance(self, work_budget: int) -> int:
+        """Expand at most ``work_budget`` heap entries and return entries used."""
+        if self.done or work_budget <= 0:
+            return 0
+
+        used = 0
+        while self.open_nodes and used < work_budget and not self.done:
+            _, _, current = heappop(self.open_nodes)
+            used += 1
+            self.heap_pops += 1
+            if current in self.visited:
+                continue
+            self.visited.add(current)
+            self.expanded_nodes += 1
+
+            if current == self.goal_cell:
+                self.result = self._finish(current)
+                self.done = True
+                break
+
+            current_point = _center(current, self.grid_size)
+            for dx, dy in _NEIGHBORS:
+                neighbor = (current[0] + dx, current[1] + dy)
+                neighbor_point = _center(neighbor, self.grid_size)
+                if neighbor in self.visited or not self.game_map.can_traverse(
+                    current_point,
+                    neighbor_point,
+                ):
+                    continue
+
+                new_cost = self.costs[current] + 1.0
+                if new_cost >= self.costs.get(neighbor, math.inf):
+                    continue
+                self.costs[neighbor] = new_cost
+                self.came_from[neighbor] = current
+                heappush(
+                    self.open_nodes,
+                    (
+                        new_cost + _heuristic(neighbor, self.goal_cell),
+                        next(self.sequence),
+                        neighbor,
+                    ),
+                )
+
+        if not self.done and not self.open_nodes:
+            self.done = True
+        return used
+
+    def _finish(
+        self,
+        current: tuple[int, int],
+    ) -> list[tuple[float, float]] | None:
+        cells = _reconstruct(self.came_from, current)
+        points = [self.start]
+        points.extend(_center(cell, self.grid_size) for cell in cells)
+        points.append(self.goal)
+        if not all(
+            self.game_map.can_traverse(first, second)
+            for first, second in zip(points, points[1:])
+        ):
+            return None
+        return _smooth_path(points, self.game_map)
 
 
 def find_terrain_path(

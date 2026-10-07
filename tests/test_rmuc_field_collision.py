@@ -3,7 +3,7 @@ from pathlib import Path
 from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import load_match_config
 from tarsgo_simulator.core.match import Match
-from tarsgo_simulator.core.pathfinding import find_path
+from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
 from tarsgo_simulator.core.robot import Robot
 
 
@@ -29,6 +29,14 @@ def _structure(match: Match, structure_id: str):
 
 def _robot(match: Match, robot_id: str) -> Robot:
     return next(item for item in match.robots if item.id == robot_id)
+
+
+def _finish_path_requests(match: Match) -> None:
+    for _ in range(1000):
+        if not match._path_work_queue:
+            break
+        match._advance_path_requests()
+    assert not match._path_work_queue
 
 
 def test_rmuc_structures_use_rule_footprints_as_shared_map_blockers() -> None:
@@ -85,6 +93,11 @@ def test_astar_routes_around_rmuc_outpost_and_robots_stop_at_it() -> None:
     path = find_path(match.map, start, goal)
 
     assert path is not None
+    incremental = IncrementalAStar(match.map, start, goal)
+    while not incremental.done:
+        used = incremental.advance(17)
+        assert 0 <= used <= 17
+    assert incremental.result == path
     assert path[0] == start and path[-1] == goal
     assert all(
         match.map.can_traverse(first, second)
@@ -176,6 +189,8 @@ def test_rmuc_ai_paths_to_a_passable_attack_approach_for_structure_targets() -> 
     hero = _robot(match, "tarsgo-hero")
     target = _structure(match, "blue-outpost")
     hero.position = (16000.0, 7500.0)
+    hero.path = [(17000.0, 7500.0)]
+    old_path = list(hero.path)
 
     match._set_ai_goal(
         hero,
@@ -183,6 +198,13 @@ def test_rmuc_ai_paths_to_a_passable_attack_approach_for_structure_targets() -> 
         target.position,
         target_key=f"structure:{target.id}",
     )
+    assert hero.path == old_path
+    assert match._pending_ai_paths[hero.id]
+    pops_before = match._pathfinding_counters["node_pops"]
+    match._advance_path_requests()
+    assert match._pathfinding_counters["node_pops"] - pops_before <= 512
+    assert hero.path == old_path
+    _finish_path_requests(match)
 
     assert hero.path
     points = [hero.position, *hero.path]
@@ -192,6 +214,34 @@ def test_rmuc_ai_paths_to_a_passable_attack_approach_for_structure_targets() -> 
     )
     assert match.map.is_passable(hero.path[-1])
     assert match.map.structure_bounds(target.id) is not None
+
+
+def test_rmuc_ai_reuses_nearby_goal_and_cached_cell_route() -> None:
+    match = _match(spectator_ai=True)
+    hero = _robot(match, "tarsgo-hero")
+    hero.position = (4500.0, 7500.0)
+    goal = (6000.0, 6000.0)
+    match._set_ai_goal(hero, "前往区域", goal, target_key="zone:test-cache")
+    _finish_path_requests(match)
+    assert hero.path
+    searches_started = match._pathfinding_counters["searches_started"]
+    original_path = list(hero.path)
+
+    match._set_ai_goal(
+        hero,
+        "前往区域",
+        (goal[0] + 40.0, goal[1] + 20.0),
+        target_key="zone:test-cache",
+    )
+    assert match._pathfinding_counters["searches_started"] == searches_started
+    assert hero.path == original_path
+
+    match._clear_ai_path(hero)
+    hero.position = (4510.0, 7500.0)
+    match._set_ai_goal(hero, "前往区域", goal, target_key="zone:test-cache")
+    assert match._pathfinding_counters["searches_started"] == searches_started
+    assert match._pathfinding_counters["cache_hits"] >= 1
+    assert hero.path
 
 
 def test_rmuc_reset_rebuilds_blockers_and_destroyed_structures_remain_solid() -> None:
