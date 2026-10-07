@@ -463,6 +463,8 @@ class ImpactEffect:
     attacker_team_id: str = ""
     direction: tuple[float, float] = (1.0, 0.0)
     event_sequence: int = 0
+    surface: str = "armor"
+    outcome: str = "damage"
     particles: tuple[ImpactParticle, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -472,6 +474,27 @@ class ImpactEffect:
             "42mm": (18, 360.0, 980.0, 0.10, 0.28, 2.55),
             "dart": (26, 760.0, 2050.0, 0.15, 0.48, 1.95),
         }[caliber]
+        if self.outcome in {"immune", "absorbed"}:
+            count = max(4, count // 3)
+            min_speed *= 0.45
+            max_speed *= 0.62
+            min_life *= 0.7
+            max_life *= 0.72
+            spread *= 0.78
+        elif self.surface in {"wheel", "obstacle"} or self.outcome == "obstacle":
+            count = max(4, count // 2)
+            min_speed *= 0.58
+            max_speed *= 0.70
+            min_life *= 0.65
+            max_life *= 0.72
+        elif self.outcome == "non_armor" or self.surface == "chassis":
+            count = max(4, count // 2)
+            min_speed *= 0.68
+            max_speed *= 0.72
+            min_life *= 0.75
+            max_life *= 0.78
+        elif self.surface in {"structure", "dart-target"}:
+            count = min(count + 4, 30)
         length_scale = {"17mm": 0.48, "42mm": 0.72, "dart": 1.35}[caliber]
         direction_angle = math.atan2(self.direction[1], self.direction[0])
         seed = (
@@ -488,7 +511,13 @@ class ImpactEffect:
             speed_unit = (index * 0.4142135623730951 + seed * 0.021) % 1.0
             life_unit = (index * 0.7320508075688772 + seed * 0.017) % 1.0
             angle = direction_angle + (unit - 0.5) * spread
-            if index % 7 in (3, 4):
+            if self.outcome in {"immune", "absorbed"} and index % 3 == 0:
+                kind = "absorbed"
+            elif index % 7 == 5 and self.surface in {"structure", "dart-target"}:
+                kind = "smoke"
+            elif self.surface in {"wheel", "obstacle"} and index % 2 == 0:
+                kind = "debris"
+            elif index % 7 in (3, 4):
                 kind = "dust"
             elif index % 7 == 6:
                 kind = "team"
@@ -888,24 +917,28 @@ class CombatVisualState:
                     attacker_team_id=contact.shooter_team_id,
                     direction=contact.direction,
                     event_sequence=contact.projectile_id,
+                    surface=contact.surface,
+                    outcome=contact.outcome,
                 )
                 self.impacts.append(impact)
                 self._cap_impacts()
-                if contact.target_id in self.robots:
+                if contact.target_id in self.robots and contact.outcome == "damage":
                     robot_state = self.robots[contact.target_id]
                     robot_state.impact_remaining = max(
                         robot_state.impact_remaining,
                         profile.impact_duration,
                     )
                     robot_state.impact_caliber = contact.caliber
-                elif contact.target_id in self.structures:
+                elif contact.target_id in self.structures and contact.outcome == "damage":
                     structure_state = self.structures[contact.target_id]
                     structure_state.impact_remaining = max(
                         structure_state.impact_remaining,
                         profile.impact_duration,
                     )
                     structure_state.impact_caliber = contact.caliber
-                if contact.caliber == "42mm" or contact.target_kind == "structure":
+                if contact.outcome == "damage" and (
+                    contact.caliber == "42mm" or contact.target_kind == "structure"
+                ):
                     amplitude = 1.55 if contact.caliber == "42mm" else 0.65
                     if contact.target_kind == "structure":
                         amplitude += 0.35
@@ -1029,6 +1062,7 @@ class CombatVisualState:
                             attacker_team_id=team_id,
                             direction=direction,
                             event_sequence=max(0, previous[0] - ammo),
+                            surface="dart-target",
                         )
                     )
                     self._cap_impacts()

@@ -14,6 +14,7 @@ from tarsgo_simulator.rules.protocol import (
     DamageableTarget,
     MatchResult,
     ProjectileParameters,
+    ProjectileRobotHitboxParameters,
     RobotParameters,
     RuleSetDisplayState,
     StructureParameters,
@@ -1380,6 +1381,72 @@ class RMUC2026RegionalRules:
                 diameter_mm,
                 firing_interval,
             )
+
+        hitbox_document = _mapping(document.data, "lab_projectile_hitboxes", document)
+        hitbox_approximation = _mapping(
+            hitbox_document,
+            "simulator_approximation",
+            document,
+        )
+        hitbox_fields = {
+            "chassis_radius_mm",
+            "armor_panel_offset_mm",
+            "armor_panel_width_mm",
+            "armor_panel_depth_mm",
+            "wheel_center_offset_mm",
+            "wheel_radius_mm",
+        }
+        if set(hitbox_document) != {"simulator_approximation"} or set(
+            hitbox_approximation
+        ) != hitbox_fields:
+            raise ConfigError(
+                f"{document.path}: `lab_projectile_hitboxes` 必须明确标记几何 simulator approximation"
+            )
+        hitbox_values = {
+            field: _number(
+                hitbox_approximation,
+                field,
+                document,
+                f"lab_projectile_hitboxes.simulator_approximation.{field}",
+            )
+            for field in sorted(hitbox_fields)
+        }
+        chassis_radius = hitbox_values["chassis_radius_mm"]
+        panel_offset = hitbox_values["armor_panel_offset_mm"]
+        panel_width = hitbox_values["armor_panel_width_mm"]
+        panel_depth = hitbox_values["armor_panel_depth_mm"]
+        wheel_offset = hitbox_values["wheel_center_offset_mm"]
+        wheel_radius = hitbox_values["wheel_radius_mm"]
+        if (
+            min(
+                chassis_radius,
+                panel_offset,
+                panel_width,
+                panel_depth,
+                wheel_offset,
+                wheel_radius,
+            ) <= 0
+            or panel_offset - panel_depth / 2 >= chassis_radius
+        ):
+            raise ConfigError(
+                f"{document.path}: 装甲板和 chassis hitbox 必须有效且相互衔接"
+            )
+        maximum_hitbox_extent = max(
+            math.hypot(panel_offset + panel_depth / 2, panel_width / 2),
+            math.sqrt(2) * wheel_offset + wheel_radius,
+        )
+        if maximum_hitbox_extent > common_values["collision_radius"] + 1e-9:
+            raise ConfigError(
+                f"{document.path}: projectile hitboxes must fit inside the movement broad-phase radius"
+            )
+        self._projectile_robot_hitboxes = ProjectileRobotHitboxParameters(
+            chassis_radius=chassis_radius,
+            armor_panel_offset=panel_offset,
+            armor_panel_width=panel_width,
+            armor_panel_depth=panel_depth,
+            wheel_center_offset=wheel_offset,
+            wheel_radius=wheel_radius,
+        )
 
         aim_document = _mapping(document.data, "lab_aim_motion", document)
         aim_approximation = _mapping(
@@ -2859,6 +2926,10 @@ class RMUC2026RegionalRules:
         """Return the explicitly approximate controller rates used in Rules Lab."""
         del robot  # Rates are common; chassis spin eligibility is a fixed strategy policy.
         return self._lab_aim_motion
+
+    def projectile_robot_hitbox_parameters(self) -> ProjectileRobotHitboxParameters:
+        """Return the documented Rules Lab armor/frame contact approximation."""
+        return self._projectile_robot_hitboxes
 
     def structure_parameters(self, structure_type: str) -> StructureParameters:
         try:

@@ -101,6 +101,7 @@ def test_projectile_aims_at_current_target_position_and_can_miss_a_moving_robot(
     assert target.hp == target_hp
     assert match.projectiles == []  # The missed shot expires at simulated range.
     assert match.projectile_diagnostics["launched"] == 1
+    assert match.projectile_diagnostics["misses"] == 1
 
 
 def test_obstacle_added_in_front_of_live_shot_consumes_it_without_target_damage() -> None:
@@ -165,7 +166,95 @@ def test_invincible_robot_is_physically_hit_but_referee_applies_zero_damage() ->
     assert match.projectile_impacts
     assert match.projectile_impacts[0].target_id == target.id
     assert match.projectile_impacts[0].applied_damage == 0
+    assert match.projectile_impacts[0].surface == "armor"
+    assert match.projectile_impacts[0].outcome == "immune"
     assert match.ruleset._projectile_allowance_by_robot[shooter.id].allowed == 99
+    diagnostics = match.projectile_diagnostics
+    assert diagnostics["shots_fired"] == 1
+    assert diagnostics["robot_contacts"] == 1
+    assert diagnostics["armor_hits"] == 1
+    assert diagnostics["applied_damage"] == 0
+    assert diagnostics["per_robot_hit_rate"][shooter.id]["hit_rate_pct"] == 100.0
+
+
+def _swept_robot_contact(
+    chassis_angle: float,
+    *,
+    invincible: bool = False,
+    lateral_offset: float = 0.0,
+):
+    match = _match()
+    shooter, target = _prepare_duel(match, distance=1000.0)
+    target.chassis_angle = chassis_angle
+    if invincible:
+        match.ruleset._robot_lifecycle_by_robot[target.id].invincible_remaining = 5.0
+    target_hp = target.hp
+    system = ProjectileSystem()
+    system.projectiles.append(
+        Projectile(
+            id=1,
+            shooter_id=shooter.id,
+            shooter_team_id=shooter.team,
+            caliber="17mm",
+            damage=shooter.damage,
+            radius=8.4,
+            speed=25_000.0,
+            effective_range=1000.0,
+            position=(target.position[0] - 500.0, target.position[1] + lateral_offset),
+            previous_position=(target.position[0] - 500.0, target.position[1] + lateral_offset),
+            velocity=(25_000.0, 0.0),
+        )
+    )
+    system.advance(
+        0.04,
+        match.robots,
+        match.structures,
+        match.map,
+        robot_hitboxes=match.ruleset.projectile_robot_hitbox_parameters(),
+        apply_damage=lambda victim, amount, attacker: match.apply_damage(
+            victim,
+            amount,
+            source_robot=attacker,
+        ),
+    )
+    return match, target, target_hp, system
+
+
+def test_robot_damage_requires_swept_contact_with_rotating_armor_plate() -> None:
+    aligned_match, aligned_target, aligned_hp, aligned_system = _swept_robot_contact(0.0)
+    assert aligned_target.hp == aligned_hp - 20
+    assert aligned_system.impacts[0].surface == "armor"
+    assert aligned_system.impacts[0].armor_face == "rear"
+    assert aligned_system.impacts[0].outcome == "damage"
+
+    spun_match, spun_target, spun_hp, spun_system = _swept_robot_contact(math.pi / 4)
+    assert spun_target.hp == spun_hp
+    assert spun_system.impacts[0].surface == "wheel"
+    assert spun_system.impacts[0].outcome == "non_armor"
+    assert spun_system.robot_contacts == 1
+    assert spun_system.nonarmor_contacts == 1
+    assert spun_system.armor_hits == 0
+    assert aligned_match.map.collision_radius == spun_match.map.collision_radius
+
+
+def test_invincible_armor_contact_is_counted_as_absorbed_not_damage() -> None:
+    _match_state, target, target_hp, system = _swept_robot_contact(0.0, invincible=True)
+    assert target.hp == target_hp
+    assert system.impacts[0].surface == "armor"
+    assert system.impacts[0].outcome == "immune"
+    assert system.armor_hits == 1
+    assert system.applied_damage == 0
+
+
+def test_wheel_contact_consumes_shot_without_armor_damage() -> None:
+    _match_state, target, target_hp, system = _swept_robot_contact(
+        0.0,
+        lateral_offset=95.0,
+    )
+    assert target.hp == target_hp
+    assert system.impacts[0].surface == "wheel"
+    assert system.impacts[0].outcome == "non_armor"
+    assert system.nonarmor_contacts == 1
 
 
 def test_42mm_uses_official_speed_ceiling_but_slower_lab_cadence() -> None:

@@ -442,6 +442,18 @@ lab_projectile_physics:
       diameter_mm: 42.5
       firing_interval_seconds: 0.50
 
+# V1.4.0 specifies armor-module contact and the attacked face, but does not
+# publish 2D chassis/plate dimensions for this Rules Lab. These are gameplay
+# contact approximations, independent of sprites and movement collision.
+lab_projectile_hitboxes:
+  simulator_approximation:
+    chassis_radius_mm: 122
+    armor_panel_offset_mm: 130
+    armor_panel_width_mm: 112
+    armor_panel_depth_mm: 24
+    wheel_center_offset_mm: 94
+    wheel_radius_mm: 26
+
 # The V1.4.0 manual does not prescribe robot turret slew or chassis-spin rates.
 # These are explicit Rules Lab control approximations; the official 0.8π rad/s
 # Outpost armor rate applies only to the Outpost and is not reused here.

@@ -38,6 +38,18 @@ class ProjectileParameters:
 
 
 @dataclass(frozen=True)
+class ProjectileRobotHitboxParameters:
+    """Rules Lab-only projectile contact approximations, independent of movement."""
+
+    chassis_radius: float
+    armor_panel_offset: float
+    armor_panel_width: float
+    armor_panel_depth: float
+    wheel_center_offset: float
+    wheel_radius: float
+
+
+@dataclass(frozen=True)
 class AimMotionParameters:
     """Rules Lab-only turret and chassis motion rates, in radians/second."""
 

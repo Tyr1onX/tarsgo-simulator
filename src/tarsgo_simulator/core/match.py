@@ -285,12 +285,29 @@ class Match:
         return tuple(self.projectile_system.impacts)
 
     @property
-    def projectile_diagnostics(self) -> dict[str, int]:
+    def projectile_diagnostics(self) -> dict[str, object]:
+        shooters = {}
+        for robot_id, values in sorted(self.projectile_system._shooter_stats.items()):
+            shots = values["shots_fired"]
+            shooters[robot_id] = {
+                **values,
+                "hit_rate_pct": round(100.0 * values["armor_hits"] / shots, 2)
+                if shots
+                else 0.0,
+            }
         return {
             "active": len(self.projectile_system.projectiles),
             "max_active": self.projectile_system.max_active_projectiles,
             "launched": self.projectile_system.total_launched,
             "impacts": self.projectile_system.total_impacts,
+            "shots_fired": self.projectile_system.total_launched,
+            "robot_contacts": self.projectile_system.robot_contacts,
+            "armor_hits": self.projectile_system.armor_hits,
+            "friendly_armor_contacts": self.projectile_system.friendly_armor_contacts,
+            "nonarmor_contacts": self.projectile_system.nonarmor_contacts,
+            "misses": self.projectile_system.misses,
+            "applied_damage": self.projectile_system.applied_damage,
+            "per_robot_hit_rate": shooters,
         }
 
     def is_player_controlled(self, robot_id: str) -> bool:
@@ -856,6 +873,11 @@ class Match:
                     self.structures,
                     self.map,
                     projectile_ids=existing_projectile_ids,
+                    robot_hitboxes=getattr(
+                        self.ruleset,
+                        "projectile_robot_hitbox_parameters",
+                        lambda: None,
+                    )(),
                     apply_damage=lambda target, amount, attacker: self.apply_damage(
                         target,
                         amount,

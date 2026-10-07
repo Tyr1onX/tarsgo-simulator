@@ -121,7 +121,9 @@ def test_drone_attack_uses_existing_combat_damage_path() -> None:
 
     assert rules.start_drone_air_support(match, drone)
     drone.position = (1200.0, 420.0)
-    target.position = (1320.0, 420.0)
+    # Keep the test shot outside the Drone muzzle offset so it crosses a real
+    # armor plate instead of spawning inside the target's non-armor frame.
+    target.position = (1650.0, 420.0)
     drone.attack_cooldown = 0.0
     target_before = target.hp
     allowance_before = rules._projectile_allowance_by_robot[drone.id].allowed
