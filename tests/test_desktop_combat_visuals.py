@@ -8,7 +8,12 @@ import pytest
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
+    DartLauncherVisualState,
+    DartVisual,
     ImpactEffect,
+    MAX_ACTIVE_DART_VISUALS,
+    MAX_ACTIVE_IMPACTS,
+    MAX_VISIBLE_IMPACT_PARTICLES,
     MAX_SCREEN_SHAKE_AMPLITUDE,
     MAX_SCREEN_SHAKE_DURATION,
     MoveMarker,
@@ -232,6 +237,204 @@ def test_17mm_and_42mm_visual_profiles_are_obviously_different() -> None:
     assert large.flash_duration > small.flash_duration
     assert large.impact_duration > small.impact_duration
     assert large.lifetime > small.lifetime
+
+
+def test_impact_particles_are_deterministic_bounded_and_caliber_specific() -> None:
+    small = ImpactEffect(
+        (0.0, 0.0), "17mm", 0.12, 0.12, attacker_team_id=RMUC_RED_TEAM
+    )
+    repeated = ImpactEffect(
+        (0.0, 0.0), "17mm", 0.12, 0.12, attacker_team_id=RMUC_RED_TEAM
+    )
+    large = ImpactEffect(
+        (0.0, 0.0), "42mm", 0.22, 0.22, attacker_team_id=RMUC_RED_TEAM
+    )
+    dart = ImpactEffect(
+        (0.0, 0.0), "dart", 0.46, 0.46, attacker_team_id=RMUC_BLUE_TEAM
+    )
+
+    assert small.particles == repeated.particles
+    assert len(small.particles) < len(large.particles) < len(dart.particles)
+    assert {particle.kind for particle in small.particles} >= {"spark", "dust"}
+    assert {particle.kind for particle in dart.particles} >= {
+        "spark", "metal", "dust", "team"
+    }
+    assert max(particle.lifetime for particle in small.particles) < max(
+        particle.lifetime for particle in large.particles
+    ) < max(particle.lifetime for particle in dart.particles)
+    assert MAX_ACTIVE_IMPACTS * len(dart.particles) > MAX_VISIBLE_IMPACT_PARTICLES
+
+
+def test_dart_visuals_follow_rule_launch_and_separate_referee_hit() -> None:
+    match = _match()
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    starting_hp = target.hp
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM)
+    visuals.begin_frame(match)
+    match.update(1.0 / 60.0)
+    visuals.after_match_update(match, 1.0 / 60.0)
+    launcher = visuals.dart_launchers[RMUC_RED_TEAM]
+    assert launcher.phase == "opening"
+    assert 0.0 < launcher.gate_open < 1.0
+
+    opening = rules._dart_system_by_team[RMUC_RED_TEAM].gate_full_open_at
+    assert opening is not None
+    match.update(opening - match.elapsed_time)
+    assert target.hp == starting_hp
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 1.0 / 60.0)
+
+    assert len(visuals.dart_projectiles) == 1
+    dart_visual = visuals.dart_projectiles[0]
+    assert isinstance(dart_visual, DartVisual)
+    assert dart_visual.target_id == target.id
+    assert target.hp == starting_hp
+    assert launcher.ammo == 3
+    assert launcher.launch_pulse_remaining > 0
+
+    visuals.begin_frame(match)
+    assert rules.record_dart_hit(match, RMUC_RED_TEAM, target.id)
+    visuals.after_match_update(match, 1.0 / 60.0)
+    dart_impacts = [impact for impact in visuals.impacts if impact.caliber == "dart"]
+    assert len(dart_impacts) == 1
+    assert dart_impacts[0].position == target.position
+    assert target.hp == starting_hp - 750
+
+
+def test_dart_visuals_detect_same_tick_repeated_hit_from_ammo_drop() -> None:
+    match = _match()
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+    rules = match.ruleset
+    blue_outpost = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    blue_outpost.hp = 0
+    blue_outpost.alive = False
+    rules._team_states[RMUC_BLUE_TEAM].outpost_ever_destroyed = True
+    blue_base = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "base"
+    )
+
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM, "fixed")
+    match.update(7.0)
+
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    visuals.begin_frame(match)
+    assert rules.record_dart_hit(match, RMUC_RED_TEAM, blue_base.id)
+    visuals.after_match_update(match, 0.0)
+    assert len([impact for impact in visuals.impacts if impact.caliber == "dart"]) == 1
+
+    # A second launch and referee hit can both arrive between rendered ticks;
+    # the ammo drop distinguishes the new rule hit when result text repeats.
+    match.update(2.0)
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    assert rules.record_dart_hit(match, RMUC_RED_TEAM, blue_base.id)
+    visuals.after_match_update(match, 0.0)
+
+    assert len([impact for impact in visuals.impacts if impact.caliber == "dart"]) == 2
+    assert blue_base.hp == 4600
+
+
+def test_dart_visual_miss_fades_only_after_rule_report_and_never_changes_hp() -> None:
+    match = _match()
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    starting_hp = target.hp
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM, "fixed")
+    match.update(7.0)
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    assert len(visuals.dart_projectiles) == 1
+    assert target.hp == starting_hp
+
+    visuals.begin_frame(match)
+    assert rules.record_dart_miss(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 1.0 / 60.0)
+    assert visuals.dart_projectiles[0].missed
+    assert target.hp == starting_hp
+
+
+def test_dart_launcher_open_state_and_effect_budget_are_bounded() -> None:
+    launcher = DartLauncherVisualState()
+    launcher.sync(4, "opening", 3.5, "前哨站", 1.0 / 60.0)
+    assert launcher.gate_open == pytest.approx(0.5)
+    launcher.sync(4, "firing", 20.0, "前哨站", 1.0 / 60.0)
+    assert launcher.gate_open == 1.0
+    launcher.sync(4, "cooldown", 15.0, "前哨站", 1.0 / 60.0)
+    assert launcher.gate_open == 0.0
+
+    visuals = CombatVisualState()
+    visuals.impacts = [
+        ImpactEffect((float(index), 0.0), "dart", 0.46, 0.46)
+        for index in range(MAX_ACTIVE_IMPACTS + 1)
+    ]
+    visuals._cap_impacts()
+    assert len(visuals.impacts) == MAX_ACTIVE_IMPACTS
+
+    visuals.dart_projectiles = [
+        DartVisual("red", str(index), (0.0, 0.0), (100.0, 0.0), 0.5)
+        for index in range(MAX_ACTIVE_DART_VISUALS + 2)
+    ]
+    visuals.dart_projectiles = visuals.dart_projectiles[-MAX_ACTIVE_DART_VISUALS:]
+    assert len(visuals.dart_projectiles) == MAX_ACTIVE_DART_VISUALS
+
+
+def test_rmuc_dart_launcher_anchors_are_art_only_and_center_symmetric() -> None:
+    app = _app()
+    match = _match()
+    anchors = app._rmuc_dart_launcher_anchors(match)
+
+    assert len(anchors) == 2
+    assert {team_id for team_id, _position, _direction in anchors} == {
+        RMUC_RED_TEAM,
+        RMUC_BLUE_TEAM,
+    }
+    red = next(item for item in anchors if item[0] == RMUC_RED_TEAM)
+    blue = next(item for item in anchors if item[0] == RMUC_BLUE_TEAM)
+    assert red[1][0] + blue[1][0] == pytest.approx(match.map.width)
+    assert red[1][1] + blue[1][1] == pytest.approx(match.map.height)
+    assert red[2] == -blue[2]
+    assert not any(structure.type == "dart_launcher" for structure in match.structures)
 
 
 def test_destroy_and_respawn_visual_lifecycles_are_short_and_local() -> None:

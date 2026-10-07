@@ -45,6 +45,7 @@ ROBOT_VISUAL_PROFILES = {
 PROJECTILE_VISUAL_PROFILES = {
     "17mm": ProjectileVisualProfile("17mm", 0.11, 2, 2, 0.055, 0.12),
     "42mm": ProjectileVisualProfile("42mm", 0.19, 5, 4, 0.090, 0.22),
+    "dart": ProjectileVisualProfile("dart", 0.72, 3, 3, 0.10, 0.46),
 }
 
 DESTROY_VISUAL_DURATION = 0.46
@@ -53,6 +54,11 @@ SHIELD_IMPACT_DURATION = 0.20
 MAX_SCREEN_SHAKE_AMPLITUDE = 2.25
 MAX_SCREEN_SHAKE_DURATION = 0.14
 SCREEN_SHAKE_COOLDOWN = 0.08
+MAX_ACTIVE_DART_VISUALS = 8
+MAX_ACTIVE_IMPACTS = 24
+MAX_VISIBLE_IMPACT_PARTICLES = 384
+_DART_GATE_OPENING_SECONDS = 7.0
+_DART_FLIGHT_SPEED_MM_PER_SECOND = 34_000.0
 OUTPOST_ROTATION_SPEED = 0.8 * math.pi
 OUTPOST_ROTATION_RAMP_SECONDS = 5.0
 OUTPOST_ROTATION_STOP_SECONDS = 180.0
@@ -315,6 +321,99 @@ class VisualProjectile:
 
 
 @dataclass
+class DartVisual:
+    """Presentation of a referee-recorded Dart launch; never resolves a hit."""
+
+    team_id: str
+    target_id: str | None
+    start: tuple[float, float]
+    end: tuple[float, float]
+    duration: float
+    age: float = 0.0
+    missed: bool = False
+
+    @property
+    def progress(self) -> float:
+        return min(1.0, self.age / max(1e-6, self.duration))
+
+    @property
+    def position(self) -> tuple[float, float]:
+        progress = self.progress
+        return (
+            self.start[0] + (self.end[0] - self.start[0]) * progress,
+            self.start[1] + (self.end[1] - self.start[1]) * progress,
+        )
+
+    @property
+    def expired(self) -> bool:
+        return self.age >= self.duration or self.missed and self.age >= 0.10
+
+    def advance(self, dt: float) -> None:
+        self.age += max(0.0, dt)
+
+
+@dataclass
+class DartLauncherVisualState:
+    """Small presentation mirror of the existing referee Dart status."""
+
+    ammo: int = 4
+    phase: str = "locked"
+    phase_remaining: float = 0.0
+    target: str = ""
+    gate_open: float = 0.0
+    launch_pulse_remaining: float = 0.0
+    launch_progress: float = 0.0
+
+    def sync(
+        self,
+        ammo: int,
+        phase: str,
+        remaining: float,
+        target: str,
+        dt: float,
+    ) -> None:
+        self.ammo = max(0, int(ammo))
+        self.phase = phase
+        self.phase_remaining = max(0.0, remaining)
+        self.target = target
+        if phase == "opening":
+            self.gate_open = min(
+                1.0,
+                max(0.0, 1.0 - self.phase_remaining / _DART_GATE_OPENING_SECONDS),
+            )
+        elif phase == "firing":
+            self.gate_open = 1.0
+        else:
+            self.gate_open = 0.0
+        self.launch_pulse_remaining = max(
+            0.0,
+            self.launch_pulse_remaining - max(0.0, dt),
+        )
+        if self.launch_pulse_remaining > 0.0:
+            self.launch_progress = min(
+                1.0,
+                self.launch_progress + max(0.0, dt) / 0.24,
+            )
+        if self.launch_pulse_remaining <= 0.0:
+            self.launch_progress = 0.0
+
+    def launch(self) -> None:
+        self.launch_pulse_remaining = 0.24
+        self.launch_progress = 0.0
+
+
+@dataclass(frozen=True)
+class ImpactParticle:
+    angle: float
+    direction_x: float
+    direction_y: float
+    speed: float
+    lifetime: float
+    length: float
+    kind: str
+
+
+@dataclass
 class ImpactEffect:
     position: tuple[float, float]
     caliber: str
@@ -322,6 +421,54 @@ class ImpactEffect:
     duration: float
     shielded: bool = False
     target_kind: str = "robot"
+    attacker_team_id: str = ""
+    direction: tuple[float, float] = (1.0, 0.0)
+    event_sequence: int = 0
+    particles: tuple[ImpactParticle, ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        caliber = self.caliber if self.caliber in {"17mm", "42mm", "dart"} else "17mm"
+        count, min_speed, max_speed, min_life, max_life, spread = {
+            "17mm": (8, 220.0, 620.0, 0.07, 0.15, 2.2),
+            "42mm": (18, 360.0, 980.0, 0.10, 0.28, 2.55),
+            "dart": (26, 760.0, 2050.0, 0.15, 0.48, 1.95),
+        }[caliber]
+        length_scale = {"17mm": 0.48, "42mm": 0.72, "dart": 1.35}[caliber]
+        direction_angle = math.atan2(self.direction[1], self.direction[0])
+        seed = (
+            sum((index + 1) * ord(char) for index, char in enumerate(self.attacker_team_id))
+            + round(self.position[0] / 100.0) * 37
+            + round(self.position[1] / 100.0) * 101
+            + self.event_sequence * 7919
+        )
+        particles: list[ImpactParticle] = []
+        for index in range(count):
+            # A golden-ratio sequence gives a stable, evenly scattered pattern
+            # without allocating RNG state or changing from frame to frame.
+            unit = ((index * 0.6180339887498949) + seed * 0.013) % 1.0
+            speed_unit = (index * 0.4142135623730951 + seed * 0.021) % 1.0
+            life_unit = (index * 0.7320508075688772 + seed * 0.017) % 1.0
+            angle = direction_angle + (unit - 0.5) * spread
+            if index % 7 in (3, 4):
+                kind = "dust"
+            elif index % 7 == 6:
+                kind = "team"
+            elif index % 3 == 0:
+                kind = "metal"
+            else:
+                kind = "spark"
+            particles.append(
+                ImpactParticle(
+                    angle=angle,
+                    direction_x=math.cos(angle),
+                    direction_y=math.sin(angle),
+                    speed=min_speed + (max_speed - min_speed) * speed_unit,
+                    lifetime=min_life + (max_life - min_life) * life_unit,
+                    length=(45.0 + 340.0 * unit) * length_scale,
+                    kind=kind,
+                )
+            )
+        object.__setattr__(self, "particles", tuple(particles))
 
     @property
     def progress(self) -> float:
@@ -353,6 +500,8 @@ class CombatVisualState:
     structures: dict[str, VisualStructureState] = field(default_factory=dict)
     outpost_rotors: dict[str, OutpostRotorVisualState] = field(default_factory=dict)
     projectiles: list[VisualProjectile] = field(default_factory=list)
+    dart_launchers: dict[str, DartLauncherVisualState] = field(default_factory=dict)
+    dart_projectiles: list[DartVisual] = field(default_factory=list)
     impacts: list[ImpactEffect] = field(default_factory=list)
     move_markers: list[MoveMarker] = field(default_factory=list)
     shake_remaining: float = 0.0
@@ -361,9 +510,13 @@ class CombatVisualState:
     shake_cooldown_remaining: float = 0.0
     _before_cooldowns: dict[str, float] = field(default_factory=dict)
     _before_structure_shields: dict[str, int] = field(default_factory=dict)
+    _before_dart_statuses: dict[str, tuple[int, str, float, str, str]] = field(
+        default_factory=dict
+    )
 
     def reset(self, match: "Match") -> None:
         structure_statuses = self._structure_statuses(match)
+        dart_statuses = self._dart_statuses(match)
         outposts = [structure for structure in match.structures if structure.type == "outpost"]
         rotation_direction = secrets.choice((-1, 1))
         self.robots = {
@@ -387,6 +540,16 @@ class CombatVisualState:
             for outpost in outposts
         }
         self.projectiles.clear()
+        self.dart_projectiles.clear()
+        self.dart_launchers = {
+            team_id: DartLauncherVisualState(
+                ammo=status[0],
+                phase=status[1],
+                phase_remaining=status[2],
+                target=status[3],
+            )
+            for team_id, status in dart_statuses.items()
+        }
         self.impacts.clear()
         self.move_markers.clear()
         self.shake_remaining = 0.0
@@ -395,12 +558,14 @@ class CombatVisualState:
         self.shake_cooldown_remaining = 0.0
         self._before_cooldowns.clear()
         self._before_structure_shields.clear()
+        self._before_dart_statuses = dart_statuses
 
     def begin_frame(self, match: "Match") -> None:
         self._before_cooldowns = {
             robot.id: robot.attack_cooldown for robot in match.robots
         }
         structure_statuses = self._structure_statuses(match)
+        self._before_dart_statuses = self._dart_statuses(match)
         self._before_structure_shields = {}
         for robot in match.robots:
             self.robots.setdefault(
@@ -467,6 +632,7 @@ class CombatVisualState:
             structure.id: structure for structure in match.structures
         }
         structure_statuses = self._structure_statuses(match)
+        dart_statuses = self._dart_statuses(match)
         current_shields = {
             structure.id: parse_virtual_shield(
                 structure_statuses.get(structure.id, "")
@@ -555,6 +721,8 @@ class CombatVisualState:
                 )
             )
 
+        self._advance_dart_visuals(match, dart_statuses, dt)
+
         for state in self.robots.values():
             state.advance_turret(dt)
             state.advance_timers(dt)
@@ -592,8 +760,15 @@ class CombatVisualState:
                     ),
                     shielded=projectile.shielded,
                     target_kind=target_kind,
+                    attacker_team_id=projectile.attacker_team_id,
+                    direction=(
+                        projectile.end[0] - projectile.start[0],
+                        projectile.end[1] - projectile.start[1],
+                    ),
+                    event_sequence=round(match.elapsed_time * 60),
                 )
             )
+            self._cap_impacts()
 
             if projectile.target_id in self.robots:
                 target_state = self.robots[projectile.target_id]
@@ -636,6 +811,162 @@ class CombatVisualState:
 
         for robot_id, robot in robot_by_id.items():
             self.robots[robot_id].cooldown = robot.attack_cooldown
+
+    def _advance_dart_visuals(
+        self,
+        match: "Match",
+        statuses: dict[str, tuple[int, str, float, str, str]],
+        dt: float,
+    ) -> None:
+        bases = [structure for structure in match.structures if structure.type == "base"]
+        for team_id in sorted(statuses):
+            ammo, phase, remaining, target_label, result = statuses[team_id]
+            launcher = self.dart_launchers.setdefault(
+                team_id,
+                DartLauncherVisualState(),
+            )
+            previous = self._before_dart_statuses.get(team_id)
+            launcher.sync(ammo, phase, remaining, target_label, dt)
+            if previous is not None and ammo < previous[0]:
+                launcher.launch()
+                target_kind = "base" if target_label == "基地" else "outpost"
+                own_base = next((base for base in bases if base.team == team_id), None)
+                enemy_target = next(
+                    (
+                        structure
+                        for structure in match.structures
+                        if structure.team != team_id
+                        and structure.type == target_kind
+                    ),
+                    None,
+                )
+                if own_base is not None and enemy_target is not None:
+                    opponent_base = next(
+                        (base for base in bases if base.team != team_id),
+                        None,
+                    )
+                    direction = (
+                        1.0
+                        if opponent_base is None
+                        or opponent_base.position[0] >= own_base.position[0]
+                        else -1.0
+                    )
+                    start = (
+                        match.map.width * 0.025
+                        if direction > 0
+                        else match.map.width * 0.975,
+                        match.map.height * (0.22 if direction > 0 else 0.78),
+                    )
+                    distance = math.hypot(
+                        enemy_target.position[0] - start[0],
+                        enemy_target.position[1] - start[1],
+                    )
+                    self.dart_projectiles.append(
+                        DartVisual(
+                            team_id=team_id,
+                            target_id=enemy_target.id,
+                            start=start,
+                            end=enemy_target.position,
+                            duration=max(
+                                0.34,
+                                min(1.15, distance / _DART_FLIGHT_SPEED_MM_PER_SECOND),
+                            ),
+                        )
+                    )
+                    if len(self.dart_projectiles) > MAX_ACTIVE_DART_VISUALS:
+                        del self.dart_projectiles[
+                            : len(self.dart_projectiles) - MAX_ACTIVE_DART_VISUALS
+                        ]
+
+            if (
+                previous is not None
+                and result.startswith("命中")
+                and (result != previous[4] or ammo < previous[0])
+            ):
+                target_kind = "base" if "基地" in result else "outpost"
+                target = next(
+                    (
+                        structure
+                        for structure in match.structures
+                        if structure.team != team_id
+                        and structure.type == target_kind
+                    ),
+                    None,
+                )
+                if target is not None:
+                    own_base = next(
+                        (base for base in bases if base.team == team_id),
+                        None,
+                    )
+                    direction = (
+                        (
+                            target.position[0] - own_base.position[0],
+                            target.position[1] - own_base.position[1],
+                        )
+                        if own_base is not None
+                        else (1.0, 0.0)
+                    )
+                    duration = projectile_visual_profile("dart").impact_duration
+                    self.impacts.append(
+                        ImpactEffect(
+                            position=target.position,
+                            caliber="dart",
+                            remaining=duration,
+                            duration=duration,
+                            target_kind="structure",
+                            attacker_team_id=team_id,
+                            direction=direction,
+                            event_sequence=max(0, previous[0] - ammo),
+                        )
+                    )
+                    self._cap_impacts()
+                    target_state = self.structures.get(target.id)
+                    if target_state is not None:
+                        target_state.impact_remaining = max(
+                            target_state.impact_remaining,
+                            duration,
+                        )
+                        target_state.impact_caliber = "dart"
+            if (
+                previous is not None
+                and result == "飞镖未命中"
+                and result != previous[4]
+            ):
+                pending = next(
+                    (dart for dart in reversed(self.dart_projectiles) if dart.team_id == team_id),
+                    None,
+                )
+                if pending is not None:
+                    pending.missed = True
+
+        active_darts: list[DartVisual] = []
+        for dart in self.dart_projectiles:
+            dart.advance(dt)
+            if not dart.expired:
+                active_darts.append(dart)
+        self.dart_projectiles = active_darts
+        self._before_dart_statuses = statuses
+
+    def _cap_impacts(self) -> None:
+        if len(self.impacts) > MAX_ACTIVE_IMPACTS:
+            del self.impacts[: len(self.impacts) - MAX_ACTIVE_IMPACTS]
+
+    @staticmethod
+    def _dart_statuses(
+        match: "Match",
+    ) -> dict[str, tuple[int, str, float, str, str]]:
+        display_state = getattr(match.ruleset, "display_state", None)
+        statuses = getattr(display_state, "dart_system_statuses", ())
+        return {
+            team_id: (
+                ammo,
+                phase,
+                remaining,
+                target,
+                result,
+            )
+            for team_id, ammo, _openings, phase, remaining, target, result in statuses
+        }
 
     def _advance_outpost_rotors(self, match: "Match") -> None:
         bases_by_team = {
