@@ -101,6 +101,7 @@ class RuleSetDisplayState:
     dart_system_statuses: tuple[
         tuple[str, int, int, str, float, str, str], ...
     ] = ()
+    dart_outcome_events: tuple[tuple[str, int, str, str], ...] = ()
     dart_effect_statuses: tuple[tuple[str, float, float], ...] = ()
 
 

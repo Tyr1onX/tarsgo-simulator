@@ -38,6 +38,9 @@ _DART_DETECTION_WINDOW_SECONDS = 40.0
 _DART_FIRST_CLOSE_COOLDOWN_SECONDS = 15.0
 _DART_DETECTION_REOPEN_SECONDS = 2.0
 _DART_MAX_PER_MATCH = 4
+# Rules Lab approximation: referee settlement follows a fixed one-second
+# simulated flight delay. V1.4.0 does not define Dart flight duration.
+_DART_RULES_LAB_FLIGHT_SECONDS = 1.0
 _DART_TARGET_MODES = {
     "fixed",
     "random-fixed",
@@ -167,9 +170,11 @@ class _TimedAttackBuff:
 
 
 @dataclass(frozen=True)
-class _DartProjectile:
+class _PendingDartAttempt:
     target_structure_id: str
     target_mode: str
+    launched_at: float
+    completes_at: float
     expires_at: float
 
 
@@ -186,9 +191,11 @@ class _DartSystemState:
     fixed_target_hits: int = 0
     fixed_base_hits: int = 0
     ai_last_fired_opening: int = 0
-    pending_projectiles: list[_DartProjectile] = field(default_factory=list)
+    pending_projectiles: list[_PendingDartAttempt] = field(default_factory=list)
     last_result: str = ""
     last_result_remaining: float = 0.0
+    outcome_sequence: int = 0
+    outcome_events: list[tuple[int, str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -2886,6 +2893,11 @@ class RMUC2026RegionalRules:
                 self._dart_display_status(team_id, state)
                 for team_id, state in sorted(self._dart_system_by_team.items())
             ),
+            dart_outcome_events=tuple(
+                (team_id, sequence, target_id, outcome)
+                for team_id, state in sorted(self._dart_system_by_team.items())
+                for sequence, target_id, outcome in state.outcome_events
+            ),
             dart_effect_statuses=tuple(
                 (
                     team_id,
@@ -3212,9 +3224,11 @@ class RMUC2026RegionalRules:
 
         state.darts_fired += 1
         state.pending_projectiles.append(
-            _DartProjectile(
+            _PendingDartAttempt(
                 target_structure_id=target.id,
                 target_mode=state.target_mode,
+                launched_at=now,
+                completes_at=now + _DART_RULES_LAB_FLIGHT_SECONDS,
                 expires_at=state.detector_window_ends_at,
             )
         )
@@ -3227,17 +3241,15 @@ class RMUC2026RegionalRules:
         state = self._dart_system_by_team.get(team_id)
         if state is None:
             return False
-        now = match.elapsed_time
-        state.pending_projectiles = [
-            projectile
-            for projectile in state.pending_projectiles
-            if projectile.expires_at > now + 1e-9
-        ]
         if not state.pending_projectiles:
             return False
-        state.pending_projectiles.pop(0)
+        attempt = state.pending_projectiles.pop(0)
         state.last_result = "飞镖未命中"
         state.last_result_remaining = 3.0
+        state.outcome_sequence += 1
+        state.outcome_events.append(
+            (state.outcome_sequence, attempt.target_structure_id, "miss")
+        )
         return True
 
     def record_dart_hit(
@@ -3292,6 +3304,10 @@ class RMUC2026RegionalRules:
             }[projectile.target_mode]
         )
         state.pending_projectiles.pop(0)
+        state.outcome_sequence += 1
+        state.outcome_events.append(
+            (state.outcome_sequence, target.id, "hit")
+        )
         match.apply_damage(
             target,
             damage,
@@ -3307,6 +3323,41 @@ class RMUC2026RegionalRules:
         state.last_result = f"命中{'基地' if target.type == 'base' else '前哨站'}"
         state.last_result_remaining = 3.0
         return True
+
+    def _resolve_completed_dart_attempts(self, match: "Match") -> None:
+        """Resolve due launches with a deterministic Rules Lab referee policy.
+
+        This is not an official hit-rate model. An attempt hits only when its
+        selected target is still legal and its detector is open at completion;
+        otherwise it is recorded as a miss. The one-second completion delay is
+        an explicit simulator approximation, not a V1.4.0 value.
+        """
+        if not any(
+            state.pending_projectiles
+            for state in self._dart_system_by_team.values()
+        ):
+            return
+        now = match.elapsed_time
+        match_ending = (
+            now >= self._time_limit - 1e-9
+            or any(not base.alive for base in self._base_by_team.values())
+        )
+        for team_id, state in sorted(self._dart_system_by_team.items()):
+            while state.pending_projectiles:
+                attempt = state.pending_projectiles[0]
+                if match_ending:
+                    self.record_dart_miss(match, team_id)
+                    continue
+                if now + 1e-9 < attempt.completes_at:
+                    break
+                if now >= attempt.expires_at - 1e-9:
+                    self.record_dart_miss(match, team_id)
+                elif not self.record_dart_hit(
+                    match,
+                    team_id,
+                    attempt.target_structure_id,
+                ):
+                    self.record_dart_miss(match, team_id)
 
     def update_dart_ai(self, match: "Match") -> None:
         """Use one shared deterministic policy for both RMUC spectator teams."""
@@ -3483,11 +3534,6 @@ class RMUC2026RegionalRules:
             return
         for state in self._dart_system_by_team.values():
             state.last_result_remaining = max(0.0, state.last_result_remaining - dt)
-            state.pending_projectiles = [
-                projectile
-                for projectile in state.pending_projectiles
-                if projectile.expires_at > now + 1e-9
-            ]
         for effects in self._dart_effects_by_team.values():
             effects.screen_obscured_remaining = max(
                 0.0,
@@ -5855,6 +5901,8 @@ class RMUC2026RegionalRules:
         if match.elapsed_time >= self._rebuild_cutoff - 1e-9:
             for state in self._team_states.values():
                 state.rebuild_progress_by_robot.clear()
+
+        self._resolve_completed_dart_attempts(match)
 
     def _respawn_progress_required(
         self,

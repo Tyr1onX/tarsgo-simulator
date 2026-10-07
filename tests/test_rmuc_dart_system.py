@@ -91,6 +91,138 @@ def test_dart_gate_and_target_eligibility_follow_v140_schedule() -> None:
     assert _structure(match, BLUE, "outpost").hp == 750
 
 
+def test_rules_lab_dart_attempt_automatically_hits_legal_outpost_once() -> None:
+    match = _match()
+    rules = match.ruleset
+    outpost = _structure(match, BLUE, "outpost")
+    starting_hp = outpost.hp
+    _open_and_fire(match, RED)
+    state = rules._dart_system_by_team[RED]
+    attempt = state.pending_projectiles[0]
+
+    _advance_to(match, attempt.completes_at)
+
+    assert outpost.hp == starting_hp - 750
+    assert state.last_result == "命中前哨站"
+    assert state.outcome_sequence == 1
+    assert state.pending_projectiles == []
+    assert not rules.record_dart_hit(match, RED, outpost.id)
+    assert not rules.record_dart_miss(match, RED)
+    assert outpost.hp == starting_hp - 750
+
+
+def test_rules_lab_dart_attempt_automatically_hits_legal_base() -> None:
+    match = _match()
+    rules = match.ruleset
+    _destroy_outpost(match, BLUE)
+    base = _structure(match, BLUE, "base")
+    starting_hp = base.hp
+    target_id = _open_and_fire(match, RED, "fixed")
+    state = rules._dart_system_by_team[RED]
+    attempt = state.pending_projectiles[0]
+
+    assert target_id == base.id
+    _advance_to(match, attempt.completes_at)
+
+    assert base.hp == starting_hp - 200
+    assert state.last_result == "命中基地"
+    assert state.pending_projectiles == []
+
+
+def test_automatic_moving_base_hit_reuses_existing_dart_effects() -> None:
+    match = _match()
+    rules = match.ruleset
+    _destroy_outpost(match, BLUE)
+    base = _structure(match, BLUE, "base")
+    infantry = _robot(match, "opponent-infantry-1")
+    starting_hp = base.hp
+    infantry_hp = infantry.hp
+    _open_and_fire(match, RED, "random-moving")
+    attempt = rules._dart_system_by_team[RED].pending_projectiles[0]
+
+    _advance_to(match, attempt.completes_at)
+
+    assert base.hp == starting_hp - 625
+    assert infantry.hp < infantry_hp
+    assert rules._team_states[BLUE].base_armor_deployed
+    assert rules._dart_effects_by_team[BLUE].screen_obscured_remaining == 10.0
+    assert rules._field_buff_zone_disabled(
+        rules._field_base_zone_by_team[BLUE].id
+    )
+
+
+def test_rules_lab_dart_attempt_misses_if_target_is_destroyed_in_flight() -> None:
+    match = _match()
+    rules = match.ruleset
+    outpost = _structure(match, BLUE, "outpost")
+    base = _structure(match, BLUE, "base")
+    base_starting_hp = base.hp
+    _open_and_fire(match, RED)
+    state = rules._dart_system_by_team[RED]
+    attempt = state.pending_projectiles[0]
+
+    outpost.hp = 0
+    outpost.alive = False
+    _advance_to(match, attempt.completes_at)
+
+    assert state.last_result == "飞镖未命中"
+    assert state.outcome_sequence == 1
+    assert state.pending_projectiles == []
+    assert base.hp == base_starting_hp
+    assert not rules.record_dart_hit(match, RED, outpost.id)
+    assert not rules.record_dart_miss(match, RED)
+
+
+def test_rules_lab_dart_attempt_times_out_as_miss_when_detector_window_closes() -> None:
+    match = _match()
+    rules = match.ruleset
+    outpost = _structure(match, BLUE, "outpost")
+    starting_hp = outpost.hp
+    _open_and_fire(match, RED)
+    state = rules._dart_system_by_team[RED]
+    attempt = state.pending_projectiles[0]
+
+    _advance_to(match, attempt.expires_at)
+
+    assert state.last_result == "飞镖未命中"
+    assert state.outcome_sequence == 1
+    assert state.pending_projectiles == []
+    assert outpost.hp == starting_hp
+
+
+def test_darts_with_same_completion_time_each_receive_one_referee_outcome() -> None:
+    match = _match()
+    rules = match.ruleset
+    outpost = _structure(match, BLUE, "outpost")
+    _open_and_fire(match, RED)
+    state = rules._dart_system_by_team[RED]
+    assert rules.fire_dart(match, RED)
+    completion = state.pending_projectiles[0].completes_at
+
+    _advance_to(match, completion)
+
+    assert len(state.outcome_events) == 2
+    assert [event[2] for event in state.outcome_events] == ["hit", "miss"]
+    assert state.pending_projectiles == []
+    assert outpost.hp == outpost.max_hp - 750
+
+
+def test_pending_dart_is_closed_as_miss_when_match_ends_before_flight_completion() -> None:
+    match = _match()
+    rules = match.ruleset
+    _open_and_fire(match, RED)
+    state = rules._dart_system_by_team[RED]
+    assert state.pending_projectiles[0].completes_at > match.elapsed_time
+    rules._time_limit = match.elapsed_time + 0.5
+
+    match.update(0.5)
+
+    assert match.finished
+    assert state.pending_projectiles == []
+    assert state.last_result == "飞镖未命中"
+    assert state.outcome_sequence == 1
+
+
 def test_dart_hit_window_reopens_after_two_seconds_and_expires_after_forty() -> None:
     match = _match()
     rules = match.ruleset
@@ -99,13 +231,14 @@ def test_dart_hit_window_reopens_after_two_seconds_and_expires_after_forty() -> 
     assert rules.record_dart_hit(match, RED, target_id)
     assert not rules.record_dart_hit(match, RED, target_id)
     _advance_to(match, 39.0)
-    assert rules.record_dart_hit(match, RED, target_id)
+    assert not rules.record_dart_hit(match, RED, target_id)
     assert _structure(match, BLUE, "outpost").hp == 0
 
     expired = _match()
     expired_target = _open_and_fire(expired, RED)
     _advance_to(expired, 77.0)
     assert not expired.ruleset.record_dart_hit(expired, RED, expired_target)
+    assert expired.ruleset._dart_system_by_team[RED].last_result == "飞镖未命中"
 
 
 def test_fixed_target_obstruction_duration_uses_official_hit_count() -> None:
@@ -380,8 +513,11 @@ def test_spectator_ai_uses_both_teams_with_fixed_seed_and_long_match_smoke() -> 
         left = first.ruleset._dart_system_by_team[team_id]
         right = second.ruleset._dart_system_by_team[team_id]
         assert (left.openings_used, left.darts_fired) == (2, 2)
+        assert left.pending_projectiles == []
+        assert [event[2] for event in left.outcome_events] == ["hit", "hit"]
         assert status_by_team[team_id] == (2, "closed")
         assert (left.openings_used, left.darts_fired) == (
             right.openings_used,
             right.darts_fired,
         )
+        assert left.outcome_events == right.outcome_events

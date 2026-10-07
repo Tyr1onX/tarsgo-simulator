@@ -370,6 +370,7 @@ class DartVisual:
     duration: float
     age: float = 0.0
     missed: bool = False
+    resolved: bool = False
 
     @property
     def progress(self) -> float:
@@ -579,9 +580,10 @@ class CombatVisualState:
     shake_cooldown_remaining: float = 0.0
     _before_cooldowns: dict[str, float] = field(default_factory=dict)
     _before_structure_shields: dict[str, int] = field(default_factory=dict)
-    _before_dart_statuses: dict[str, tuple[int, str, float, str, str]] = field(
-        default_factory=dict
-    )
+    _before_dart_statuses: dict[
+        str, tuple[int, str, float, str, str]
+    ] = field(default_factory=dict)
+    _before_dart_outcome_sequences: dict[str, int] = field(default_factory=dict)
 
     def reset(self, match: "Match") -> None:
         structure_statuses = self._structure_statuses(match)
@@ -633,6 +635,7 @@ class CombatVisualState:
         self._before_cooldowns.clear()
         self._before_structure_shields.clear()
         self._before_dart_statuses = dart_statuses
+        self._before_dart_outcome_sequences = self._dart_outcome_sequences(match)
 
     def begin_frame(self, match: "Match") -> None:
         self._before_cooldowns = {
@@ -640,6 +643,7 @@ class CombatVisualState:
         }
         structure_statuses = self._structure_statuses(match)
         self._before_dart_statuses = self._dart_statuses(match)
+        self._before_dart_outcome_sequences = self._dart_outcome_sequences(match)
         self._before_structure_shields = {}
         for robot in match.robots:
             self.robots.setdefault(
@@ -964,8 +968,10 @@ class CombatVisualState:
         dt: float,
     ) -> None:
         bases = [structure for structure in match.structures if structure.type == "base"]
+        structures_by_id = {structure.id: structure for structure in match.structures}
+        outcome_events = self._dart_outcome_events(match)
         for team_id in sorted(statuses):
-            ammo, phase, remaining, target_label, result = statuses[team_id]
+            ammo, phase, remaining, target_label, _result = statuses[team_id]
             launcher = self.dart_launchers.setdefault(
                 team_id,
                 DartLauncherVisualState(),
@@ -1023,22 +1029,24 @@ class CombatVisualState:
                             : len(self.dart_projectiles) - MAX_ACTIVE_DART_VISUALS
                         ]
 
-            if (
-                previous is not None
-                and result.startswith("命中")
-                and (result != previous[4] or ammo < previous[0])
-            ):
-                target_kind = "base" if "基地" in result else "outpost"
-                target = next(
+            previous_sequence = self._before_dart_outcome_sequences.get(team_id, 0)
+            for sequence, target_id, outcome in outcome_events.get(team_id, ()):
+                if sequence <= previous_sequence:
+                    continue
+                dart = next(
                     (
-                        structure
-                        for structure in match.structures
-                        if structure.team != team_id
-                        and structure.type == target_kind
+                        item
+                        for item in self.dart_projectiles
+                        if item.team_id == team_id and not item.resolved
                     ),
                     None,
                 )
-                if target is not None:
+                if dart is not None:
+                    dart.resolved = True
+                if outcome == "hit":
+                    target = structures_by_id.get(target_id)
+                    if target is None:
+                        continue
                     own_base = next(
                         (base for base in bases if base.team == team_id),
                         None,
@@ -1061,7 +1069,7 @@ class CombatVisualState:
                             target_kind="structure",
                             attacker_team_id=team_id,
                             direction=direction,
-                            event_sequence=max(0, previous[0] - ammo),
+                            event_sequence=sequence,
                             surface="dart-target",
                         )
                     )
@@ -1073,17 +1081,8 @@ class CombatVisualState:
                             duration,
                         )
                         target_state.impact_caliber = "dart"
-            if (
-                previous is not None
-                and result == "飞镖未命中"
-                and result != previous[4]
-            ):
-                pending = next(
-                    (dart for dart in reversed(self.dart_projectiles) if dart.team_id == team_id),
-                    None,
-                )
-                if pending is not None:
-                    pending.missed = True
+                elif outcome == "miss" and dart is not None:
+                    dart.missed = True
 
         active_darts: list[DartVisual] = []
         for dart in self.dart_projectiles:
@@ -1092,6 +1091,7 @@ class CombatVisualState:
                 active_darts.append(dart)
         self.dart_projectiles = active_darts
         self._before_dart_statuses = statuses
+        self._before_dart_outcome_sequences = self._dart_outcome_sequences(match)
 
     def _cap_impacts(self) -> None:
         if len(self.impacts) > MAX_ACTIVE_IMPACTS:
@@ -1112,6 +1112,32 @@ class CombatVisualState:
                 result,
             )
             for team_id, ammo, _openings, phase, remaining, target, result in statuses
+        }
+
+    @staticmethod
+    def _dart_outcome_events(
+        match: "Match",
+    ) -> dict[str, tuple[tuple[int, str, str], ...]]:
+        display_state = getattr(match.ruleset, "display_state", None)
+        events = getattr(display_state, "dart_outcome_events", ())
+        by_team: dict[str, list[tuple[int, str, str]]] = {}
+        for team_id, sequence, target_id, outcome in events:
+            by_team.setdefault(team_id, []).append(
+                (sequence, target_id, outcome)
+            )
+        return {
+            team_id: tuple(sorted(team_events))
+            for team_id, team_events in by_team.items()
+        }
+
+    @classmethod
+    def _dart_outcome_sequences(cls, match: "Match") -> dict[str, int]:
+        return {
+            team_id: max(
+                (sequence for sequence, _target_id, _outcome in events),
+                default=0,
+            )
+            for team_id, events in cls._dart_outcome_events(match).items()
         }
 
     def _advance_outpost_rotors(self, match: "Match") -> None:
