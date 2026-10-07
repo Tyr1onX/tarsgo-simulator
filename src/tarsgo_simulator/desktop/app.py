@@ -2766,6 +2766,7 @@ def _draw_rmuc_structure(
     impact_remaining: float = 0.0,
     impact_caliber: str = "17mm",
     shield_impact_remaining: float = 0.0,
+    rotor_angle: float = 0.0,
 ) -> int:
     profile = structure_visual_profile(structure_type)
     draw_color = color if alive else _blend_color(MUTED_COLOR, ARENA_FLOOR_DARK, 0.38)
@@ -2905,6 +2906,14 @@ def _draw_rmuc_structure(
                 pygame.draw.circle(screen, ARENA_GRID, lens_center, 1)
     else:
         screen.blit(sprite, sprite.get_rect(center=center))
+        if structure_type == "outpost" and alive:
+            _draw_outpost_rotor(
+                screen,
+                center=center,
+                size=size,
+                angle=rotor_angle,
+                team_color=color,
+            )
         if debug_geometry:
             if footprint_points:
                 pygame.draw.polygon(
@@ -3052,6 +3061,117 @@ def _draw_rmuc_structure(
             ),
         )
     return size
+
+
+def _draw_outpost_rotor(
+    screen: pygame.Surface,
+    *,
+    center: tuple[int, int],
+    size: int,
+    angle: float,
+    team_color: tuple[int, int, int],
+) -> None:
+    """Draw only the Outpost middle armor as a separately rotating layer."""
+    diameter = max(18, round(size * 1.05))
+    rotor = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+    rotor_center = (diameter // 2, diameter // 2)
+    radius = max(4, round(size * 0.38))
+    plate_half_width = max(1.0, size * 0.075)
+
+    # Mask the fixed sprite's central cross while leaving its outer base and
+    # motors stationary beneath the three official middle-armor modules.
+    pygame.draw.circle(
+        rotor,
+        (24, 30, 36, 255),
+        rotor_center,
+        max(3, round(size * 0.22)),
+    )
+    for module_index in range(3):
+        module_angle = angle - math.pi / 2 + module_index * math.tau / 3
+        direction = (math.cos(module_angle), math.sin(module_angle))
+        tangent = (-direction[1], direction[0])
+        inner_radius = size * 0.11
+        outer_radius = radius
+        inner_half_width = plate_half_width * 0.78
+        outer_half_width = plate_half_width * 0.60
+        inner_center = (
+            rotor_center[0] + direction[0] * inner_radius,
+            rotor_center[1] + direction[1] * inner_radius,
+        )
+        outer_center = (
+            rotor_center[0] + direction[0] * outer_radius,
+            rotor_center[1] + direction[1] * outer_radius,
+        )
+        points = [
+            (
+                round(inner_center[0] + tangent[0] * inner_half_width),
+                round(inner_center[1] + tangent[1] * inner_half_width),
+            ),
+            (
+                round(outer_center[0] + tangent[0] * outer_half_width),
+                round(outer_center[1] + tangent[1] * outer_half_width),
+            ),
+            (
+                round(outer_center[0] - tangent[0] * outer_half_width),
+                round(outer_center[1] - tangent[1] * outer_half_width),
+            ),
+            (
+                round(inner_center[0] - tangent[0] * inner_half_width),
+                round(inner_center[1] - tangent[1] * inner_half_width),
+            ),
+        ]
+        pygame.draw.polygon(rotor, (10, 14, 18, 255), points)
+        plate = [
+            (
+                round(inner_center[0] + tangent[0] * max(1.0, inner_half_width - 0.7)),
+                round(inner_center[1] + tangent[1] * max(1.0, inner_half_width - 0.7)),
+            ),
+            (
+                round(outer_center[0] + tangent[0] * max(1.0, outer_half_width - 0.7)),
+                round(outer_center[1] + tangent[1] * max(1.0, outer_half_width - 0.7)),
+            ),
+            (
+                round(outer_center[0] - tangent[0] * max(1.0, outer_half_width - 0.7)),
+                round(outer_center[1] - tangent[1] * max(1.0, outer_half_width - 0.7)),
+            ),
+            (
+                round(inner_center[0] - tangent[0] * max(1.0, inner_half_width - 0.7)),
+                round(inner_center[1] - tangent[1] * max(1.0, inner_half_width - 0.7)),
+            ),
+        ]
+        pygame.draw.polygon(rotor, (176, 186, 194, 255), plate)
+        slot_start = (
+            round(inner_center[0] + direction[0] * (outer_radius - inner_radius) * 0.35),
+            round(inner_center[1] + direction[1] * (outer_radius - inner_radius) * 0.35),
+        )
+        slot_end = (
+            round(inner_center[0] + direction[0] * (outer_radius - inner_radius) * 0.68),
+            round(inner_center[1] + direction[1] * (outer_radius - inner_radius) * 0.68),
+        )
+        pygame.draw.line(rotor, (48, 57, 64, 255), slot_start, slot_end, width=1)
+
+    pygame.draw.circle(
+        rotor,
+        (14, 19, 23, 255),
+        rotor_center,
+        max(2, round(size * 0.12)),
+    )
+    pygame.draw.circle(
+        rotor,
+        (191, 199, 204, 255),
+        rotor_center,
+        max(1, round(size * 0.055)),
+    )
+    led_angle = angle - math.pi / 2
+    led_center = (
+        round(rotor_center[0] + math.cos(led_angle) * radius * 0.78),
+        round(rotor_center[1] + math.sin(led_angle) * radius * 0.78),
+    )
+    pygame.draw.circle(rotor, (9, 13, 16, 255), led_center, max(2, round(size * 0.11)))
+    pygame.draw.circle(rotor, (*team_color, 255), led_center, max(1, round(size * 0.075)))
+
+    rotated = pygame.transform.rotate(rotor, -math.degrees(angle))
+    screen.blit(rotated, rotated.get_rect(center=center))
 
 
 def _rotate_point(
@@ -4277,6 +4397,12 @@ def _draw(
                 shield_impact_remaining=(
                     visual_structure.shield_impact_remaining
                     if visual_structure is not None
+                    else 0.0
+                ),
+                rotor_angle=(
+                    visual_state.outpost_rotors[structure.id].angle
+                    if visual_state is not None
+                    and structure.id in visual_state.outpost_rotors
                     else 0.0
                 ),
             )
