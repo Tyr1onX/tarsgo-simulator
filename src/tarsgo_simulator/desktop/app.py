@@ -4213,6 +4213,27 @@ def _draw_rmuc_dart_launchers(
         )
 
 
+def _draw_pellet_sprite(
+    screen: pygame.Surface,
+    viewport: Viewport,
+    position: tuple[float, float],
+    caliber: str,
+    *,
+    height: float = 0.0,
+    opacity: float = 1.0,
+) -> None:
+    size = (7, 7) if caliber == "17mm" else (11, 11)
+    sprite = ASSET_MANAGER.render(f"projectiles/{caliber}.png", size=size)
+    if sprite is None:
+        return
+    x, y = viewport.world_to_screen(position)
+    center = (round(x), round(y - viewport.world_length_to_screen(height)))
+    if opacity < 1.0:
+        sprite = sprite.copy()
+        sprite.set_alpha(round(opacity * 255))
+    screen.blit(sprite, sprite.get_rect(center=center))
+
+
 def _draw_visual_projectiles(
     screen: pygame.Surface,
     viewport: Viewport,
@@ -4220,25 +4241,22 @@ def _draw_visual_projectiles(
     match: Match | None = None,
 ) -> None:
     for projectile in visual_state.physical_projectiles.values():
-        start = viewport.world_to_screen(projectile.previous_position)
-        end = viewport.world_to_screen(projectile.position)
-        team_color = (
-            _rmuc_team_color(match, projectile.attacker_team_id)
-            if match
-            else TEAM_RED_COLOR
-        )
-        pygame.draw.line(
-            screen,
-            _blend_color(team_color, ARENA_FLOOR, 0.36),
-            (round(start[0]), round(start[1])),
-            (round(end[0]), round(end[1])),
-            width=1 if projectile.caliber == "17mm" else 2,
-        )
-        pygame.draw.circle(
-            screen,
-            (230, 236, 231),
-            (round(end[0]), round(end[1])),
-            2 if projectile.caliber == "17mm" else 3,
+        _draw_pellet_sprite(screen, viewport, projectile.position, projectile.caliber)
+
+    for rebound in visual_state.rebound_projectiles:
+        ground = viewport.world_to_screen(rebound.position)
+        if rebound.height > 0:
+            # A compact ground shadow is enough to convey height in top-down 2D.
+            shadow_width = 3 if rebound.caliber == "17mm" else 5
+            pygame.draw.ellipse(
+                screen,
+                (28, 35, 35),
+                (round(ground[0] - shadow_width / 2), round(ground[1]),
+                 shadow_width, 2),
+            )
+        _draw_pellet_sprite(
+            screen, viewport, rebound.position, rebound.caliber,
+            height=rebound.height, opacity=rebound.opacity,
         )
 
     for projectile in visual_state.projectiles:
