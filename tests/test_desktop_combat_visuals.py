@@ -270,14 +270,20 @@ def test_impact_particles_are_deterministic_bounded_and_caliber_specific() -> No
 
     assert small.particles == repeated.particles
     assert len(small.particles) < len(large.particles) < len(dart.particles)
-    assert {particle.kind for particle in small.particles} >= {"spark", "dust"}
+    assert {particle.kind for particle in small.particles} >= {"spark", "metal"}
     assert {particle.kind for particle in dart.particles} >= {
-        "spark", "metal", "dust", "team"
+        "spark", "metal", "dust"
     }
+    assert "smoke" in {particle.kind for particle in large.particles}
     assert max(particle.lifetime for particle in small.particles) < max(
         particle.lifetime for particle in large.particles
     ) < max(particle.lifetime for particle in dart.particles)
-    assert MAX_ACTIVE_IMPACTS * len(dart.particles) > MAX_VISIBLE_IMPACT_PARTICLES
+    assert len(small.particles) == 4
+    assert len(large.particles) == 10
+    assert len(dart.particles) == 14
+    assert max(particle.lifetime for particle in small.particles) < 0.11
+    assert "team" not in {particle.kind for particle in dart.particles}
+    assert MAX_ACTIVE_IMPACTS * len(dart.particles) <= MAX_VISIBLE_IMPACT_PARTICLES
 
 
 def test_immune_and_nonarmor_contacts_use_compact_surface_specific_feedback() -> None:
@@ -294,6 +300,8 @@ def test_immune_and_nonarmor_contacts_use_compact_surface_specific_feedback() ->
 
     assert len(immune.particles) < len(damage.particles)
     assert "absorbed" in {particle.kind for particle in immune.particles}
+    assert {particle.kind for particle in chassis.particles} == {"metal", "dust"}
+    assert {particle.kind for particle in obstacle.particles} == {"debris", "dust"}
     assert len(chassis.particles) < len(
         ImpactEffect((0.0, 0.0), "17mm", 0.12, 0.12).particles
     )
@@ -486,6 +494,11 @@ def test_destroy_and_respawn_visual_lifecycles_are_short_and_local() -> None:
     assert visual.destroy_remaining > 0
     assert visual.respawn_remaining == 0
     assert visual.destroy_progress == pytest.approx(0.0)
+    assert visual.muzzle_remaining == 0
+    assert visual.target_hold_remaining == 0
+    assert visual.previous_position == visual.position
+    assert visual.previous_body_angle == visual.body_angle
+    assert visual.previous_turret_angle == visual.turret_angle
 
     visual.advance_timers(visual.destroy_remaining / 2)
     assert 0 < visual.destroy_progress < 1
@@ -498,6 +511,65 @@ def test_destroy_and_respawn_visual_lifecycles_are_short_and_local() -> None:
     visual.advance_timers(visual.respawn_remaining)
     assert visual.respawn_remaining == 0
     assert visual.respawn_progress == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("robot_type", ("hero", "drone"))
+def test_dead_robot_visual_freezes_pose_and_respawn_snaps_without_interpolation(
+    robot_type: str,
+) -> None:
+    match = _match()
+    visual_state = CombatVisualState()
+    visual_state.reset(match)
+    robot = next(robot for robot in match.robots if robot.type == robot_type)
+    state = visual_state.robots[robot.id]
+    robot.alive = True
+    robot.hp = robot.max_hp
+    state.alive = True
+
+    robot.position = (robot.position[0] + 120.0, robot.position[1] + 45.0)
+    robot.alive = False
+    robot.hp = 0
+    visual_state.after_match_update(match, 1.0 / 60.0)
+    death_pose = state.position
+    death_body = state.body_angle
+    death_turret = state.turret_angle
+    assert state.destroy_remaining > 0
+
+    robot.position = (robot.position[0] + 500.0, robot.position[1] + 200.0)
+    robot.chassis_angle += 1.2
+    robot.turret_angle -= 1.4
+    visual_state.after_match_update(match, 1.0 / 60.0)
+    assert state.position == death_pose
+    assert state.body_angle == death_body
+    assert state.turret_angle == death_turret
+
+    robot.alive = True
+    robot.hp = robot.max_hp
+    robot.position = (2400.0, 3100.0)
+    robot.chassis_angle = 0.4
+    robot.turret_angle = -0.3
+    visual_state.after_match_update(match, 1.0 / 60.0)
+    assert state.position == robot.position
+    assert state.previous_position == robot.position
+    assert state.interpolated_position(0.5) == robot.position
+    assert state.turret_angle == pytest.approx(robot.turret_angle)
+    assert state.respawn_remaining > 0
+
+
+def test_temporary_chassis_power_off_keeps_live_robot_presentation() -> None:
+    match = _match()
+    robot = next(robot for robot in match.robots if robot.type == "hero")
+    state = CombatVisualState()
+    state.reset(match)
+    chassis = match.ruleset._chassis_power_by_robot[robot.id]
+    chassis.power_off_remaining = 2.0
+
+    state.after_match_update(match, 1.0 / 60.0)
+
+    assert robot.alive
+    assert state.robots[robot.id].alive
+    assert state.robots[robot.id].destroy_remaining == 0
+    assert state.robots[robot.id].respawn_remaining == 0
 
 
 def test_impact_and_shield_impact_lifecycles_expire() -> None:
