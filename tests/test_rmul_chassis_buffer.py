@@ -176,8 +176,9 @@ def test_powered_off_robot_remains_dynamic_blocker_and_intent_draws_power() -> N
 
     match.update(0.1)
 
-    assert mover.position == start
+    assert mover.position != start
     assert blocker.position == (330.0, 260.0)
+    assert math.dist(mover.position, blocker.position) >= match.map.collision_radius * 2
     assert math.isclose(
         match.ruleset._robot_chassis_states[HERO].buffer_energy,
         59.5,

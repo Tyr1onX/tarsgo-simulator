@@ -35,6 +35,11 @@ _RMUC_ROBOT_NAMES = {
 _PATHFINDING_WORK_BUDGET_PER_TICK = 512
 _PATHFINDING_WORK_QUANTUM = 16
 _PATH_CACHE_MAX_ENTRIES = 512
+_LOCAL_AVOIDANCE_DISTANCE = 2.2
+_STUCK_RECOVERY_AFTER_SECONDS = 0.75
+_STUCK_REPATH_AFTER_SECONDS = 1.75
+_STUCK_REPATH_COOLDOWN_SECONDS = 1.5
+_STUCK_PROGRESS_EPSILON = 0.05
 
 
 @dataclass(slots=True)
@@ -44,8 +49,9 @@ class _AIPathPlan:
     goal: tuple[float, float]
     pending_searches: int = 0
     structure_id: str | None = None
+    preferred_approach_index: int | None = None
     candidates: list[
-        tuple[bool, float, int, list[tuple[float, float]]]
+        tuple[int, bool, float, int, list[tuple[float, float]]]
     ] = field(default_factory=list)
 
 
@@ -179,6 +185,7 @@ class Match:
             str,
             tuple[str | None, tuple[float, float]],
         ] = {}
+        self._ai_assigned_approach_slots: dict[str, tuple[str, int]] = {}
         self._pending_ai_paths: dict[str, _AIPathPlan] = {}
         self._path_work_queue: deque[_AIPathSearchJob] = deque()
         self._path_cache: OrderedDict[
@@ -196,6 +203,25 @@ class Match:
             "node_expansions": 0,
             "max_queue_length": 0,
         }
+        self._movement_counters = {
+            "blocked_ticks": 0,
+            "blocked_events": 0,
+            "yield_decisions": 0,
+            "local_avoidance_attempts": 0,
+            "local_avoidance_moves": 0,
+            "stuck_recovery_attempts": 0,
+            "stuck_recovery_successes": 0,
+            "stuck_path_replans": 0,
+        }
+        self._blocked_seconds_by_robot = {robot.id: 0.0 for robot in self.robots}
+        self._stuck_seconds_by_robot = {robot.id: 0.0 for robot in self.robots}
+        self._stuck_goal_by_robot: dict[str, tuple[float, float]] = {}
+        self._best_goal_distance_by_robot: dict[str, float] = {}
+        self._was_blocked = {robot.id: False for robot in self.robots}
+        self._stuck_recovery_after = {robot.id: 0.0 for robot in self.robots}
+        self._stuck_repath_after = {robot.id: 0.0 for robot in self.robots}
+        self._local_detour_by_robot: dict[str, tuple[float, float]] = {}
+        self._local_avoidance_side_by_robot: dict[str, int] = {}
         self._ai_sticky_until = {
             robot.id: 0.0
             for robot in self.robots
@@ -237,6 +263,11 @@ class Match:
 
     def ai_intent(self, robot_id: str) -> str | None:
         return self._ai_intents.get(robot_id)
+
+    @property
+    def movement_diagnostics(self) -> dict[str, int]:
+        """Return a snapshot of deterministic local-movement counters."""
+        return dict(self._movement_counters)
 
     def ai_team_strategy(self, team_id: str) -> str | None:
         """Return the spectator AI's current team-level strategy label."""
@@ -462,7 +493,11 @@ class Match:
             math.dist(first, second)
             for first, second in zip(path, path[1:])
         )
-        plan.candidates.append((not clear_shot, path_length, index, path))
+        slot_penalty = int(
+            plan.preferred_approach_index is not None
+            and index != plan.preferred_approach_index
+        )
+        plan.candidates.append((slot_penalty, not clear_shot, path_length, index, path))
 
     def _commit_ai_path_plan(self, plan: _AIPathPlan) -> None:
         robot = next(
@@ -478,7 +513,28 @@ class Match:
             return
         self._pending_ai_paths.pop(plan.robot_id, None)
         valid_candidates = []
-        for no_clear_shot, _old_length, index, path in plan.candidates:
+        occupied_approaches = {
+            index
+            for other_id, (other_target, index)
+            in self._ai_assigned_approach_slots.items()
+            if (
+                other_id != robot.id
+                and other_target == plan.target_key
+                and any(
+                    teammate.id == other_id
+                    and teammate.team == robot.team
+                    and teammate.alive
+                    for teammate in self.robots
+                )
+            )
+        }
+        for (
+            slot_penalty,
+            no_clear_shot,
+            _old_length,
+            index,
+            path,
+        ) in plan.candidates:
             if not path:
                 continue
             rebased = [robot.position, *path[1:]]
@@ -490,13 +546,27 @@ class Match:
                     math.dist(first, second)
                     for first, second in zip(rebased, rebased[1:])
                 )
+                occupied_penalty = int(index in occupied_approaches)
                 valid_candidates.append(
-                    (no_clear_shot, path_length, index, rebased)
+                    (
+                        occupied_penalty,
+                        slot_penalty,
+                        no_clear_shot,
+                        path_length,
+                        index,
+                        rebased,
+                    )
                 )
         if valid_candidates:
-            path = min(valid_candidates, key=lambda item: item[:3])[3]
+            chosen = min(valid_candidates, key=lambda item: item[:5])
+            path = chosen[5]
             robot.set_path(path)
             self._ai_path_targets[plan.robot_id] = (plan.target_key, plan.goal)
+            if plan.structure_id is not None and plan.target_key is not None:
+                self._ai_assigned_approach_slots[robot.id] = (
+                    plan.target_key,
+                    chosen[4],
+                )
         elif plan.candidates:
             self._request_ai_path(
                 robot,
@@ -622,6 +692,21 @@ class Match:
                     self.map.structure_approach_points(structure_id)
                 )
             ]
+            if approaches:
+                teammates = sorted(
+                    (
+                        item
+                        for item in self.robots
+                        if item.team == robot.team
+                        and item.alive
+                        and not item.aerial
+                    ),
+                    key=lambda item: item.id,
+                )
+                if robot in teammates:
+                    plan.preferred_approach_index = (
+                        teammates.index(robot) % len(approaches)
+                    )
         else:
             approaches = [(0, goal, False)]
 
@@ -741,38 +826,364 @@ class Match:
                 if movement_allowed[robot.id]
                 else (robot.position, list(robot.path))
             )
-
-        blocked: set[str] = set()
+        intended_to_move = {
+            robot.id: (
+                movement_allowed[robot.id]
+                and math.dist(robot.position, proposals[robot.id][0]) > 1e-8
+            )
+            for robot in self.robots
+        }
         minimum_distance = self.map.collision_radius * 2
-        while True:
-            final_positions = {
-                robot.id: (
-                    robot.position if robot.id in blocked else proposals[robot.id][0]
-                )
-                for robot in self.robots
-            }
-            conflicts: set[str] = set()
-            for index, first in enumerate(self.robots):
-                for second in self.robots[index + 1 :]:
-                    if first.aerial or second.aerial:
+        priority = sorted(
+            self.robots,
+            key=lambda robot: (
+                int(
+                    math.dist(robot.position, proposals[robot.id][0]) > 1e-8
+                    and movement_allowed[robot.id]
+                ),
+                robot.id,
+            ),
+        )
+        active_detours = dict(self._local_detour_by_robot)
+        avoidance_sides = dict(self._local_avoidance_side_by_robot)
+        avoidance_moves: set[str] = set()
+
+        # Resolve one conflict at a time in a stable order. The lower-priority
+        # mover first tries a deterministic side-step; if the pair is still too
+        # close during the first sidestep tick, the right-of-way robot waits for
+        # that tick instead of permanently freezing both paths.
+        iteration_limit = max(1, len(priority) * len(priority) * 2)
+        for _ in range(iteration_limit):
+            conflict_pair = None
+            for index, first in enumerate(priority):
+                if first.aerial:
+                    continue
+                for second in priority[index + 1 :]:
+                    if second.aerial:
                         continue
                     if _movement_conflicts(
                         first.position,
-                        final_positions[first.id],
+                        proposals[first.id][0],
                         second.position,
-                        final_positions[second.id],
+                        proposals[second.id][0],
                         minimum_distance,
                     ):
-                        conflicts.update((first.id, second.id))
-
-            new_conflicts = conflicts - blocked
-            if not new_conflicts:
+                        conflict_pair = first, second
+                        break
+                if conflict_pair is not None:
+                    break
+            if conflict_pair is None:
                 break
-            blocked.update(new_conflicts)
+
+            winner, yielding = conflict_pair
+            self._movement_counters["yield_decisions"] += 1
+            changed = False
+            candidates = self._local_avoidance_proposals(
+                yielding,
+                winner,
+                proposals[yielding.id],
+                active_detours.get(yielding.id),
+                avoidance_sides.get(yielding.id),
+                dt,
+                minimum_distance,
+            )
+            if candidates:
+                self._movement_counters["local_avoidance_attempts"] += 1
+            for proposal, detour_goal, side in candidates:
+                conflicts = [
+                    other
+                    for other in priority
+                    if other.id != yielding.id
+                    and not other.aerial
+                    and _movement_conflicts(
+                        yielding.position,
+                        proposal[0],
+                        other.position,
+                        proposals[other.id][0],
+                        minimum_distance,
+                    )
+                ]
+                if not conflicts:
+                    proposals[yielding.id] = proposal
+                    active_detours[yielding.id] = detour_goal
+                    avoidance_sides[yielding.id] = side
+                    avoidance_moves.add(yielding.id)
+                    changed = True
+                    break
+                if conflicts == [winner] and not _movement_conflicts(
+                    yielding.position,
+                    proposal[0],
+                    winner.position,
+                    winner.position,
+                    minimum_distance,
+                ):
+                    proposals[yielding.id] = proposal
+                    proposals[winner.id] = (winner.position, list(winner.path))
+                    active_detours[yielding.id] = detour_goal
+                    avoidance_sides[yielding.id] = side
+                    avoidance_moves.add(yielding.id)
+                    changed = True
+                    break
+
+            if not changed:
+                # Keep the requested route intact while yielding. A second
+                # stable pass will also stop the conflicting right-of-way move
+                # if neither a side-step nor the original route is safe.
+                if math.dist(yielding.position, proposals[yielding.id][0]) > 1e-8:
+                    proposals[yielding.id] = (
+                        yielding.position,
+                        list(yielding.path),
+                    )
+                    changed = True
+                elif math.dist(winner.position, proposals[winner.id][0]) > 1e-8:
+                    proposals[winner.id] = (winner.position, list(winner.path))
+                    changed = True
+            if not changed:
+                break
+
+        # A dense knot can create new crossings as one robot yields. If bounded
+        # local resolution cannot settle it, pause only the remaining conflict
+        # participants for this tick; their old paths remain available.
+        for _ in range(len(priority)):
+            conflicts = [
+                (first, second)
+                for index, first in enumerate(priority)
+                if not first.aerial
+                for second in priority[index + 1 :]
+                if not second.aerial
+                and _movement_conflicts(
+                    first.position,
+                    proposals[first.id][0],
+                    second.position,
+                    proposals[second.id][0],
+                    minimum_distance,
+                )
+            ]
+            if not conflicts:
+                break
+            for first, second in conflicts:
+                proposals[first.id] = (first.position, list(first.path))
+                proposals[second.id] = (second.position, list(second.path))
 
         for robot in self.robots:
-            if movement_allowed[robot.id] and robot.id not in blocked:
+            start = robot.position
+            if movement_allowed[robot.id]:
                 robot.commit_movement(proposals[robot.id])
+            moved = math.dist(start, robot.position) > 1e-8
+            if moved and robot.id in avoidance_moves:
+                self._movement_counters["local_avoidance_moves"] += 1
+            blocked = intended_to_move[robot.id] and not moved
+            if blocked:
+                self._movement_counters["blocked_ticks"] += 1
+                if not self._was_blocked[robot.id]:
+                    self._movement_counters["blocked_events"] += 1
+                self._was_blocked[robot.id] = True
+                self._blocked_seconds_by_robot[robot.id] += max(0.0, dt)
+            else:
+                self._was_blocked[robot.id] = False
+                self._blocked_seconds_by_robot[robot.id] = 0.0
+
+            if intended_to_move[robot.id] and robot.path:
+                goal = robot.path[-1]
+                remaining = math.dist(robot.position, goal)
+                previous_goal = self._stuck_goal_by_robot.get(robot.id)
+                best_remaining = self._best_goal_distance_by_robot.get(
+                    robot.id
+                )
+                if previous_goal != goal or best_remaining is None:
+                    self._stuck_seconds_by_robot[robot.id] = 0.0
+                    best_remaining = remaining
+                elif remaining < best_remaining - _STUCK_PROGRESS_EPSILON:
+                    self._stuck_seconds_by_robot[robot.id] = 0.0
+                    best_remaining = remaining
+                else:
+                    self._stuck_seconds_by_robot[robot.id] += max(0.0, dt)
+                self._stuck_goal_by_robot[robot.id] = goal
+                self._best_goal_distance_by_robot[robot.id] = best_remaining
+            else:
+                self._stuck_seconds_by_robot[robot.id] = 0.0
+                self._stuck_goal_by_robot.pop(robot.id, None)
+                self._best_goal_distance_by_robot.pop(robot.id, None)
+
+            detour_goal = active_detours.get(robot.id)
+            if detour_goal is not None and detour_goal not in robot.path:
+                active_detours.pop(robot.id, None)
+                avoidance_sides.pop(robot.id, None)
+
+            if blocked:
+                self._recover_stuck_robot(
+                    robot,
+                    minimum_distance,
+                    active_detours,
+                    avoidance_sides,
+                )
+
+        self._local_detour_by_robot = active_detours
+        self._local_avoidance_side_by_robot = avoidance_sides
+
+    def _local_avoidance_proposals(
+        self,
+        robot: Robot,
+        blocker: Robot,
+        current_proposal: MovementProposal,
+        active_detour: tuple[float, float] | None,
+        active_side: int | None,
+        dt: float,
+        minimum_distance: float,
+    ) -> list[tuple[MovementProposal, tuple[float, float], int]]:
+        if active_detour is not None and active_detour in robot.path:
+            return [(current_proposal, active_detour, active_side or 1)]
+        if not robot.path or dt <= 0.0 or robot.speed <= 0.0:
+            return []
+
+        away_x = robot.position[0] - blocker.position[0]
+        away_y = robot.position[1] - blocker.position[1]
+        away_length = math.hypot(away_x, away_y)
+        if away_length <= 1e-8:
+            away_x = 1.0 if robot.id > blocker.id else -1.0
+            away_y = 0.0
+        else:
+            away_x /= away_length
+            away_y /= away_length
+
+        move_x = current_proposal[0][0] - robot.position[0]
+        move_y = current_proposal[0][1] - robot.position[1]
+        move_length = math.hypot(move_x, move_y)
+        if move_length > 1e-8:
+            move_x /= move_length
+            move_y /= move_length
+        else:
+            move_x, move_y = -away_y, away_x
+        tangent_x, tangent_y = -move_y, move_x
+
+        preferred_side = active_side
+        if preferred_side is None:
+            stable_value = sum(
+                (index + 1) * ord(char)
+                for index, char in enumerate(robot.id)
+            )
+            preferred_side = 1 if stable_value % 2 == 0 else -1
+        result = []
+        for side in (preferred_side, -preferred_side):
+            direction_x = away_x * 0.82 + tangent_x * side * 0.57
+            direction_y = away_y * 0.82 + tangent_y * side * 0.57
+            direction_length = math.hypot(direction_x, direction_y)
+            if direction_length <= 1e-8:
+                continue
+            direction_x /= direction_length
+            direction_y /= direction_length
+            for multiplier in (_LOCAL_AVOIDANCE_DISTANCE, 3.0, 3.8):
+                distance = max(
+                    minimum_distance * multiplier,
+                    robot.speed * 0.45,
+                )
+                goal = (
+                    robot.position[0] + direction_x * distance,
+                    robot.position[1] + direction_y * distance,
+                )
+                if (
+                    not self.map.is_passable(goal)
+                    or not self.map.can_traverse(robot.position, goal)
+                    or robot.path
+                    and not self.map.can_traverse(goal, robot.path[0])
+                ):
+                    continue
+                detour_path = [goal, *robot.path]
+                original_path = robot.path
+                try:
+                    robot.path = detour_path
+                    proposal = robot.propose_movement(dt, self.map)
+                finally:
+                    robot.path = original_path
+                if math.dist(robot.position, proposal[0]) <= 1e-8:
+                    continue
+                result.append((proposal, goal, side))
+        return result
+
+    def _recover_stuck_robot(
+        self,
+        robot: Robot,
+        minimum_distance: float,
+        active_detours: dict[str, tuple[float, float]],
+        avoidance_sides: dict[str, int],
+    ) -> None:
+        stuck_seconds = self._stuck_seconds_by_robot[robot.id]
+        now = self.elapsed_time
+        if (
+            stuck_seconds >= _STUCK_RECOVERY_AFTER_SECONDS
+            and now >= self._stuck_recovery_after[robot.id]
+        ):
+            self._movement_counters["stuck_recovery_attempts"] += 1
+            self._stuck_recovery_after[robot.id] = (
+                now + _STUCK_RECOVERY_AFTER_SECONDS
+            )
+            active_detour = active_detours.get(robot.id)
+            has_active_detour = active_detour is not None and active_detour in robot.path
+            nearby = sorted(
+                (
+                    other
+                    for other in self.robots
+                    if other.id != robot.id
+                    and not other.aerial
+                    and math.dist(robot.position, other.position)
+                    <= minimum_distance * 3.0
+                ),
+                key=lambda other: (math.dist(robot.position, other.position), other.id),
+            )
+            if nearby and not has_active_detour:
+                candidates = self._local_avoidance_proposals(
+                    robot,
+                    nearby[0],
+                    (robot.position, list(robot.path)),
+                    None,
+                    avoidance_sides.get(robot.id),
+                    max(1.0 / 60.0, min(0.05, _STUCK_RECOVERY_AFTER_SECONDS)),
+                    minimum_distance,
+                )
+                if candidates:
+                    _proposal, goal, side = candidates[0]
+                    if goal not in robot.path:
+                        robot.path.insert(0, goal)
+                    active_detours[robot.id] = goal
+                    avoidance_sides[robot.id] = side
+                    self._movement_counters["stuck_recovery_successes"] += 1
+
+        if (
+            stuck_seconds < _STUCK_REPATH_AFTER_SECONDS
+            or now < self._stuck_repath_after[robot.id]
+            or not robot.path
+        ):
+            return
+        pending = self._pending_ai_paths.get(robot.id)
+        target_key = self._ai_target_keys.get(robot.id)
+        if pending is not None and pending.target_key == target_key:
+            return
+        structure_id = (
+            target_key.removeprefix("structure:")
+            if target_key is not None and target_key.startswith("structure:")
+            else None
+        )
+        structure = next(
+            (item for item in self.structures if item.id == structure_id),
+            None,
+        )
+        tracked = self._ai_path_targets.get(robot.id)
+        goal = (
+            structure.position
+            if structure is not None
+            else tracked[1]
+            if tracked is not None and tracked[0] == target_key
+            else robot.path[-1]
+        )
+        self._ai_path_targets.pop(robot.id, None)
+        self._request_ai_path(
+            robot,
+            goal,
+            target_key=target_key,
+            structure_id=structure_id,
+        )
+        self._movement_counters["stuck_path_replans"] += 1
+        self._stuck_repath_after[robot.id] = now + _STUCK_REPATH_COOLDOWN_SECONDS
 
     def _build_rmuc_ai_rng(self) -> dict[str, random.Random]:
         if not self._rmuc_spectator_ai:
@@ -847,6 +1258,7 @@ class Match:
         self._ai_target_keys[robot.id] = target_key
         if previous != target_key:
             self._cancel_ai_path_request(robot.id)
+            self._ai_assigned_approach_slots.pop(robot.id, None)
         if not sticky or target_key is None:
             self._ai_sticky_until[robot.id] = self.elapsed_time
         elif target_key != previous:
