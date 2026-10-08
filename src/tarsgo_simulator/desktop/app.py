@@ -10,6 +10,7 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.statistics import BattleReport
 from tarsgo_simulator.desktop.camera import SpectatorCamera
 from tarsgo_simulator.desktop.assets import (
     ASSET_MANAGER,
@@ -4767,6 +4768,11 @@ def _draw(
     screen.fill(BACKGROUND)
     hud_font = hud_font or small_font
     display_state = match.ruleset.display_state
+    progression_by_robot = {
+        robot_id: (level, experience)
+        for robot_id, level, experience, _level_cap
+        in display_state.robot_progression
+    } if display_state is not None else {}
     is_rmuc = _is_rmuc_rules_lab(match)
     robot_statuses = (
         dict(display_state.robot_statuses)
@@ -5159,6 +5165,7 @@ def _draw(
             body_rect.center = map_centers[robot.id]
             robot_body_rects[robot.id] = body_rect
     occupied_map_labels: list[pygame.Rect] = []
+    occupied_level_tags: list[pygame.Rect] = []
     for robot in match.robots:
         center = map_centers[robot.id]
         if (
@@ -5271,6 +5278,38 @@ def _draw(
                     (bar_x, bar_y, hp_width, bar_height),
                 )
 
+        progression = progression_by_robot.get(robot.id)
+        if progression is not None:
+            level_surface = hud_font.render(
+                f"LV {progression[0]}",
+                True,
+                TEXT_COLOR,
+            )
+            level_rect = _robot_level_tag_rect(
+                level_surface,
+                robot_id=robot.id,
+                center=center,
+                radius=radius,
+                field_rect=field_rect,
+                robot_body_rects=robot_body_rects,
+                occupied_tags=occupied_level_tags,
+            )
+            occupied_level_tags.append(level_rect)
+            pygame.draw.rect(
+                screen,
+                PANEL_BACKGROUND,
+                level_rect,
+                border_radius=4,
+            )
+            pygame.draw.rect(
+                screen,
+                color,
+                level_rect,
+                width=1,
+                border_radius=4,
+            )
+            screen.blit(level_surface, level_surface.get_rect(center=level_rect.center))
+
         robot_label = labels[robot.id]
         if is_rmuc and debug_geometry:
             map_label = robot_label
@@ -5375,6 +5414,246 @@ def _draw(
             small_font,
             inspector_open=inspector_open,
         )
+
+    if match.finished:
+        _draw_battle_report(
+            screen,
+            font,
+            small_font,
+            hud_font,
+            match,
+            report=match.battle_report(progression=progression_by_robot),
+        )
+
+
+def _draw_battle_report(
+    screen: pygame.Surface,
+    title_font: pygame.font.Font,
+    body_font: pygame.font.Font,
+    micro_font: pygame.font.Font,
+    match: Match,
+    *,
+    report: BattleReport | None = None,
+) -> None:
+    """Render a frozen, event-backed results overlay above the final frame."""
+    report = report or match.battle_report()
+    dim = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+    dim.fill((5, 9, 14, 218))
+    screen.blit(dim, (0, 0))
+
+    card = pygame.Rect(34, 30, screen.get_width() - 68, screen.get_height() - 60)
+    pygame.draw.rect(screen, PANEL_BACKGROUND, card, border_radius=15)
+    pygame.draw.rect(screen, PANEL_BORDER, card, width=1, border_radius=15)
+    pygame.draw.rect(
+        screen,
+        (92, 190, 171),
+        pygame.Rect(card.x + 1, card.y + 1, card.width - 2, 4),
+        border_radius=2,
+    )
+
+    kicker = micro_font.render("TARS-GO  /  BATTLE REPORT", True, (129, 195, 180))
+    screen.blit(kicker, (card.x + 28, card.y + 19))
+    title = title_font.render("终场战报", True, TEXT_COLOR)
+    screen.blit(title, (card.x + 26, card.y + 39))
+    winner_text = (
+        f"{match.team_name(report.winner_id)} 获胜"
+        if report.winner_id is not None
+        else "平局"
+    )
+    winner_color = (
+        _rmuc_team_color(match, report.winner_id)
+        if report.winner_id is not None
+        else WARNING_COLOR
+    )
+    winner = body_font.render(winner_text, True, winner_color)
+    screen.blit(
+        winner,
+        winner.get_rect(midright=(card.right - 30, card.y + 56)),
+    )
+    duration = _format_match_duration(report.elapsed_seconds)
+    duration_surface = micro_font.render(f"比赛时长  {duration}", True, MUTED_COLOR)
+    screen.blit(
+        duration_surface,
+        duration_surface.get_rect(midright=(card.right - 30, card.y + 83)),
+    )
+
+    team_stats = {team.team_id: team for team in report.teams}
+    robots_by_team: dict[str, list] = {team_id: [] for team_id in team_stats}
+    for robot in report.robots:
+        robots_by_team.setdefault(robot.team_id, []).append(robot)
+    teams = [team.team_id for team in match.config.scenario.teams.values()]
+    panel_gap = 16
+    panel_width = (card.width - 56 - panel_gap) // 2
+    panel_top = card.y + 112
+    summary_height = 175
+    table_top = panel_top + summary_height + 12
+    table_height = card.bottom - table_top - 42
+    labels = _rmuc_robot_labels(match)
+
+    for index, team_id in enumerate(teams[:2]):
+        team = team_stats[team_id]
+        x = card.x + 28 + index * (panel_width + panel_gap)
+        panel = pygame.Rect(x, panel_top, panel_width, summary_height)
+        color = _rmuc_team_color(match, team_id)
+        pygame.draw.rect(screen, PANEL_SECTION, panel, border_radius=9)
+        pygame.draw.rect(screen, PANEL_BORDER, panel, width=1, border_radius=9)
+        pygame.draw.rect(
+            screen,
+            color,
+            pygame.Rect(panel.x, panel.y, 4, panel.height),
+            border_top_left_radius=8,
+            border_bottom_left_radius=8,
+        )
+        name = body_font.render(match.team_name(team_id), True, color)
+        screen.blit(name, (panel.x + 16, panel.y + 10))
+        damage = title_font.render(f"{team.damage_dealt:,}", True, TEXT_COLOR)
+        screen.blit(damage, (panel.x + 16, panel.y + 38))
+        damage_label = micro_font.render("造成的实际 HP 伤害", True, MUTED_COLOR)
+        screen.blit(damage_label, (panel.x + 18, panel.y + 74))
+
+        shield_text = f"虚拟护盾吸收  {team.virtual_shield_absorbed:,}"
+        shield_surface = micro_font.render(shield_text, True, SHIELD_COLOR)
+        screen.blit(shield_surface, (panel.x + 16, panel.y + 99))
+        structure_text = (
+            f"基地 {team.base_hp if team.base_hp is not None else '—'}"
+            f"/{team.base_max_hp if team.base_max_hp is not None else '—'}"
+            f"   前哨站 {team.outpost_hp if team.outpost_hp is not None else '—'}"
+            f"/{team.outpost_max_hp if team.outpost_max_hp is not None else '—'}"
+        )
+        structure_surface = micro_font.render(
+            _fit_text_to_width(micro_font, structure_text, panel.width - 28),
+            True,
+            MUTED_COLOR,
+        )
+        screen.blit(structure_surface, (panel.x + 16, panel.y + 132))
+
+        table = pygame.Rect(x, table_top, panel_width, table_height)
+        pygame.draw.rect(screen, PANEL_SECTION_ALT, table, border_radius=9)
+        pygame.draw.rect(screen, PANEL_BORDER, table, width=1, border_radius=9)
+        header_y = table.y + 10
+        header = micro_font.render("机器人", True, MUTED_COLOR)
+        screen.blit(header, (table.x + 12, header_y))
+        for label, right, _width in (
+            ("伤害", table.right - 258, 44),
+            ("盾吸收", table.right - 205, 48),
+            ("击毁", table.right - 157, 40),
+            ("被击毁", table.right - 107, 52),
+            ("等级 / XP", table.right - 13, 60),
+        ):
+            rendered = micro_font.render(label, True, MUTED_COLOR)
+            screen.blit(rendered, rendered.get_rect(midright=(right, header_y + 7)))
+        pygame.draw.line(
+            screen,
+            PANEL_BORDER,
+            (table.x + 10, table.y + 31),
+            (table.right - 10, table.y + 31),
+            1,
+        )
+
+        rows = robots_by_team.get(team_id, [])
+        row_height = min(52, max(36, (table.height - 43) // max(1, len(rows))))
+        for row_index, robot in enumerate(rows):
+            row_y = table.y + 38 + row_index * row_height
+            if row_y + row_height > table.bottom - 4:
+                break
+            if row_index % 2 == 0:
+                pygame.draw.rect(
+                    screen,
+                    (35, 45, 55),
+                    pygame.Rect(table.x + 7, row_y, table.width - 14, row_height),
+                    border_radius=4,
+                )
+            role = labels.get(robot.robot_id, robot.robot_type)
+            role_surface = micro_font.render(role, True, TEXT_COLOR)
+            row_center = row_y + row_height // 2
+            screen.blit(role_surface, role_surface.get_rect(midleft=(table.x + 12, row_center)))
+            value_y = row_center - 7
+            _draw_report_value(screen, micro_font, f"{robot.damage_dealt:,}", table.right - 258, value_y)
+            _draw_report_value(screen, micro_font, f"{robot.virtual_shield_absorbed:,}", table.right - 205, value_y)
+            _draw_report_value(screen, micro_font, str(robot.kills), table.right - 157, value_y)
+            _draw_report_value(screen, micro_font, str(robot.deaths), table.right - 107, value_y)
+            level_text = (
+                f"Lv {robot.level} · {_format_experience(robot.experience)}"
+                if robot.level is not None and robot.experience is not None
+                else "—"
+            )
+            _draw_report_value(
+                screen,
+                micro_font,
+                level_text,
+                table.right - 13,
+                value_y,
+            )
+
+    footer = micro_font.render("按 R 重新开始比赛", True, MUTED_COLOR)
+    screen.blit(footer, footer.get_rect(midbottom=(card.centerx, card.bottom - 13)))
+
+
+def _draw_report_value(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    text: str,
+    right: int,
+    y: int,
+) -> None:
+    surface = font.render(text, True, TEXT_COLOR)
+    screen.blit(surface, surface.get_rect(midright=(right, y + 7)))
+
+
+def _robot_level_tag_rect(
+    level_surface: pygame.Surface,
+    *,
+    robot_id: str,
+    center: tuple[int, int],
+    radius: int,
+    field_rect: pygame.Rect,
+    robot_body_rects: dict[str, pygame.Rect],
+    occupied_tags: list[pygame.Rect],
+) -> pygame.Rect:
+    candidates = (
+        level_surface.get_rect(
+            midbottom=(center[0], center[1] - radius - 18),
+        ).inflate(8, 4),
+        level_surface.get_rect(
+            midtop=(center[0], center[1] + radius + 12),
+        ).inflate(8, 4),
+        level_surface.get_rect(
+            midright=(center[0] - radius - 8, center[1]),
+        ).inflate(8, 4),
+        level_surface.get_rect(
+            midleft=(center[0] + radius + 8, center[1]),
+        ).inflate(8, 4),
+    )
+    best_rect = candidates[0].copy()
+    best_score = None
+    for index, candidate in enumerate(candidates):
+        candidate = candidate.copy()
+        candidate.clamp_ip(field_rect)
+        body_collisions = sum(
+            candidate.colliderect(body)
+            for other_id, body in robot_body_rects.items()
+            if other_id != robot_id
+        )
+        tag_collisions = sum(
+            candidate.colliderect(tag)
+            for tag in occupied_tags
+        )
+        score = (body_collisions, tag_collisions, index)
+        if best_score is None or score < best_score:
+            best_rect = candidate
+            best_score = score
+    return best_rect
+
+
+def _format_match_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    return f"{total // 60:02}:{total % 60:02}"
+
+
+def _format_experience(experience: float | None) -> str:
+    if experience is None:
+        return "—"
+    return f"{experience:g} XP"
 
 
 if __name__ == "__main__":

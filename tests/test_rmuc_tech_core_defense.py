@@ -347,7 +347,11 @@ def test_shield_only_hit_emits_no_hp_loss_event_or_score_xp() -> None:
 
     assert state.base_virtual_shield == shield_before - 100
     assert base.hp == 5000
-    assert len(match.current_events) == event_count
+    assert len(match.current_events) == event_count + 1
+    event = match.current_events[-1]
+    assert event.type == MatchEventType.STRUCTURE_DAMAGED
+    assert event.damage == 0
+    assert event.virtual_shield_absorbed == 100
 
     match.update(0)
 

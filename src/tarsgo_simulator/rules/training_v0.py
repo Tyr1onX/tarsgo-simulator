@@ -7,6 +7,7 @@ from tarsgo_simulator.core.config import ConfigError, RuleDocument
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.rules.protocol import (
     DamageableTarget,
+    DamageResolution,
     MatchResult,
     RobotParameters,
     RuleSetDisplayState,
@@ -80,6 +81,25 @@ class TrainingV0Rules:
         """Training V0 applies damage without Defense or Shield modifiers."""
         del target, source_team_id, bypass_attack_defense, attack_multiplier
         return amount
+
+    def resolve_damage_detail(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+        *,
+        bypass_attack_defense: bool = False,
+        attack_multiplier: float = 1.0,
+    ) -> DamageResolution:
+        return DamageResolution(
+            self.resolve_damage(
+                target,
+                amount,
+                source_team_id,
+                bypass_attack_defense=bypass_attack_defense,
+                attack_multiplier=attack_multiplier,
+            )
+        )
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
         """Training V0 has no chassis buffer state to advance."""
