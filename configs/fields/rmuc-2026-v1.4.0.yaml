@@ -5,19 +5,27 @@ source:
   url: https://bbs-web-static.robomaster.com/38afa6d7914345f7bb5d496692fd429b1773977681621/RoboMaster%202026%20%E6%9C%BA%E7%94%B2%E5%A4%A7%E5%B8%88%E8%B6%85%E7%BA%A7%E5%AF%B9%E6%8A%97%E8%B5%9B%E6%AF%94%E8%B5%9B%E8%A7%84%E5%88%99%E6%89%8B%E5%86%8CV1.4.0%EF%BC%8820260320%EF%BC%89.pdf
   dimensions:
     field: "§4.1, Figure 4-5, pp.31, 35"
+    perimeter: "§4.1, p.31"
     base: "Figure 4-5 and Figure 4-9, pp.35, 39"
     outpost: "Figure 4-5 and Figure 4-33, pp.35, 60"
+    terrain_modules: "§4.3–§4.4, Figures 4-25–4-37, pp.53–63"
     start_zone: "Figure 4-8, p.38"
     interaction_regions: "Figure 5-23, p.106"
   limitations:
     - "The field manual states 28 m × 15 m. Coordinates use the upper-left playing-surface corner as origin, x along the 28 m edge, y along the 15 m edge."
     - "Figure 5-23 is explicitly a distribution diagram and does not dimension RFID-card edges. Region projections are traced from that official diagram; exact card boundaries remain deferred."
     - "The map is a 2D plan projection. Elevations, ramps, tunnels, steps, overhangs and traversability by height remain deferred until the manual provides a verified 2.5D model."
+    - "Section 4.1 states a black steel perimeter barrier with its upper edge 2.4 m above the field floor and notes possible ~50 mm openings where some wooden field structures meet the floor. The 2D collision model treats the field perimeter as closed; opening locations and vertical projectile/robot geometry remain deferred."
     - "Figure 4-5 states that long-edge field slopes are 1°–2° from the centerline; elevation and slope physics are deferred."
     - "The drawing gives the Outpost body diameter but not a fully dimensioned platform plan. The body circle is modeled; the supporting platform footprint remains deferred."
 size_mm:
   length: 28000
   width: 15000
+# §4.1 (p.31): the playing surface is enclosed by a black steel perimeter
+# barrier whose top edge is 2400 mm above the field floor. The 2D map uses the
+# playing-surface rectangle as its closed plan boundary for ground movement,
+# pathfinding, projectiles, and rendering. Wall height, slope, and the possible
+# ~50 mm ball-recovery grooves are not represented as vertical geometry.
 team_symmetry: rotate_180
 
 # Red-side centers are taken from the field positioning drawing; blue-side
@@ -80,9 +88,9 @@ zones:
   - id: red-terrain-tunnel-end-b
     points: [[9700, 3200], [10200, 3200], [10200, 3700], [9700, 3700]]
 
-# Terrain descriptions are symbolic until their complete XY footprints and
-# portal coordinates can be bound to the canonical mm field. They do not add
-# collision, LOS, movement, or gameplay effects.
+# No terrain obstacle is inferred from an illustration alone. Terrain
+# descriptions remain symbolic until verified XY footprints, level boundaries,
+# and traversable portals can be bound to the canonical mm field.
 obstacles: []
 
 # Confirmed by the V1.4.0 module diagrams and terrain descriptions. Heights
@@ -124,8 +132,9 @@ terrain:
     - {from: road-tunnel-east-entry, to: road-tunnel-east-exit, via: road-tunnel-east-passage}
 
 deferred:
-  - "Undimensioned field module edges and interaction-card extents beyond the plan projections above."
-  - "2D collision edges for bridges, roads, ramps, tunnels and elevated modules until their complete plan footprints are dimensioned."
+  - "Complete collision geometry for bridges, roads, ramps, tunnels, fortress and elevated modules: V1.4.0 provides selected dimensions and grades, but not a complete common XY footprint, vertical face/clearance profile, and traversable portal set for every module; §4.1 also allows field-detail adjustments."
+  - "Exact field perimeter wall height/slope collision and positions of the possible ~50 mm ball-recovery grooves; the map currently models the official 28 m × 15 m playing-surface extent as a closed 2D boundary."
+  - "Interaction-card extents beyond the schematic region projections above."
   - "Binding symbolic terrain layers and connectors to exact XY footprints and portal coordinates in the movement A* grid."
   - "Traversability from field ground onto the trapezoid highlands: the drawings specify ramp angles and elevation, but the text does not establish robot-accessible paths."
   - "Height-dependent collision/line-of-sight, central-highland absolute height, tunnel clearance, step height and bridge/overhang geometry."
