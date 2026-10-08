@@ -144,10 +144,15 @@ def test_projectile_can_damage_an_enemy_structure_through_the_damage_pipeline() 
             break
 
     assert outpost.hp == original_hp - hero.damage
-    assert any(
-        impact.target_id == outpost.id and impact.applied_damage == hero.damage
+    outpost_impact = next(
+        impact
         for impact in match.projectile_impacts
+        if impact.target_id == outpost.id
     )
+    assert outpost_impact.outcome == "damage"
+    assert outpost_impact.structure_hit is not None
+    assert outpost_impact.structure_hit.module_id is None
+    assert outpost_impact.applied_damage == hero.damage
 
 
 def test_invincible_robot_is_physically_hit_but_referee_applies_zero_damage() -> None:

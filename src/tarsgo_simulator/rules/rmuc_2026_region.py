@@ -4573,8 +4573,9 @@ class RMUC2026RegionalRules:
         if bypass_attack_defense:
             resolved = max(0, amount)
         else:
-            attack = self._effective_attack_multiplier(source_team_id) * max(
-                0.0, attack_multiplier
+            attack = max(
+                self._effective_attack_multiplier(source_team_id),
+                max(0.0, attack_multiplier),
             )
             defense = self._effective_defense(target)
             vulnerability = self._effective_vulnerability(target)

@@ -360,3 +360,139 @@ def test_center_attack_gain_is_inside_existing_defense_rounding() -> None:
     assert impact.structure_hit is not None and impact.structure_hit.center_hit
     assert impact.applied_damage == 4  # round(5 × 150% Attack × (1 - 50% Defense))
     assert base.hp == original_hp - 4
+
+
+@pytest.mark.parametrize(
+    ("team_attack_multiplier", "tangent_offset", "expected_damage"),
+    [
+        (1.0, 6.0, 20),  # no team buff, non-center
+        (1.0, 0.0, 30),  # center is the only Attack buff
+        (1.5, 6.0, 30),
+        (1.5, 0.0, 30),  # equal buffs do not stack
+        (2.0, 6.0, 40),
+        (2.0, 0.0, 40),  # 200% team buff wins over center
+        (3.0, 6.0, 60),
+        (3.0, 0.0, 60),  # 300% team buff wins over center
+    ],
+)
+def test_real_projectile_uses_max_of_team_and_center_attack_buffs(
+    team_attack_multiplier: float,
+    tangent_offset: float,
+    expected_damage: int,
+) -> None:
+    match = _match()
+    base = _structure(match, BLUE, "base")
+    _structure(match, BLUE, "outpost").alive = False
+    profile = match.ruleset.structure_projectile_hitbox_profile(base)
+    assert profile is not None
+    other_module = next(
+        index for index in range(6) if index != profile.upper_front_edge_index
+    )
+    if team_attack_multiplier > 1.0:
+        assert match.ruleset.grant_attack_buff(RED, team_attack_multiplier, 10.0)
+    original_hp = base.hp
+
+    _shooter, impact = _fire_structure_projectile(
+        match,
+        base,
+        edge_index=other_module,
+        tangent_offset=tangent_offset,
+    )
+
+    assert impact.structure_hit is not None
+    assert impact.structure_hit.center_hit is (tangent_offset == 0.0)
+    assert impact.applied_damage == expected_damage
+    assert base.hp == original_hp - expected_damage
+
+
+def test_real_projectile_applies_max_attack_buff_before_half_up_rounding() -> None:
+    match = _match()
+    base = _structure(match, BLUE, "base")
+    _structure(match, BLUE, "outpost").alive = False
+    match.ruleset._team_states[BLUE].tech_core_defense = 0.4
+    assert match.ruleset.grant_attack_buff(RED, 1.5, 10.0)
+    original_hp = base.hp
+
+    _shooter, impact = _fire_structure_projectile(match, base, caliber="17mm")
+
+    assert impact.structure_hit is not None and impact.structure_hit.center_hit
+    # 5 raw × max(150% team, 150% center) × (1 - 40% Defense) = 4.5;
+    # the existing final half-up settlement yields 5, not multiplied-buff 7.
+    assert impact.applied_damage == 5
+    assert base.hp == original_hp - 5
+
+
+def test_real_projectile_applies_virtual_shield_after_max_attack_buff() -> None:
+    match = _match()
+    base = _structure(match, BLUE, "base")
+    _structure(match, BLUE, "outpost").alive = False
+    target_state = match.ruleset._team_states[BLUE]
+    target_state.base_virtual_shield = 6
+    assert match.ruleset.grant_attack_buff(RED, 2.0, 10.0)
+    original_hp = base.hp
+
+    _shooter, impact = _fire_structure_projectile(match, base, caliber="17mm")
+
+    assert impact.structure_hit is not None and impact.structure_hit.center_hit
+    # 10 damage after max(200% team, 150% center); shield absorbs six.
+    assert impact.applied_damage == 4
+    assert base.hp == original_hp - 4
+    assert target_state.base_virtual_shield == 0
+
+
+def test_real_projectile_hitting_base_body_between_modules_does_not_damage_hp() -> None:
+    match = _match()
+    base = _structure(match, BLUE, "base")
+    _structure(match, BLUE, "outpost").alive = False
+    profile = match.ruleset.structure_projectile_hitbox_profile(base)
+    assert profile is not None
+    edge_index = next(
+        index for index in range(6) if index != profile.upper_front_edge_index
+    )
+    body_offset = profile.module_width_mm / 2 + 8.4 + 10.0
+    target_state = match.ruleset._team_states[BLUE]
+    target_state.base_virtual_shield = 37
+    original_hp = base.hp
+
+    _shooter, impact = _fire_structure_projectile(
+        match,
+        base,
+        edge_index=edge_index,
+        tangent_offset=body_offset,
+    )
+
+    assert impact.target_id == base.id
+    assert impact.structure_hit is not None
+    assert impact.structure_hit.module_id is None
+    assert impact.outcome == "structure_body"
+    assert impact.applied_damage == 0
+    assert base.hp == original_hp
+    assert target_state.base_virtual_shield == 37
+
+
+@pytest.mark.parametrize(
+    ("scenario", "attacker_team", "target_team"),
+    [
+        ("first-steps.yaml", "tarsgo", "opponent-balanced"),
+        ("rmul-2026-rules-lab.yaml", "tarsgo-rmul-2026", "opponent-rmul-2026"),
+    ],
+)
+def test_training_and_rmul_keep_existing_damage_semantics(
+    scenario: str,
+    attacker_team: str,
+    target_team: str,
+) -> None:
+    match = Match.from_scenario(ROOT / "configs" / "scenarios" / scenario)
+    attacker = next(robot for robot in match.robots if robot.team == attacker_team)
+    target = next(robot for robot in match.robots if robot.team == target_team)
+    original_hp = target.hp
+
+    assert not match.uses_physical_projectiles
+    assert match.ruleset.resolve_damage(
+        target,
+        17,
+        attacker.team,
+        attack_multiplier=3.0,
+    ) == 17
+    assert match.apply_damage(target, 17, source_robot=attacker) == 17
+    assert target.hp == original_hp - 17

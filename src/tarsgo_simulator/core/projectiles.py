@@ -925,6 +925,12 @@ def _structure_contact(
         )
 
     if not module_contacts:
+        if profile is not None and body_contact is not None:
+            return _StructureContact(
+                body_contact.fraction,
+                body_contact.normal,
+                modeled_armor=True,
+            )
         return body_contact
     panel_contact = min(module_contacts, key=lambda item: (item[0], item[1]))
     if body_contact is None or panel_contact[0] <= body_contact.fraction + 1e-9:
