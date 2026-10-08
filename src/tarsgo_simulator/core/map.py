@@ -290,6 +290,11 @@ class GameMap:
         target_structure_id: str | None = None,
     ) -> bool:
         """Return whether the segment avoids walls and non-target structures."""
+        # Use the same closed playing-surface perimeter as movement and
+        # projectile collision; an off-field ray cannot bypass that wall.
+        if not self.contains(start) or not self.contains(end):
+            return False
+
         for structure_id, vertices in self._blocking_polygons(
             except_structure_id=target_structure_id
         ):
