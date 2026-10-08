@@ -10,6 +10,7 @@ import pygame
 
 from tarsgo_simulator.core.config import default_scenario_path
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.desktop.camera import SpectatorCamera
 from tarsgo_simulator.desktop.assets import (
     ASSET_MANAGER,
     quantize_transform_angle,
@@ -211,6 +212,8 @@ def main(scenario_path: str | Path | None = None) -> None:
     pygame.init()
     try:
         viewport = _viewport_for_match(match)
+        spectator = SpectatorCamera(viewport) if _is_rmuc_rules_lab(match) else None
+        camera_dragging = False
         screen = pygame.display.set_mode(WINDOW_SIZE)
         pygame.display.set_icon(render_app_icon(128))
         pygame.display.set_caption(_window_caption(match))
@@ -264,6 +267,18 @@ def main(scenario_path: str | Path | None = None) -> None:
                         selection_current = None
                         selection_shift = False
                         inspector_open = False
+                        if spectator is not None:
+                            spectator.reset()
+                            spectator.zoom = 1.0
+                            spectator.center = spectator.world_midpoint
+                            camera_dragging = False
+                    elif spectator is not None and event.key == pygame.K_0:
+                        spectator.reset()
+                    elif spectator is not None and event.key == pygame.K_a:
+                        spectator.auto()
+                    elif spectator is not None and event.key == pygame.K_f:
+                        if len(selected_robot_ids) == 1:
+                            spectator.follow(next(iter(selected_robot_ids)))
                     elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
@@ -362,9 +377,29 @@ def main(scenario_path: str | Path | None = None) -> None:
                             )
                             if callable(action):
                                 action(match, robot)
+                elif (
+                    spectator is not None
+                    and event.type == pygame.MOUSEWHEEL
+                ):
+                    pointer = pygame.mouse.get_pos()
+                    if pygame.Rect(spectator.frame_rect).collidepoint(pointer):
+                        spectator.zoom_at(event.y, pointer)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 1:
-                        if _screen_to_world(event.pos, viewport) is not None:
+                    if (
+                        spectator is not None
+                        and event.button in (2, 3)
+                        and pygame.Rect(spectator.frame_rect).collidepoint(event.pos)
+                    ):
+                        camera_dragging = True
+                        spectator.manual()
+                    elif event.button == 1:
+                        if (
+                            _screen_to_world(event.pos, viewport) is not None
+                            and (
+                                spectator is None
+                                or pygame.Rect(spectator.frame_rect).collidepoint(event.pos)
+                            )
+                        ):
                             selection_start = event.pos
                             selection_current = event.pos
                             modifiers = getattr(event, "mod", 0) | pygame.key.get_mods()
@@ -388,8 +423,17 @@ def main(scenario_path: str | Path | None = None) -> None:
                             )
                         if moved and _is_rmuc_rules_lab(match):
                             visual_state.add_move_marker(world)
-                elif event.type == pygame.MOUSEMOTION and selection_start is not None:
-                    selection_current = event.pos
+                elif event.type == pygame.MOUSEMOTION:
+                    if camera_dragging and spectator is not None:
+                        spectator.pan(event.rel)
+                    elif selection_start is not None:
+                        selection_current = event.pos
+                elif (
+                    event.type == pygame.MOUSEBUTTONUP
+                    and event.button in (2, 3)
+                    and spectator is not None
+                ):
+                    camera_dragging = False
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if selection_start is None:
                         continue
@@ -416,6 +460,11 @@ def main(scenario_path: str | Path | None = None) -> None:
                 visual_state.begin_frame(match)
                 match.update(SIMULATION_DT)
                 visual_state.after_match_update(match, SIMULATION_DT)
+                if spectator is not None:
+                    spectator.observe(match)
+            if spectator is not None:
+                spectator.update(frame_dt, match)
+                viewport = spectator.viewport()
             interpolation_alpha = simulation_clock.interpolation_alpha
             live_selectable_ids = {
                 robot.id
@@ -448,6 +497,7 @@ def main(scenario_path: str | Path | None = None) -> None:
                 hud_font=hud_font,
                 interpolation_alpha=interpolation_alpha,
                 static_field_cache=static_field_cache,
+                spectator=spectator,
             )
             pygame.display.flip()
     finally:
@@ -2458,6 +2508,85 @@ class RMUCStaticFieldCache:
         self._surface: pygame.Surface | None = None
         self._terrain_surface: pygame.Surface | None = None
         self._surface_rect = pygame.Rect(0, 0, 0, 0)
+        self._zoom_key: tuple[object, ...] | None = None
+        self._zoom_floor: pygame.Surface | None = None
+        self._zoom_terrain: pygame.Surface | None = None
+        self._zoom_scratch_floor: pygame.Surface | None = None
+        self._zoom_scratch_terrain: pygame.Surface | None = None
+        self._zoom_frame = pygame.Rect(0, 0, 0, 0)
+        self._zoom_active = False
+
+    def _draw_zoomed(
+        self,
+        screen: pygame.Surface,
+        legend_font: pygame.font.Font,
+        match: Match,
+        viewport: Viewport,
+        *,
+        debug_geometry: bool,
+    ) -> None:
+        """Bake static world art once at high resolution; sample only visible pixels."""
+        base = _viewport_for_match(match)
+        frame = pygame.Rect(
+            round(base.origin[0]), round(base.origin[1]),
+            round(base.screen_size[0]), round(base.screen_size[1]),
+        )
+        source_scale = base.scale * 2.5
+        size = (
+            round(match.map.width * source_scale),
+            round(match.map.height * source_scale),
+        )
+        key = (id(match.map), size, debug_geometry)
+        if key != self._zoom_key:
+            source_rect = pygame.Rect((0, 0), size)
+            source_viewport = Viewport((0.0, 0.0), source_scale, base.world_size)
+            floor = pygame.Surface(size, pygame.SRCALPHA, 32)
+            _draw_rmuc_battlefield(floor, source_rect)
+            if not debug_geometry:
+                _draw_rmuc_field_regions(floor, source_rect, source_viewport, match.map.zones)
+            for obstacle in match.map.obstacles:
+                bounds = _world_rect_to_screen(
+                    source_viewport, obstacle.x, obstacle.y, obstacle.width, obstacle.height
+                )
+                if debug_geometry:
+                    pygame.draw.rect(floor, OBSTACLE_COLOR, bounds, border_radius=3)
+                else:
+                    _draw_rmuc_obstacle(floor, bounds)
+            terrain = pygame.Surface(size, pygame.SRCALPHA, 32)
+            _draw_rmuc_terrain(
+                terrain, legend_font, source_rect, source_viewport,
+                terrain_features=match.map.terrain_features,
+                terrain_connections=match.map.terrain_connections,
+                zones=match.map.zones,
+                debug_geometry=debug_geometry,
+            )
+            self._zoom_floor = floor
+            self._zoom_terrain = terrain
+            self._zoom_key = key
+        if self._zoom_scratch_floor is None or self._zoom_scratch_floor.get_size() != frame.size:
+            self._zoom_scratch_floor = pygame.Surface(frame.size, pygame.SRCALPHA, 32)
+            self._zoom_scratch_terrain = pygame.Surface(frame.size, pygame.SRCALPHA, 32)
+
+        ratio = source_scale / viewport.scale
+        source = pygame.Rect(
+            round((frame.left - viewport.origin[0]) * ratio),
+            round((frame.top - viewport.origin[1]) * ratio),
+            max(1, round(frame.width * ratio)),
+            max(1, round(frame.height * ratio)),
+        )
+        source.clamp_ip(pygame.Rect((0, 0), size))
+        self._zoom_frame = frame
+        assert self._zoom_floor is not None
+        assert self._zoom_terrain is not None
+        assert self._zoom_scratch_floor is not None
+        assert self._zoom_scratch_terrain is not None
+        pygame.transform.smoothscale(
+            self._zoom_floor.subsurface(source), frame.size, self._zoom_scratch_floor
+        )
+        pygame.transform.smoothscale(
+            self._zoom_terrain.subsurface(source), frame.size, self._zoom_scratch_terrain
+        )
+        screen.blit(self._zoom_scratch_floor, frame.topleft)
 
     def draw(
         self,
@@ -2469,6 +2598,13 @@ class RMUCStaticFieldCache:
         *,
         debug_geometry: bool,
     ) -> None:
+        base_scale = _viewport_for_match(match).scale
+        self._zoom_active = viewport.scale > base_scale * 1.001
+        if self._zoom_active:
+            self._draw_zoomed(
+                screen, legend_font, match, viewport, debug_geometry=debug_geometry
+            )
+            return
         padding = 14
         surface_rect = field_rect.inflate(padding * 2, padding * 2)
         key = (
@@ -2535,7 +2671,10 @@ class RMUCStaticFieldCache:
 
     def draw_terrain(self, screen: pygame.Surface) -> None:
         """Draw cached fixed terrain markings above animated zone overlays."""
-        if self._terrain_surface is not None:
+        if self._zoom_active:
+            if self._zoom_scratch_terrain is not None:
+                screen.blit(self._zoom_scratch_terrain, self._zoom_frame.topleft)
+        elif self._terrain_surface is not None:
             screen.blit(self._terrain_surface, self._surface_rect.topleft)
 
 
@@ -3590,6 +3729,7 @@ def _draw_rmuc_robot_sprites(
     body_angle: float,
     turret_angle: float,
     lit: bool = True,
+    magnification: float = 1.0,
 ) -> bool:
     """Draw presentation-only robot art; sprite pixels never define geometry."""
     parts = _RMUC_ROBOT_SPRITE_PARTS.get(robot_type)
@@ -3604,7 +3744,8 @@ def _draw_rmuc_robot_sprites(
         return False
 
     angles = (-math.degrees(body_angle), -math.degrees(turret_angle))
-    for index, (part, size) in enumerate(zip(parts, sizes)):
+    for index, (part, original_size) in enumerate(zip(parts, sizes)):
+        size = tuple(max(1, round(pixel * magnification)) for pixel in original_size)
         rendered = ASSET_MANAGER.render(
             f"robots/{part}",
             size=size,
@@ -3645,6 +3786,7 @@ def _draw_rmuc_robot_shape(
     raw_status: str = "",
     invincible: bool = False,
     hp_ratio: float = 1.0,
+    magnification: float = 1.0,
 ) -> int:
     profile = robot_visual_profile(robot_type)
     if not alive and destroy_remaining > 0:
@@ -3858,12 +4000,13 @@ def _draw_rmuc_robot_shape(
             width=1,
         )
         body_line((-6, 0), (6, 0), light_color, 2)
-    turret_center = body_point((4, 0))
+    sprite_scale = magnification if robot_sprites_available else 1.0
+    turret_center = _rotate_point(center, (4 * sprite_scale, 0), body_angle)
     muzzle_point = center
     if profile.turret_radius > 0:
         muzzle_point = _rotate_point(
             turret_center,
-            (profile.barrel_length, 0),
+            (profile.barrel_length * sprite_scale, 0),
             turret_angle,
         )
         if not robot_sprites_available:
@@ -3928,6 +4071,7 @@ def _draw_rmuc_robot_shape(
             body_angle=body_angle,
             turret_angle=turret_angle,
             lit=alive,
+            magnification=magnification,
         )
 
     if alive and muzzle_remaining > 0 and profile.turret_radius > 0:
@@ -3954,7 +4098,7 @@ def _draw_rmuc_robot_shape(
             width=max(2, projectile.tracer_width),
         )
 
-    radius = max(profile.body_width, profile.body_height) // 2
+    radius = round(max(profile.body_width, profile.body_height) * sprite_scale / 2)
     if invincible:
         shield_pulse = 1 + round(
             2 * (0.5 + 0.5 * math.sin(animation_time * 3.0))
@@ -4221,8 +4365,10 @@ def _draw_pellet_sprite(
     *,
     height: float = 0.0,
     opacity: float = 1.0,
+    magnification: float = 1.0,
 ) -> None:
-    size = (7, 7) if caliber == "17mm" else (11, 11)
+    diameter = round((7 if caliber == "17mm" else 11) * magnification)
+    size = (max(2, diameter), max(2, diameter))
     sprite = ASSET_MANAGER.render(f"projectiles/{caliber}.png", size=size)
     if sprite is None:
         return
@@ -4240,8 +4386,14 @@ def _draw_visual_projectiles(
     visual_state: CombatVisualState,
     match: Match | None = None,
 ) -> None:
+    magnification = viewport.scale / Viewport.fit(
+        viewport.world_size, RMUC_FIELD_VIEW_RECT
+    ).scale
     for projectile in visual_state.physical_projectiles.values():
-        _draw_pellet_sprite(screen, viewport, projectile.position, projectile.caliber)
+        _draw_pellet_sprite(
+            screen, viewport, projectile.position, projectile.caliber,
+            magnification=magnification,
+        )
 
     for rebound in visual_state.rebound_projectiles:
         ground = viewport.world_to_screen(rebound.position)
@@ -4257,6 +4409,7 @@ def _draw_visual_projectiles(
         _draw_pellet_sprite(
             screen, viewport, rebound.position, rebound.caliber,
             height=rebound.height, opacity=rebound.opacity,
+            magnification=magnification,
         )
 
     for projectile in visual_state.projectiles:
@@ -4595,6 +4748,7 @@ def _draw(
     hud_font: pygame.font.Font | None = None,
     interpolation_alpha: float = 1.0,
     static_field_cache: RMUCStaticFieldCache | None = None,
+    spectator: SpectatorCamera | None = None,
 ) -> None:
     screen.fill(BACKGROUND)
     hud_font = hud_font or small_font
@@ -4710,6 +4864,10 @@ def _draw(
                 ),
             )
 
+    # The camera moves the world only; HUD and controls stay screen-aligned.
+    old_clip = screen.get_clip()
+    if spectator is not None:
+        screen.set_clip(pygame.Rect(spectator.frame_rect))
     field_left, field_top = viewport.origin
     field_width, field_height = viewport.screen_size
     field_rect = pygame.Rect(
@@ -4718,6 +4876,7 @@ def _draw(
         round(field_width),
         round(field_height),
     )
+    magnification = viewport.scale / _viewport_for_match(match).scale if is_rmuc else 1.0
     animation_time = pygame.time.get_ticks() / 1000.0
     if is_rmuc:
         if static_field_cache is None:
@@ -4774,6 +4933,8 @@ def _draw(
             zone.width,
             zone.height,
         )
+        if is_rmuc and magnification > 1.001 and not zone_rect.colliderect(screen.get_clip()):
+            continue
         zone_points = tuple(
             tuple(round(value) for value in viewport.world_to_screen(point))
             for point in zone.vertices
@@ -4854,6 +5015,8 @@ def _draw(
             round(value)
             for value in viewport.world_to_screen(structure.position)
         )
+        if is_rmuc and magnification > 1.001 and not screen.get_clip().inflate(600, 600).collidepoint(center):
+            continue
         color = (
             _rmuc_team_color(match, structure.team)
             if is_rmuc
@@ -4977,13 +5140,20 @@ def _draw(
                 profile.tool_arm_length + profile.body_width // 2,
                 50 if robot.type == "drone" else 0,
             )
-            radius = max(9, body_extent // 2 + 7)
+            radius = max(9, round((body_extent // 2 + 7) * magnification))
             body_rect = pygame.Rect(0, 0, radius * 2, radius * 2)
             body_rect.center = map_centers[robot.id]
             robot_body_rects[robot.id] = body_rect
     occupied_map_labels: list[pygame.Rect] = []
     for robot in match.robots:
         center = map_centers[robot.id]
+        if (
+            is_rmuc and magnification > 1.001
+            and not screen.get_clip().inflate(
+                round(150 * magnification), round(150 * magnification)
+            ).collidepoint(center)
+        ):
+            continue
         color = (
             _rmuc_team_color(match, robot.team)
             if is_rmuc
@@ -5023,6 +5193,7 @@ def _draw(
                     and not match.ruleset.can_receive_damage(robot)
                 ),
                 hp_ratio=(robot.hp / robot.max_hp if robot.max_hp else 0.0),
+                magnification=magnification,
             )
         else:
             radius = max(
@@ -5045,7 +5216,7 @@ def _draw(
             )
 
         if is_rmuc or robot.type != "drone":
-            bar_width = 44 if is_rmuc else 48
+            bar_width = min(96, round(44 * magnification)) if is_rmuc else 48
             bar_height = 4 if is_rmuc else 6
             bar_x = center[0] - bar_width // 2
             bar_y = center[1] - radius - 15
@@ -5161,6 +5332,16 @@ def _draw(
 
     if selection_rect is not None:
         pygame.draw.rect(screen, SELECTION_COLOR, selection_rect, width=1)
+
+    screen.set_clip(old_clip)
+    if spectator is not None:
+        label = {"full": "全场", "manual": "自由", "follow": "跟随", "auto": "自动"}[spectator.mode]
+        control_text = hud_font.render(
+            f"镜头 {label}  |  滚轮缩放  ·  右键拖动  ·  F跟随  ·  A自动  ·  0全场",
+            True, MUTED_COLOR,
+        )
+        left, top, _width, height = spectator.frame_rect
+        screen.blit(control_text, (left + 8, top + height - 20))
 
     if is_rmuc and inspector_open:
         _draw_rmuc_panel(
