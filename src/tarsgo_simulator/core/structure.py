@@ -3,6 +3,29 @@
 from dataclasses import dataclass
 
 
+@dataclass(frozen=True, slots=True)
+class StructureProjectileHitboxProfile:
+    """Current per-structure armor projection for projectile collision."""
+
+    module_width_mm: float
+    deployed_offset_mm: float
+    center_area_size_mm: float
+    deployed: bool
+    upper_front_edge_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class StructureProjectileHitContext:
+    """Facts from one swept projectile contact with a competition structure."""
+
+    module_id: str | None
+    impact_position: tuple[float, float]
+    caliber: str
+    effective_impact_speed: float
+    center_hit: bool
+    normal: tuple[float, float]
+
+
 @dataclass
 class Structure:
     id: str

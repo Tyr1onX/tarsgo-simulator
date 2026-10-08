@@ -454,6 +454,24 @@ lab_projectile_hitboxes:
     wheel_center_offset_mm: 94
     wheel_radius_mm: 26
 
+# Structure armor hitboxes use a top-down Rules Lab projection. The official
+# manual gives the armor-module face as 129 x 100 mm (Figure 5-16) and the
+# deployed panel angle as 27.5 degrees (Figure 4-11), but does not define how
+# their vertical geometry projects into this 2D field. The runtime therefore
+# projects the 100 mm vertical dimension through the published angle to move
+# module contact segments outward when deployed; this is a simulation
+# approximation, not a claim about the official planar footprint.
+# The 10 x 10 mm center target is projected onto the modeled face width; since
+# the match has no projectile height coordinate, the vertical center condition
+# is assumed rather than measured.
+lab_structure_projectile_hitboxes:
+  simulator_approximation:
+    base:
+      module_width_mm: 129
+      module_vertical_height_mm: 100
+      deployed_angle_degrees: 27.5
+      center_area_size_mm: 10
+
 # The V1.4.0 manual does not prescribe robot turret slew or chassis-spin rates.
 # These are explicit Rules Lab control approximations; the official 0.8π rad/s
 # Outpost armor rate applies only to the Outpost and is not reused here.

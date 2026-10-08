@@ -13,7 +13,11 @@ from tarsgo_simulator.core.map import (
     _point_in_polygon,
 )
 from tarsgo_simulator.core.robot import Robot
-from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.core.structure import (
+    Structure,
+    StructureProjectileHitContext,
+    StructureProjectileHitboxProfile,
+)
 from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
     DamageableTarget,
@@ -56,6 +60,16 @@ class ProjectileImpact:
     outcome: str = "damage"
     armor_face: str | None = None
     normal: tuple[float, float] = (0.0, 0.0)
+    structure_hit: StructureProjectileHitContext | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StructureContact:
+    fraction: float
+    normal: tuple[float, float]
+    module_id: str | None = None
+    center_hit: bool = False
+    modeled_armor: bool = False
 
 
 class ProjectileSystem:
@@ -267,6 +281,14 @@ class ProjectileSystem:
         apply_damage: Callable[[DamageableTarget, int, Robot], int],
         projectile_ids: Iterable[int] | None = None,
         robot_hitboxes: ProjectileRobotHitboxParameters | None = None,
+        structure_hitbox_profile_for: Callable[
+            [Structure], StructureProjectileHitboxProfile | None
+        ]
+        | None = None,
+        apply_structure_damage: Callable[
+            [Structure, int, Robot, StructureProjectileHitContext], int
+        ]
+        | None = None,
     ) -> None:
         """Advance selected projectiles continuously and settle first contacts."""
         self.impacts.clear()
@@ -298,13 +320,42 @@ class ProjectileSystem:
                 structures,
                 game_map,
                 robot_hitboxes,
+                structure_hitbox_profile_for,
             )
             if collision is not None:
-                fraction, target, target_kind, normal, surface, armor_face = collision
+                (
+                    fraction,
+                    target,
+                    target_kind,
+                    normal,
+                    surface,
+                    armor_face,
+                    structure_module_id,
+                    structure_center_hit,
+                    structure_hit_modeled,
+                ) = collision
                 point = (
                     start[0] + (end[0] - start[0]) * fraction,
                     start[1] + (end[1] - start[1]) * fraction,
                 )
+                impact_speed = abs(
+                    projectile.velocity[0] * normal[0]
+                    + projectile.velocity[1] * normal[1]
+                )
+                structure_hit = None
+                if isinstance(target, Structure):
+                    surface_point = (
+                        point[0] - projectile.radius * normal[0],
+                        point[1] - projectile.radius * normal[1],
+                    )
+                    structure_hit = StructureProjectileHitContext(
+                        module_id=structure_module_id,
+                        impact_position=surface_point,
+                        caliber=projectile.caliber,
+                        effective_impact_speed=impact_speed,
+                        center_hit=structure_center_hit,
+                        normal=normal,
+                    )
                 applied = 0
                 outcome = "obstacle" if target is None else "friendly_contact"
                 if target_kind == "robot":
@@ -327,18 +378,33 @@ class ProjectileSystem:
                     )
                 if target is not None and target.team != projectile.shooter_team_id:
                     shooter = robot_by_id.get(projectile.shooter_id)
-                    impact_speed = abs(
-                        projectile.velocity[0] * normal[0]
-                        + projectile.velocity[1] * normal[1]
-                    )
                     required_speed = 12_000.0 if projectile.caliber == "17mm" else 10_000.0
                     if target_kind == "robot" and surface != "armor":
                         outcome = "non_armor"
-                    elif shooter is None or impact_speed <= required_speed:
+                    elif (
+                        structure_hit is not None
+                        and structure_hit_modeled
+                        and structure_hit.module_id is None
+                    ):
+                        outcome = "structure_body"
+                    elif shooter is None or impact_speed <= required_speed + 1e-9:
                         outcome = "ineffective"
                     else:
                         hp_before = target.hp
-                        applied = apply_damage(target, projectile.damage, shooter)
+                        if (
+                            isinstance(target, Structure)
+                            and structure_hit is not None
+                            and structure_hit.module_id is not None
+                            and apply_structure_damage is not None
+                        ):
+                            applied = apply_structure_damage(
+                                target,
+                                projectile.damage,
+                                shooter,
+                                structure_hit,
+                            )
+                        else:
+                            applied = apply_damage(target, projectile.damage, shooter)
                         if applied > 0:
                             outcome = "damage"
                             self.applied_damage += applied
@@ -363,6 +429,7 @@ class ProjectileSystem:
                         outcome=outcome,
                         armor_face=armor_face,
                         normal=normal,
+                        structure_hit=structure_hit,
                     )
                 )
                 self.total_impacts += 1
@@ -478,9 +545,34 @@ def _first_collision(
     structures: list[Structure],
     game_map: GameMap,
     robot_hitboxes: ProjectileRobotHitboxParameters | None = None,
-) -> tuple[float, DamageableTarget | None, str, tuple[float, float], str, str | None] | None:
+    structure_hitbox_profile_for: Callable[
+        [Structure], StructureProjectileHitboxProfile | None
+    ]
+    | None = None,
+) -> tuple[
+    float,
+    DamageableTarget | None,
+    str,
+    tuple[float, float],
+    str,
+    str | None,
+    str | None,
+    bool,
+    bool,
+] | None:
     candidates: list[
-        tuple[float, int, str, DamageableTarget | None, tuple[float, float], str, str | None]
+        tuple[
+            float,
+            int,
+            str,
+            DamageableTarget | None,
+            tuple[float, float],
+            str,
+            str | None,
+            str | None,
+            bool,
+            bool,
+        ]
     ] = []
     for robot in robots:
         if not robot.alive or robot.aerial or robot.id == shooter_id:
@@ -494,21 +586,64 @@ def _first_collision(
         hit = _robot_contact(start, end, projectile_radius, robot, robot_hitboxes)
         if hit is not None:
             fraction, normal, surface, armor_face = hit
-            candidates.append((fraction, 0, robot.id, robot, normal, surface, armor_face))
+            candidates.append(
+                (
+                    fraction,
+                    0,
+                    robot.id,
+                    robot,
+                    normal,
+                    surface,
+                    armor_face,
+                    None,
+                    False,
+                    False,
+                )
+            )
 
     for structure in structures:
         if not structure.alive or structure.footprint is None:
             continue
-        hit = _structure_contact(start, end, projectile_radius, structure)
+        profile = (
+            structure_hitbox_profile_for(structure)
+            if structure_hitbox_profile_for is not None
+            else None
+        )
+        hit = _structure_contact(start, end, projectile_radius, structure, profile)
         if hit is not None:
-            fraction, normal = hit
-            candidates.append((fraction, 1, structure.id, structure, normal, "structure", None))
+            candidates.append(
+                (
+                    hit.fraction,
+                    1,
+                    structure.id,
+                    structure,
+                    hit.normal,
+                    "structure",
+                    None,
+                    hit.module_id,
+                    hit.center_hit,
+                    hit.modeled_armor,
+                )
+            )
 
     for index, obstacle in enumerate(game_map.obstacles):
         hit = _rectangle_contact(start, end, projectile_radius, obstacle)
         if hit is not None:
             fraction, normal = hit
-            candidates.append((fraction, 2, f"obstacle-{index:04d}", None, normal, "obstacle", None))
+            candidates.append(
+                (
+                    fraction,
+                    2,
+                    f"obstacle-{index:04d}",
+                    None,
+                    normal,
+                    "obstacle",
+                    None,
+                    None,
+                    False,
+                    False,
+                )
+            )
 
     # The perimeter is solid for a radius-sized projectile.
     bounds = Rectangle(
@@ -520,15 +655,49 @@ def _first_collision(
     boundary = _boundary_contact(start, end, bounds)
     if boundary is not None:
         fraction, normal = boundary
-        candidates.append((fraction, 3, "field-boundary", None, normal, "obstacle", None))
+        candidates.append(
+            (
+                fraction,
+                3,
+                "field-boundary",
+                None,
+                normal,
+                "obstacle",
+                None,
+                None,
+                False,
+                False,
+            )
+        )
 
     if not candidates:
         return None
-    fraction, _priority, _identity, target, normal, surface, armor_face = min(candidates)
+    (
+        fraction,
+        _priority,
+        _identity,
+        target,
+        normal,
+        surface,
+        armor_face,
+        structure_module_id,
+        structure_center_hit,
+        structure_hit_modeled,
+    ) = min(candidates)
     target_kind = "robot" if isinstance(target, Robot) else (
         "structure" if isinstance(target, Structure) else "obstacle"
     )
-    return fraction, target, target_kind, normal, surface, armor_face
+    return (
+        fraction,
+        target,
+        target_kind,
+        normal,
+        surface,
+        armor_face,
+        structure_module_id,
+        structure_center_hit,
+        structure_hit_modeled,
+    )
 
 
 def _robot_contact(
@@ -635,31 +804,150 @@ def _structure_contact(
     end: tuple[float, float],
     radius: float,
     structure: Structure,
-) -> tuple[float, tuple[float, float]] | None:
+    profile: StructureProjectileHitboxProfile | None = None,
+) -> _StructureContact | None:
     width, height = structure.footprint or (0.0, 0.0)
+    module_contacts: list[tuple[float, int, str, tuple[float, float], bool]] = []
+    if profile is not None and structure.footprint_shape == "polygon":
+        vertices = structure.footprint_vertices
+        if len(vertices) >= 3:
+            area_twice = sum(
+                first[0] * second[1] - second[0] * first[1]
+                for first, second in zip(vertices, (*vertices[1:], vertices[0]))
+            )
+            for edge_index, (local_start, local_end) in enumerate(
+                zip(vertices, (*vertices[1:], vertices[0]))
+            ):
+                edge_start = (
+                    structure.position[0] + local_start[0],
+                    structure.position[1] + local_start[1],
+                )
+                edge_end = (
+                    structure.position[0] + local_end[0],
+                    structure.position[1] + local_end[1],
+                )
+                tangent = _unit_vector(
+                    edge_end[0] - edge_start[0], edge_end[1] - edge_start[1]
+                )
+                if tangent == (0.0, 0.0):
+                    continue
+                outward = (
+                    (tangent[1], -tangent[0])
+                    if area_twice > 0
+                    else (-tangent[1], tangent[0])
+                )
+                edge_length = math.dist(edge_start, edge_end)
+                half_width = min(profile.module_width_mm / 2, edge_length / 2)
+                offset = profile.deployed_offset_mm if profile.deployed else 0.0
+                center = (
+                    (edge_start[0] + edge_end[0]) / 2 + outward[0] * offset,
+                    (edge_start[1] + edge_end[1]) / 2 + outward[1] * offset,
+                )
+                # Armor is a 129 mm planar face segment. The 1 mm collider
+                # thickness only stabilizes swept-circle contact; the actual
+                # deployed extension is provided by the Rules Lab profile.
+                half_thickness = 0.5
+                panel = tuple(
+                    (
+                        center[0] + tangent[0] * along + outward[0] * normal,
+                        center[1] + tangent[1] * along + outward[1] * normal,
+                    )
+                    for along, normal in (
+                        (-half_width, -half_thickness),
+                        (half_width, -half_thickness),
+                        (half_width, half_thickness),
+                        (-half_width, half_thickness),
+                    )
+                )
+                panel_hit = _polygon_contact(start, end, panel, radius)
+                if panel_hit is None:
+                    continue
+                fraction, normal = panel_hit
+                path_position = (
+                    start[0] + (end[0] - start[0]) * fraction,
+                    start[1] + (end[1] - start[1]) * fraction,
+                )
+                impact_position = (
+                    path_position[0] - radius * normal[0],
+                    path_position[1] - radius * normal[1],
+                )
+                along_center = (
+                    (impact_position[0] - center[0]) * tangent[0]
+                    + (impact_position[1] - center[1]) * tangent[1]
+                )
+                module_id = (
+                    "base-upper-front"
+                    if edge_index == profile.upper_front_edge_index
+                    else f"base-armor-{edge_index + 1}"
+                )
+                module_contacts.append(
+                    (
+                        fraction,
+                        edge_index,
+                        module_id,
+                        normal,
+                        abs(along_center)
+                        <= profile.center_area_size_mm / 2 + 1e-9,
+                    )
+                )
+
     if structure.footprint_shape == "circle":
         hit = _moving_circle_contact(start, end, structure.position, width / 2 + radius)
         if hit is None:
-            return None
-        fraction, point = hit
-        return fraction, _unit_vector(
-            point[0] - structure.position[0], point[1] - structure.position[1]
-        )
-    if structure.footprint_shape == "polygon" and len(structure.footprint_vertices) >= 3:
+            body_contact = None
+        else:
+            fraction, point = hit
+            body_contact = _StructureContact(
+                fraction,
+                _unit_vector(
+                    point[0] - structure.position[0], point[1] - structure.position[1]
+                ),
+            )
+    elif structure.footprint_shape == "polygon" and len(structure.footprint_vertices) >= 3:
         vertices = tuple(
             (structure.position[0] + x, structure.position[1] + y)
             for x, y in structure.footprint_vertices
         )
         hit = _polygon_contact(start, end, vertices, radius)
-        if hit is not None:
-            return hit
-    bounds = Rectangle(
-        structure.position[0] - width / 2,
-        structure.position[1] - height / 2,
-        width,
-        height,
-    )
-    return _rectangle_contact(start, end, radius, bounds)
+        body_contact = (
+            _StructureContact(hit[0], hit[1]) if hit is not None else None
+        )
+    else:
+        bounds = Rectangle(
+            structure.position[0] - width / 2,
+            structure.position[1] - height / 2,
+            width,
+            height,
+        )
+        hit = _rectangle_contact(start, end, radius, bounds)
+        body_contact = (
+            _StructureContact(hit[0], hit[1]) if hit is not None else None
+        )
+
+    if not module_contacts:
+        if profile is not None and body_contact is not None:
+            return _StructureContact(
+                body_contact.fraction,
+                body_contact.normal,
+                modeled_armor=True,
+            )
+        return body_contact
+    panel_contact = min(module_contacts, key=lambda item: (item[0], item[1]))
+    if body_contact is None or panel_contact[0] <= body_contact.fraction + 1e-9:
+        return _StructureContact(
+            fraction=panel_contact[0],
+            normal=panel_contact[3],
+            module_id=panel_contact[2],
+            center_hit=panel_contact[4],
+            modeled_armor=True,
+        )
+    if body_contact is not None and profile is not None:
+        return _StructureContact(
+            body_contact.fraction,
+            body_contact.normal,
+            modeled_armor=True,
+        )
+    return body_contact
 
 
 def _rectangle_contact(
