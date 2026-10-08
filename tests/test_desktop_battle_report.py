@@ -27,18 +27,36 @@ def test_finished_match_renders_battle_report_over_the_final_frame() -> None:
     match.winner = attacker.team
     match.finished = True
 
+    class RecordingFont:
+        def __init__(self, font):
+            self.font = font
+            self.rendered = []
+
+        def __getattr__(self, name):
+            return getattr(self.font, name)
+
+        def render(self, text, *args, **kwargs):
+            self.rendered.append(text)
+            return self.font.render(text, *args, **kwargs)
+
     screen = pygame.Surface(app.WINDOW_SIZE)
     screen.fill((0, 0, 0))
+    micro_font = RecordingFont(app.ui_font(12))
     app._draw_battle_report(
         screen,
-        pygame.font.Font(None, 25),
-        pygame.font.Font(None, 18),
-        app.ui_font(12),
+        app.ui_font(25),
+        app.ui_font(18),
+        micro_font,
         match,
     )
 
     pixels = pygame.image.tostring(screen, "RGB")
     assert len(set(pixels)) > 20
+    assert {"英雄", "工程", "步兵1", "步兵2", "哨兵", "空中机器人"} <= set(
+        micro_font.rendered
+    )
+    assert "—" in micro_font.rendered
+    assert not any(text.startswith("Lv ") for text in micro_font.rendered)
     report = match.battle_report()
     assert report.elapsed_seconds == pytest.approx(172.4)
     assert report.winner_id == attacker.team
@@ -56,8 +74,8 @@ def test_finished_reports_render_in_training_and_rmul_without_level_state() -> N
         screen = pygame.Surface(app.WINDOW_SIZE)
         app._draw_battle_report(
             screen,
-            pygame.font.Font(None, 25),
-            pygame.font.Font(None, 18),
+            app.ui_font(25),
+            app.ui_font(18),
             app.ui_font(12),
             match,
         )

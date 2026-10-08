@@ -669,6 +669,27 @@ def _rmuc_robot_labels(match: Match) -> dict[str, str]:
     return labels
 
 
+def _robot_display_names(match: Match, *, compact: bool = False) -> dict[str, str]:
+    """Return stable Chinese display names without changing internal robot IDs."""
+    names: dict[str, str] = {}
+    for team_id in sorted({robot.team for robot in match.robots}):
+        team_robots = sorted(
+            (robot for robot in match.robots if robot.team == team_id),
+            key=lambda robot: robot.id,
+        )
+        infantry_index = 0
+        for robot in team_robots:
+            if robot.type == "infantry":
+                infantry_index += 1
+                name = f"步兵{infantry_index}"
+            else:
+                name = RMUC_ROBOT_NAMES.get(robot.type, "机器人")
+                if compact and robot.type == "drone":
+                    name = "空中"
+            names[robot.id] = name
+    return names
+
+
 def _default_robot_labels(
     match: Match,
     player_team: str,
@@ -717,6 +738,7 @@ def _selected_unit_lines(
 ) -> list[str]:
     if not selected_robot_ids:
         return ["已选单位", "请选择一个单位"]
+    display_names = _robot_display_names(match)
     robots_by_id = {robot.id: robot for robot in match.robots}
     selected = [
         robots_by_id[robot_id]
@@ -727,9 +749,9 @@ def _selected_unit_lines(
         lines = [f"已选择 {len(selected)} 个单位"]
         lines.extend(
             (
-                f"{labels.get(robot.id, robot.id)}   空中单位"
+                f"{display_names.get(robot.id, '机器人')}   空中单位"
                 if robot.type == "drone"
-                else f"{labels.get(robot.id, robot.id)}   生命 {robot.hp}/{robot.max_hp}"
+                else f"{display_names.get(robot.id, '机器人')}   生命 {robot.hp}/{robot.max_hp}"
             )
             for robot in selected
         )
@@ -815,7 +837,7 @@ def _selected_unit_lines(
         else {}
     )
 
-    title = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
+    title = display_names.get(robot.id, RMUC_ROBOT_NAMES.get(robot.type, "机器人"))
     progression_state = progression.get(robot.id)
     if progression_state is not None:
         title = f"{title} · {progression_state[0]}级"
@@ -1242,6 +1264,7 @@ def _draw_selected_unit_card(
         return
 
     if len(selected) != 1:
+        display_names = _robot_display_names(match, compact=True)
         screen.blit(
             small_font.render(
                 f"多单位观察 · {len(selected)}",
@@ -1252,19 +1275,14 @@ def _draw_selected_unit_card(
         )
         y += 28
         for robot in selected[:5]:
-            label = labels.get(robot.id, robot.id)
+            label = display_names.get(robot.id, "机器人")
             team_color = _rmuc_team_color(match, robot.team)
             pygame.draw.circle(screen, team_color, (x + 5, y + 7), 4)
             screen.blit(
                 small_font.render(label, True, TEXT_COLOR if robot.alive else MUTED_COLOR),
                 (x + 14, y),
             )
-            if robot.type == "drone":
-                screen.blit(
-                    small_font.render("AIR", True, team_color),
-                    (x + 46, y),
-                )
-            else:
+            if robot.type != "drone":
                 _draw_progress_bar(
                     screen,
                     rect=pygame.Rect(x + 46, y + 4, content_width - 48, 7),
@@ -1336,12 +1354,12 @@ def _draw_selected_unit_card(
 
     level_state = progression.get(robot.id)
     level = level_state[0] if level_state is not None else None
-    role = RMUC_ROBOT_NAMES.get(robot.type, robot.type)
+    role = _robot_display_names(match).get(
+        robot.id,
+        RMUC_ROBOT_NAMES.get(robot.type, "机器人"),
+    )
     title = f"{role} · {level}级" if level is not None else role
-    label = labels.get(robot.id, robot.id)
     screen.blit(small_font.render(title, True, TEXT_COLOR), (x, y))
-    label_surface = small_font.render(label, True, team_color)
-    screen.blit(label_surface, (rect.right - 11 - label_surface.get_width(), y))
     y += 23
 
     ai_intent = match.ai_intent(robot.id)
@@ -1726,13 +1744,13 @@ def _draw_hud_structure_metric(
 
 
 def _rmuc_roster_robots(match: Match, team_id: str) -> list[object]:
-    labels = _rmuc_robot_labels(match)
+    display_names = _robot_display_names(match)
     order = {"hero": 0, "engineer": 1, "infantry": 2, "sentry": 3, "drone": 4}
     return sorted(
         (robot for robot in match.robots if robot.team == team_id),
         key=lambda robot: (
             order.get(robot.type, len(order)),
-            labels.get(robot.id, robot.id),
+            display_names.get(robot.id, robot.id),
         ),
     )
 
@@ -1833,17 +1851,24 @@ def _rmuc_map_label_rect(
     width = label_surface.get_width() + 10
     height = label_surface.get_height() + 4
     x, y = center
-    gap = radius + 9
-    candidates = (
-        pygame.Rect(x - width // 2, y + gap, width, height),
-        pygame.Rect(x - width // 2, y - gap - height, width, height),
-        pygame.Rect(x + gap, y - height // 2, width, height),
-        pygame.Rect(x - gap - width, y - height // 2, width, height),
-        pygame.Rect(x + gap, y + gap, width, height),
-        pygame.Rect(x - gap - width, y + gap, width, height),
-        pygame.Rect(x + gap, y - gap - height, width, height),
-        pygame.Rect(x - gap - width, y - gap - height, width, height),
+    directions = (
+        (0, 1), (0, -1), (1, 0), (-1, 0),
+        (1, 1), (-1, 1), (1, -1), (-1, -1),
     )
+    spacing = max(width, height) + 8
+    base_distance = radius + 9 + max(width, height) // 2
+    candidates = []
+    for ring in range(4):
+        distance = base_distance + ring * spacing
+        for dx, dy in directions:
+            diagonal_scale = 0.7071 if dx and dy else 1.0
+            candidate = label_surface.get_rect(
+                center=(
+                    round(x + dx * distance * diagonal_scale),
+                    round(y + dy * distance * diagonal_scale),
+                )
+            ).inflate(10, 4)
+            candidates.append(candidate)
     default_center = candidates[0].center
     best_rect = candidates[0].copy()
     best_score: tuple[int, int, int] | None = None
@@ -1862,7 +1887,7 @@ def _rmuc_map_label_rect(
             abs(candidate.centerx - default_center[0])
             + abs(candidate.centery - default_center[1])
         )
-        score = (label_collisions, body_collisions, displacement + index)
+        score = (body_collisions, label_collisions, displacement + index)
         if best_score is None or score < best_score:
             best_rect = candidate
             best_score = score
@@ -2032,7 +2057,7 @@ def _draw_team_hud_card(
     } if display_state is not None else {}
     visual_robots = visual_state.robots if visual_state is not None else {}
     roster = _rmuc_roster_robots(match, team_id)
-    labels = _rmuc_robot_labels(match)
+    display_names = _robot_display_names(match, compact=True)
     tile_gap = 6
     tile_width = (rect.width - 20 - tile_gap) // 2
     for index, robot in enumerate(roster[:6]):
@@ -2049,7 +2074,7 @@ def _draw_team_hud_card(
             micro_font,
             match,
             robot,
-            labels.get(robot.id, robot.type[:1].upper()),
+            display_names.get(robot.id, "机器人"),
             tile_rect,
             raw_status=statuses.get(robot.id, ""),
             heat_state=heat_by_robot.get(robot.id),
@@ -5134,6 +5159,7 @@ def _draw(
         if is_rmuc
         else _default_robot_labels(match, player_team, opponent_team)
     )
+    display_names = _robot_display_names(match, compact=True)
     map_centers = {
         robot.id: tuple(
             round(value)
@@ -5150,8 +5176,9 @@ def _draw(
         for robot in match.robots
     }
     robot_body_rects: dict[str, pygame.Rect] = {}
-    if is_rmuc:
-        for robot in match.robots:
+    robot_health_bar_rects: dict[str, pygame.Rect] = {}
+    for robot in match.robots:
+        if is_rmuc:
             profile = robot_visual_profile(robot.type)
             body_extent = max(
                 profile.body_width,
@@ -5164,6 +5191,21 @@ def _draw(
             body_rect = pygame.Rect(0, 0, radius * 2, radius * 2)
             body_rect.center = map_centers[robot.id]
             robot_body_rects[robot.id] = body_rect
+        else:
+            radius = max(
+                9,
+                round(viewport.world_length_to_screen(match.map.collision_radius)),
+            )
+        if is_rmuc or robot.type != "drone":
+            bar_width = min(96, round(44 * magnification)) if is_rmuc else 48
+            bar_height = 4 if is_rmuc else 6
+            bar_rect = pygame.Rect(
+                map_centers[robot.id][0] - bar_width // 2,
+                map_centers[robot.id][1] - radius - 15,
+                bar_width,
+                bar_height,
+            )
+            robot_health_bar_rects[robot.id] = bar_rect
     occupied_map_labels: list[pygame.Rect] = []
     occupied_level_tags: list[pygame.Rect] = []
     for robot in match.robots:
@@ -5279,44 +5321,18 @@ def _draw(
                 )
 
         progression = progression_by_robot.get(robot.id)
-        if progression is not None:
-            level_surface = hud_font.render(
-                f"LV {progression[0]}",
-                True,
-                TEXT_COLOR,
+        robot_label = display_names.get(robot.id, "机器人")
+        if is_rmuc:
+            map_label = (
+                f"{robot_label} · {progression[0]}级"
+                if progression is not None
+                else robot_label
             )
-            level_rect = _robot_level_tag_rect(
-                level_surface,
-                robot_id=robot.id,
-                center=center,
-                radius=radius,
-                field_rect=field_rect,
-                robot_body_rects=robot_body_rects,
-                occupied_tags=occupied_level_tags,
-            )
-            occupied_level_tags.append(level_rect)
-            pygame.draw.rect(
-                screen,
-                PANEL_BACKGROUND,
-                level_rect,
-                border_radius=4,
-            )
-            pygame.draw.rect(
-                screen,
-                color,
-                level_rect,
-                width=1,
-                border_radius=4,
-            )
-            screen.blit(level_surface, level_surface.get_rect(center=level_rect.center))
-
-        robot_label = labels[robot.id]
-        if is_rmuc and debug_geometry:
-            map_label = robot_label
-            if not robot.alive:
-                map_label = f"{robot_label} · 亡"
-            elif visual_robot is not None and visual_robot.respawn_remaining > 0:
-                map_label = f"{robot_label} · 复活"
+            if debug_geometry:
+                if not robot.alive:
+                    map_label = f"{map_label} · 阵亡"
+                elif visual_robot is not None and visual_robot.respawn_remaining > 0:
+                    map_label = f"{map_label} · 复活"
             label_surface = hud_font.render(
                 map_label,
                 True,
@@ -5332,7 +5348,7 @@ def _draw(
                     body_rect
                     for robot_id, body_rect in robot_body_rects.items()
                     if robot_id != robot.id
-                ],
+                ] + list(robot_health_bar_rects.values()),
             )
             occupied_map_labels.append(label_rect)
             pygame.draw.rect(screen, PANEL_BACKGROUND, label_rect, border_radius=4)
@@ -5344,7 +5360,26 @@ def _draw(
                 border_radius=4,
             )
             screen.blit(label_surface, label_surface.get_rect(center=label_rect.center))
-        elif not is_rmuc:
+        else:
+            if progression is not None:
+                level_surface = hud_font.render(
+                    f"{progression[0]}级",
+                    True,
+                    TEXT_COLOR,
+                )
+                level_rect = _robot_level_tag_rect(
+                    level_surface,
+                    robot_id=robot.id,
+                    center=center,
+                    radius=radius,
+                    field_rect=field_rect,
+                    robot_body_rects=robot_body_rects,
+                    occupied_tags=occupied_level_tags,
+                )
+                occupied_level_tags.append(level_rect)
+                pygame.draw.rect(screen, PANEL_BACKGROUND, level_rect, border_radius=4)
+                pygame.draw.rect(screen, color, level_rect, width=1, border_radius=4)
+                screen.blit(level_surface, level_surface.get_rect(center=level_rect.center))
             label_surface = small_font.render(
                 robot_label,
                 True,
@@ -5488,7 +5523,7 @@ def _draw_battle_report(
     summary_height = 175
     table_top = panel_top + summary_height + 12
     table_height = card.bottom - table_top - 42
-    labels = _rmuc_robot_labels(match)
+    display_names = _robot_display_names(match)
 
     for index, team_id in enumerate(teams[:2]):
         team = team_stats[team_id]
@@ -5563,7 +5598,11 @@ def _draw_battle_report(
                     pygame.Rect(table.x + 7, row_y, table.width - 14, row_height),
                     border_radius=4,
                 )
-            role = labels.get(robot.robot_id, robot.robot_type)
+            role = _fit_text_to_width(
+                micro_font,
+                display_names.get(robot.robot_id, "机器人"),
+                table.right - 258 - table.x - 22,
+            )
             role_surface = micro_font.render(role, True, TEXT_COLOR)
             row_center = row_y + row_height // 2
             screen.blit(role_surface, role_surface.get_rect(midleft=(table.x + 12, row_center)))
@@ -5573,7 +5612,7 @@ def _draw_battle_report(
             _draw_report_value(screen, micro_font, str(robot.kills), table.right - 157, value_y)
             _draw_report_value(screen, micro_font, str(robot.deaths), table.right - 107, value_y)
             level_text = (
-                f"Lv {robot.level} · {_format_experience(robot.experience)}"
+                f"{robot.level}级 · {_format_experience(robot.experience)}"
                 if robot.level is not None and robot.experience is not None
                 else "—"
             )
