@@ -6,7 +6,7 @@ from tarsgo_simulator.desktop import app
 from tarsgo_simulator.desktop.assets import AssetManager
 
 
-def test_hero_rotation_antialiasing_keeps_alpha_and_uses_transform_cache(
+def test_detailed_robot_rotation_antialiasing_keeps_alpha_and_uses_transform_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rotozoom = pygame.transform.rotozoom
@@ -25,9 +25,30 @@ def test_hero_rotation_antialiasing_keeps_alpha_and_uses_transform_cache(
     assert first is manager.render("robots/hero-chassis.png", size=(180, 122), angle=37.4)
     assert calls == 1
 
-    # Existing robot presentation remains on the original rendering path.
-    assert manager.render("robots/infantry-chassis.png", size=(120, 92), angle=37)
+    # Full-field Infantry stays on the lighter rotation path.
+    assert manager.render("robots/infantry-chassis.png", size=(34, 26), angle=37)
     assert calls == 1
+
+    for sprite in (
+        "robots/infantry-chassis.png",
+        "robots/infantry-turret.png",
+        "robots/sentry-chassis.png",
+        "robots/sentry-turret.png",
+    ):
+        rendered = manager.render(sprite, size=(120, 92), angle=37)
+        assert rendered is not None
+        assert rendered.get_flags() & pygame.SRCALPHA
+    assert calls == 5
+
+    # Engineer and Drone join this filtered path in the second delivery batch.
+    assert manager.render("robots/engineer.png", size=(120, 92), angle=37)
+    assert manager.render("robots/drone.png", size=(120, 92), angle=37)
+    assert calls == 5
+
+
+def test_infantry_and_sentry_turrets_leave_chassis_space_visible() -> None:
+    assert app._RMUC_ROBOT_SPRITE_SIZES["infantry"] == ((34, 26), (34, 23))
+    assert app._RMUC_ROBOT_SPRITE_SIZES["sentry"] == ((58, 38), (56, 33))
 
 
 def test_hero_layers_rotate_independently_and_dead_lights_are_off() -> None:

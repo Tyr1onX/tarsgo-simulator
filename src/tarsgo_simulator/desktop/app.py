@@ -3577,8 +3577,8 @@ _RMUC_ROBOT_SPRITE_PARTS = {
 _RMUC_ROBOT_SPRITE_SIZES = {
     "hero": ((50, 34), (58, 29)),
     "engineer": ((70, 36),),
-    "infantry": ((34, 26), (42, 28)),
-    "sentry": ((58, 38), (68, 40)),
+    "infantry": ((34, 26), (34, 23)),
+    "sentry": ((58, 38), (56, 33)),
     "drone": ((48, 48),),
 }
 _RMUC_ROBOT_LED_LAYOUTS = {

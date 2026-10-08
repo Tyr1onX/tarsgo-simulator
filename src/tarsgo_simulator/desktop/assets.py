@@ -13,6 +13,17 @@ ASSET_BUNDLE_DIRECTORY = Path("assets") / "rmuc"
 _TRANSFORM_CACHE_LIMIT = 1024
 _PREPARED_CACHE_LIMIT = 32
 _ANGLE_QUANTUM_DEGREES = 3.0
+_FILTERED_ROBOT_ROTATION_ASSETS = frozenset(
+    {
+        "robots/hero-chassis.png",
+        "robots/hero-turret.png",
+        "robots/infantry-chassis.png",
+        "robots/infantry-turret.png",
+        "robots/sentry-chassis.png",
+        "robots/sentry-turret.png",
+    }
+)
+_FILTERED_ROBOT_ROTATION_MIN_SIZE = 64
 
 
 def quantize_transform_angle(angle: float) -> float:
@@ -151,8 +162,16 @@ class AssetManager:
                 self._prepared_cache.move_to_end(prepared_key)
             rendered = prepared
         if normalized_angle:
-            # The Hero's fine mechanical details need antialiased rotation at close-up.
-            if key in ("robots/hero-chassis.png", "robots/hero-turret.png"):
+            # Filter detailed robot art once its on-screen pixels can show the gain.
+            filtered_rotation = key in (
+                "robots/hero-chassis.png",
+                "robots/hero-turret.png",
+            ) or (
+                key in _FILTERED_ROBOT_ROTATION_ASSETS
+                and normalized_size is not None
+                and max(normalized_size) >= _FILTERED_ROBOT_ROTATION_MIN_SIZE
+            )
+            if filtered_rotation:
                 rendered = pygame.transform.rotozoom(rendered, normalized_angle, 1.0)
             else:
                 rendered = pygame.transform.rotate(rendered, normalized_angle)
