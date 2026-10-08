@@ -3576,10 +3576,16 @@ _RMUC_ROBOT_SPRITE_PARTS = {
 }
 _RMUC_ROBOT_SPRITE_SIZES = {
     "hero": ((50, 34), (58, 29)),
-    "engineer": ((70, 36),),
-    "infantry": ((34, 26), (42, 28)),
-    "sentry": ((58, 38), (68, 40)),
+    "engineer": ((70, 47),),
+    "infantry": ((34, 26), (34, 23)),
+    "sentry": ((58, 38), (56, 33)),
     "drone": ((48, 48),),
+}
+# Alpha-weighted visual centers relative to the source canvas center. The
+# Engineer's open manipulator and lift make its image deliberately asymmetric;
+# keep its alpha-dense assembly centered instead of rotating around blank canvas.
+_RMUC_ROBOT_SPRITE_PIVOT_OFFSETS = {
+    "engineer": ((905.2 - 767.5) / 1536, (555.1 - 511.5) / 1024),
 }
 _RMUC_ROBOT_LED_LAYOUTS = {
     "hero": (
@@ -3746,6 +3752,14 @@ def _draw_rmuc_robot_sprites(
     angles = (-math.degrees(body_angle), -math.degrees(turret_angle))
     for index, (part, original_size) in enumerate(zip(parts, sizes)):
         size = tuple(max(1, round(pixel * magnification)) for pixel in original_size)
+        pivot_offset = _RMUC_ROBOT_SPRITE_PIVOT_OFFSETS.get(robot_type)
+        sprite_center = center
+        if pivot_offset is not None:
+            sprite_center = _rotate_point(
+                center,
+                (-pivot_offset[0] * size[0], -pivot_offset[1] * size[1]),
+                body_angle,
+            )
         rendered = ASSET_MANAGER.render(
             f"robots/{part}",
             size=size,
@@ -3753,10 +3767,10 @@ def _draw_rmuc_robot_sprites(
         )
         if rendered is None:
             return False
-        screen.blit(rendered, rendered.get_rect(center=center))
+        screen.blit(rendered, rendered.get_rect(center=sprite_center))
         _draw_rmuc_team_led_overlay(
             screen,
-            center=center,
+            center=sprite_center,
             size=size,
             angle=angles[index],
             lights=led_layouts[index] if lit else (),
