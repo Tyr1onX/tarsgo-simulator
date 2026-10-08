@@ -132,6 +132,7 @@ class RuleSet(Protocol):
         source_team_id: str | None,
         *,
         bypass_attack_defense: bool = False,
+        attack_multiplier: float = 1.0,
     ) -> int: ...
 
     def prepare_movement(self, match: "Match", dt: float) -> None: ...

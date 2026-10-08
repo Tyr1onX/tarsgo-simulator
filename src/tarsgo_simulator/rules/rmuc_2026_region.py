@@ -8,7 +8,11 @@ from tarsgo_simulator.core.config import ConfigError, RuleDocument
 from tarsgo_simulator.core.events import MatchEventType
 from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
-from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.core.structure import (
+    Structure,
+    StructureProjectileHitContext,
+    StructureProjectileHitboxProfile,
+)
 from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
     DamageableTarget,
@@ -1454,6 +1458,72 @@ class RMUC2026RegionalRules:
             wheel_center_offset=wheel_offset,
             wheel_radius=wheel_radius,
         )
+
+        structure_hitbox_document = _mapping(
+            document.data,
+            "lab_structure_projectile_hitboxes",
+            document,
+        )
+        structure_hitbox_approximation = _mapping(
+            structure_hitbox_document,
+            "simulator_approximation",
+            document,
+        )
+        base_hitbox = _mapping(
+            structure_hitbox_approximation,
+            "base",
+            document,
+        )
+        if (
+            set(structure_hitbox_document) != {"simulator_approximation"}
+            or set(structure_hitbox_approximation) != {"base"}
+            or set(base_hitbox)
+            != {
+                "module_width_mm",
+                "module_vertical_height_mm",
+                "deployed_angle_degrees",
+                "center_area_size_mm",
+            }
+        ):
+            raise ConfigError(
+                f"{document.path}: `lab_structure_projectile_hitboxes` 必须明确标记基地2D投影近似"
+            )
+        module_width_mm = _number(
+            base_hitbox,
+            "module_width_mm",
+            document,
+            "lab_structure_projectile_hitboxes.simulator_approximation.base.module_width_mm",
+        )
+        module_vertical_height_mm = _number(
+            base_hitbox,
+            "module_vertical_height_mm",
+            document,
+            "lab_structure_projectile_hitboxes.simulator_approximation.base.module_vertical_height_mm",
+        )
+        deployed_angle_degrees = _number(
+            base_hitbox,
+            "deployed_angle_degrees",
+            document,
+            "lab_structure_projectile_hitboxes.simulator_approximation.base.deployed_angle_degrees",
+        )
+        center_area_size_mm = _number(
+            base_hitbox,
+            "center_area_size_mm",
+            document,
+            "lab_structure_projectile_hitboxes.simulator_approximation.base.center_area_size_mm",
+        )
+        if (
+            min(module_width_mm, module_vertical_height_mm, center_area_size_mm) <= 0
+            or not 0 < deployed_angle_degrees < 90
+        ):
+            raise ConfigError(
+                f"{document.path}: 基地装甲模块投影尺寸和展开角度必须为正且有效"
+            )
+        self._base_armor_module_width_mm = module_width_mm
+        self._base_armor_deployed_offset_mm = module_vertical_height_mm * math.sin(
+            math.radians(deployed_angle_degrees)
+        )
+        self._base_armor_center_area_size_mm = center_area_size_mm
 
         aim_document = _mapping(document.data, "lab_aim_motion", document)
         aim_approximation = _mapping(
@@ -2943,6 +3013,75 @@ class RMUC2026RegionalRules:
         """Return the documented Rules Lab armor/frame contact approximation."""
         return self._projectile_robot_hitboxes
 
+    def structure_projectile_hitbox_profile(
+        self,
+        structure: Structure,
+    ) -> StructureProjectileHitboxProfile | None:
+        """Project the single authoritative Base armor state onto its six faces."""
+        if (
+            structure.type != "base"
+            or structure.footprint_shape != "polygon"
+            or len(structure.footprint_vertices) != 6
+        ):
+            return None
+        state = self._team_states.get(structure.team)
+        if state is None:
+            return None
+        upper_front_edge_index = self._upper_front_base_edge_index(structure)
+        if upper_front_edge_index is None:
+            return None
+        return StructureProjectileHitboxProfile(
+            module_width_mm=self._base_armor_module_width_mm,
+            deployed_offset_mm=self._base_armor_deployed_offset_mm,
+            center_area_size_mm=self._base_armor_center_area_size_mm,
+            deployed=state.base_armor_deployed,
+            upper_front_edge_index=upper_front_edge_index,
+        )
+
+    def _upper_front_base_edge_index(self, structure: Structure) -> int | None:
+        """Resolve the forward-and-upper panel from the canonical field projection."""
+        if structure.id.startswith("red-"):
+            desired = (1.0, -1.0)
+        elif structure.id.startswith("blue-"):
+            desired = (-1.0, -1.0)
+        else:
+            return None
+        vertices = structure.footprint_vertices
+        center_x = sum(point[0] for point in vertices) / len(vertices)
+        center_y = sum(point[1] for point in vertices) / len(vertices)
+        scored_edges: list[tuple[float, int]] = []
+        for index, (start, end) in enumerate(
+            zip(vertices, (*vertices[1:], vertices[0]))
+        ):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length <= 1e-9:
+                continue
+            normal = (dy / length, -dx / length)
+            midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+            if (center_x - midpoint[0]) * normal[0] + (center_y - midpoint[1]) * normal[1] > 0:
+                normal = (-normal[0], -normal[1])
+            score = normal[0] * desired[0] + normal[1] * desired[1]
+            scored_edges.append((score, index))
+        return max(scored_edges)[1] if scored_edges else None
+
+    def resolve_structure_projectile_hit(
+        self,
+        target: Structure,
+        amount: int,
+        hit: StructureProjectileHitContext,
+    ) -> tuple[int, float]:
+        """Return the V1.4.0 Base module raw damage and Attack multiplier."""
+        if target.type != "base" or hit.module_id is None:
+            return amount, 1.0
+        if hit.caliber == "42mm":
+            raw_damage = 200
+        elif hit.caliber == "17mm":
+            raw_damage = 5 if hit.module_id == "base-upper-front" else 20
+        else:
+            return amount, 1.0
+        return raw_damage, 1.5 if hit.center_hit else 1.0
+
     def structure_parameters(self, structure_type: str) -> StructureParameters:
         try:
             return self._structure_parameters[structure_type]
@@ -4417,8 +4556,9 @@ class RMUC2026RegionalRules:
         source_team_id: str | None,
         *,
         bypass_attack_defense: bool = False,
+        attack_multiplier: float = 1.0,
     ) -> int:
-        """Apply Attack, max Defense/Vulnerability, then Base Virtual Shield."""
+        """Apply Attack, center-hit Attack, Defense, then Base Virtual Shield."""
         if (
             amount <= 0
             or source_team_id not in self.attack_damage_by_team
@@ -4433,7 +4573,9 @@ class RMUC2026RegionalRules:
         if bypass_attack_defense:
             resolved = max(0, amount)
         else:
-            attack = self._effective_attack_multiplier(source_team_id)
+            attack = self._effective_attack_multiplier(source_team_id) * max(
+                0.0, attack_multiplier
+            )
             defense = self._effective_defense(target)
             vulnerability = self._effective_vulnerability(target)
             multiplier = max(0.0, attack * (1.0 - defense + vulnerability))

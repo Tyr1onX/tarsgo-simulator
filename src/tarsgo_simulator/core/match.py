@@ -13,7 +13,10 @@ from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
 from tarsgo_simulator.core.projectiles import Projectile, ProjectileImpact, ProjectileSystem
 from tarsgo_simulator.core.robot import MovementProposal, Robot
-from tarsgo_simulator.core.structure import Structure
+from tarsgo_simulator.core.structure import (
+    Structure,
+    StructureProjectileHitContext,
+)
 from tarsgo_simulator.rules.protocol import DamageableTarget, MatchResult, RuleSet
 from tarsgo_simulator.rules.registry import create_ruleset
 
@@ -372,6 +375,7 @@ class Match:
         bypass_invincibility: bool = False,
         bypass_attack_defense: bool = False,
         award_experience: bool = True,
+        structure_hit: StructureProjectileHitContext | None = None,
     ) -> int:
         """Apply HP loss and emit its damage and destruction facts exactly once."""
         is_robot = any(robot is target for robot in self.robots)
@@ -388,12 +392,37 @@ class Match:
 
         if source_robot is not None:
             source_team_id = source_robot.team
+        attack_multiplier = 1.0
+        if (
+            not bypass_attack_defense
+            and is_structure
+            and structure_hit is not None
+            and structure_hit.module_id is not None
+        ):
+            resolve_structure_hit = getattr(
+                self.ruleset,
+                "resolve_structure_projectile_hit",
+                None,
+            )
+            if resolve_structure_hit is not None:
+                amount, attack_multiplier = resolve_structure_hit(
+                    target,
+                    amount,
+                    structure_hit,
+                )
         if bypass_attack_defense:
             amount = self.ruleset.resolve_damage(
                 target,
                 amount,
                 source_team_id,
                 bypass_attack_defense=True,
+            )
+        elif attack_multiplier != 1.0:
+            amount = self.ruleset.resolve_damage(
+                target,
+                amount,
+                source_team_id,
+                attack_multiplier=attack_multiplier,
             )
         else:
             amount = self.ruleset.resolve_damage(target, amount, source_team_id)
@@ -878,10 +907,21 @@ class Match:
                         "projectile_robot_hitbox_parameters",
                         lambda: None,
                     )(),
+                    structure_hitbox_profile_for=getattr(
+                        self.ruleset,
+                        "structure_projectile_hitbox_profile",
+                        None,
+                    ),
                     apply_damage=lambda target, amount, attacker: self.apply_damage(
                         target,
                         amount,
                         source_robot=attacker,
+                    ),
+                    apply_structure_damage=lambda target, amount, attacker, hit: self.apply_damage(
+                        target,
+                        amount,
+                        source_robot=attacker,
+                        structure_hit=hit,
                     ),
                 )
             else:
