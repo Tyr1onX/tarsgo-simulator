@@ -86,6 +86,11 @@ def test_swept_collision_catches_a_projectile_crossing_a_robot_in_one_large_step
     assert match.projectile_impacts
     assert match.projectile_impacts[0].target_id == target.id
     assert match.projectiles == []
+    report = match.battle_report()
+    shooter_stats = next(item for item in report.robots if item.robot_id == shooter.id)
+    target_stats = next(item for item in report.robots if item.robot_id == target.id)
+    assert shooter_stats.damage_dealt == shooter.damage
+    assert target_stats.deaths == 0
 
 
 def test_projectile_aims_at_current_target_position_and_can_miss_a_moving_robot() -> None:

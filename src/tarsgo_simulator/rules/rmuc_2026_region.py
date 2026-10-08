@@ -16,6 +16,7 @@ from tarsgo_simulator.core.structure import (
 from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
     DamageableTarget,
+    DamageResolution,
     MatchResult,
     ProjectileParameters,
     ProjectileRobotHitboxParameters,
@@ -4558,17 +4559,34 @@ class RMUC2026RegionalRules:
         bypass_attack_defense: bool = False,
         attack_multiplier: float = 1.0,
     ) -> int:
+        return self.resolve_damage_detail(
+            target,
+            amount,
+            source_team_id,
+            bypass_attack_defense=bypass_attack_defense,
+            attack_multiplier=attack_multiplier,
+        ).amount
+
+    def resolve_damage_detail(
+        self,
+        target: DamageableTarget,
+        amount: int,
+        source_team_id: str | None,
+        *,
+        bypass_attack_defense: bool = False,
+        attack_multiplier: float = 1.0,
+    ) -> DamageResolution:
         """Apply Attack, center-hit Attack, Defense, then Base Virtual Shield."""
         if (
             amount <= 0
             or source_team_id not in self.attack_damage_by_team
             or source_team_id == target.team
         ):
-            return amount
+            return DamageResolution(amount)
 
         state = self._team_states.get(target.team)
         if state is None:
-            return amount
+            return DamageResolution(amount)
 
         if bypass_attack_defense:
             resolved = max(0, amount)
@@ -4583,6 +4601,7 @@ class RMUC2026RegionalRules:
             resolved = int(math.floor(amount * multiplier + 0.5))
             resolved = max(0, resolved)
 
+        absorbed = 0
         if (
             resolved > 0
             and isinstance(target, Structure)
@@ -4593,7 +4612,7 @@ class RMUC2026RegionalRules:
             state.base_virtual_shield -= absorbed
             resolved -= absorbed
 
-        return resolved
+        return DamageResolution(resolved, absorbed)
 
     def _effective_vulnerability(
         self,

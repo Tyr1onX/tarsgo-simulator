@@ -13,11 +13,16 @@ from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
 from tarsgo_simulator.core.projectiles import Projectile, ProjectileImpact, ProjectileSystem
 from tarsgo_simulator.core.robot import MovementProposal, Robot
+from tarsgo_simulator.core.statistics import BattleReport, BattleStatistics
 from tarsgo_simulator.core.structure import (
     Structure,
     StructureProjectileHitContext,
 )
-from tarsgo_simulator.rules.protocol import DamageableTarget, MatchResult, RuleSet
+from tarsgo_simulator.rules.protocol import (
+    DamageableTarget,
+    MatchResult,
+    RuleSet,
+)
 from tarsgo_simulator.rules.registry import create_ruleset
 
 
@@ -171,6 +176,7 @@ class Match:
         self.finished = False
         self.winner: str | None = None
         self.current_events: list[MatchEvent] = []
+        self.battle_statistics = BattleStatistics(self.robots)
         self._events_from_last_update = 0
         self._active_update_dt: float | None = None
         self._active_update_start_time: float | None = None
@@ -411,23 +417,29 @@ class Match:
                     structure_hit,
                 )
         if bypass_attack_defense:
-            amount = self.ruleset.resolve_damage(
+            resolution = self.ruleset.resolve_damage_detail(
                 target,
                 amount,
                 source_team_id,
                 bypass_attack_defense=True,
             )
         elif attack_multiplier != 1.0:
-            amount = self.ruleset.resolve_damage(
+            resolution = self.ruleset.resolve_damage_detail(
                 target,
                 amount,
                 source_team_id,
                 attack_multiplier=attack_multiplier,
             )
         else:
-            amount = self.ruleset.resolve_damage(target, amount, source_team_id)
+            resolution = self.ruleset.resolve_damage_detail(
+                target,
+                amount,
+                source_team_id,
+            )
+        amount = resolution.amount
         if amount <= 0:
-            return 0
+            if resolution.virtual_shield_absorbed <= 0:
+                return 0
 
         was_alive = target.alive
         previous_hp = max(0, target.hp)
@@ -451,34 +463,55 @@ class Match:
             if is_robot
             else MatchEventType.STRUCTURE_DESTROYED
         )
-        if actual_damage > 0:
-            self.current_events.append(
-                MatchEvent(
-                    type=damaged_event,
-                    time=event_time,
-                    robot_id=target.id if is_robot else None,
-                    structure_id=target.id if is_structure else None,
-                    team_id=target.team,
-                    attacker_id=source_robot.id if source_robot else None,
-                    attacker_team_id=source_team_id,
-                    damage=actual_damage,
-                    award_experience=award_experience,
-                )
+        if actual_damage > 0 or resolution.virtual_shield_absorbed > 0:
+            event = MatchEvent(
+                type=damaged_event,
+                time=event_time,
+                robot_id=target.id if is_robot else None,
+                structure_id=target.id if is_structure else None,
+                team_id=target.team,
+                attacker_id=source_robot.id if source_robot else None,
+                attacker_team_id=source_team_id,
+                damage=actual_damage,
+                virtual_shield_absorbed=resolution.virtual_shield_absorbed,
+                award_experience=award_experience,
             )
+            self.current_events.append(event)
+            self.battle_statistics.record(event)
         if was_alive and not target.alive:
-            self.current_events.append(
-                MatchEvent(
-                    type=destroyed_event,
-                    time=event_time,
-                    robot_id=target.id if is_robot else None,
-                    structure_id=target.id if is_structure else None,
-                    team_id=target.team,
-                    attacker_id=source_robot.id if source_robot else None,
-                    attacker_team_id=source_team_id,
-                    award_experience=award_experience,
-                )
+            event = MatchEvent(
+                type=destroyed_event,
+                time=event_time,
+                robot_id=target.id if is_robot else None,
+                structure_id=target.id if is_structure else None,
+                team_id=target.team,
+                attacker_id=source_robot.id if source_robot else None,
+                attacker_team_id=source_team_id,
+                award_experience=award_experience,
             )
+            self.current_events.append(event)
+            self.battle_statistics.record(event)
         return actual_damage
+
+    def battle_report(
+        self,
+        *,
+        progression: dict[str, tuple[int, float]] | None = None,
+    ) -> BattleReport:
+        """Return an immutable report based on emitted combat events and rule state."""
+        if progression is None:
+            display_state = self.ruleset.display_state
+            progression = {
+                robot_id: (level, experience)
+                for robot_id, level, experience, _level_cap
+                in display_state.robot_progression
+            } if display_state is not None else {}
+        return self.battle_statistics.snapshot(
+            elapsed_seconds=self.elapsed_time,
+            winner_id=self.winner,
+            structures=self.structures,
+            progression=progression,
+        )
 
     def order_group_move(
         self,

@@ -238,6 +238,67 @@ def test_rmuc_broadcast_roster_uses_fixed_competition_order() -> None:
         ]
 
 
+def test_robot_display_names_are_chinese_stable_and_keep_internal_ids() -> None:
+    app = _app()
+    match = _match()
+    names = app._robot_display_names(match)
+    compact_names = app._robot_display_names(match, compact=True)
+
+    assert names["tarsgo-hero"] == "英雄"
+    assert names["tarsgo-engineer"] == "工程"
+    assert names["tarsgo-infantry-1"] == "步兵1"
+    assert names["tarsgo-infantry-2"] == "步兵2"
+    assert names["tarsgo-sentry"] == "哨兵"
+    assert names["tarsgo-drone"] == "空中机器人"
+    assert names["opponent-infantry-1"] == "步兵1"
+    assert compact_names["tarsgo-drone"] == "空中"
+    assert {robot.id for robot in match.robots} >= set(names)
+
+    original = dict(names)
+    match.robots.reverse()
+    assert app._robot_display_names(match) == original
+
+
+def test_rmuc_team_hud_rosters_render_compact_chinese_robot_names() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    pygame.init()
+    match = _match()
+
+    class RecordingFont:
+        def __init__(self, font):
+            self.font = font
+            self.rendered = []
+
+        def __getattr__(self, name):
+            return getattr(self.font, name)
+
+        def render(self, text, *args, **kwargs):
+            self.rendered.append(text)
+            return self.font.render(text, *args, **kwargs)
+
+    player_team = match.config.scenario.player_team
+    opponent_team = next(
+        team.team_id
+        for team in match.config.scenario.teams.values()
+        if team.team_id != player_team
+    )
+    micro_font = RecordingFont(app.ui_font(12))
+    app._draw_rmuc_hud(
+        pygame.Surface(app.WINDOW_SIZE),
+        app.ui_font(25),
+        app.ui_font(18),
+        micro_font,
+        match,
+        player_team,
+        opponent_team,
+    )
+
+    assert {"英雄", "工程", "步兵1", "步兵2", "哨兵", "空中"} <= set(
+        micro_font.rendered
+    )
+
+
 def test_energy_mechanism_timers_use_team_scoped_display_state() -> None:
     app = _app()
     match = _match()
@@ -265,7 +326,7 @@ def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
     pygame.font.init()
-    label_surface = app.ui_font(12).render("I1", True, (255, 255, 255))
+    label_surface = app.ui_font(12).render("步兵2 · 3级", True, (255, 255, 255))
     field_rect = pygame.Rect(0, 0, 300, 200)
     centers = [(150, 100)] * 6
     body_rects = []
@@ -273,6 +334,7 @@ def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
         body = pygame.Rect(0, 0, 54, 54)
         body.center = center
         body_rects.append(body)
+    health_bar = pygame.Rect(110, 52, 80, 4)
 
     placed = []
     for index, center in enumerate(centers):
@@ -286,7 +348,7 @@ def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
                 body
                 for body_index, body in enumerate(body_rects)
                 if body_index != index
-            ],
+            ] + [health_bar],
         )
         assert not any(label_rect.colliderect(other) for other in placed)
         assert not any(
@@ -294,15 +356,16 @@ def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
             for body_index, body in enumerate(body_rects)
             if body_index != index
         )
+        assert not label_rect.colliderect(health_bar)
         placed.append(label_rect)
 
 
-def test_normal_rmuc_map_omits_robot_codes_and_debug_restores_them() -> None:
+def test_rmuc_spectator_map_uses_chinese_names_and_only_real_levels() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
     pygame.init()
     match = _match()
-    labels = app._rmuc_robot_labels(match)
+    display_names = app._robot_display_names(match, compact=True)
 
     class RecordingFont:
         def __init__(self, font):
@@ -341,13 +404,24 @@ def test_normal_rmuc_map_omits_robot_codes_and_debug_restores_them() -> None:
             visual_state=visual_state,
             hud_font=recorder,
         )
-        return [text for text in recorder.rendered if text in set(labels.values())]
+        return recorder.rendered
 
     normal_labels = render_labels(False)
     debug_labels = render_labels(True)
-
-    assert len(debug_labels) - len(normal_labels) == sum(
-        robot.alive for robot in match.robots
+    for robot_id, name in display_names.items():
+        assert any(
+            text == name or text.startswith(f"{name} ·")
+            for text in normal_labels
+        ), (robot_id, name, normal_labels)
+    assert any(text.startswith("英雄 · 1级") for text in normal_labels)
+    assert "工程" in normal_labels
+    assert "哨兵" in normal_labels
+    assert "空中" in normal_labels
+    assert not any(text.startswith("工程 · ") for text in normal_labels)
+    assert not any(text.startswith("哨兵 · ") for text in normal_labels)
+    assert all(
+        any(text == name or text.startswith(f"{name} ·") for text in debug_labels)
+        for name in display_names.values()
     )
 
 
@@ -468,9 +542,9 @@ def test_selected_unit_panel_has_engineer_and_multi_select_views() -> None:
         labels,
     )
     assert multi_lines[0] == "已选择 3 个单位"
-    assert any(line.startswith("H") for line in multi_lines)
-    assert any(line.startswith("I1") for line in multi_lines)
-    assert any(line.startswith("I2") for line in multi_lines)
+    assert any(line.startswith("英雄") for line in multi_lines)
+    assert any(line.startswith("步兵1") for line in multi_lines)
+    assert any(line.startswith("步兵2") for line in multi_lines)
 
 
 def test_rmuc_renderer_smoke_default_and_debug_modes() -> None:

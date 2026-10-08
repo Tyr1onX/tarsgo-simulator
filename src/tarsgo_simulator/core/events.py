@@ -20,5 +20,8 @@ class MatchEvent:
     team_id: str | None = None
     attacker_id: str | None = None
     attacker_team_id: str | None = None
+    # Actual HP removed after defenses and shields. Virtual shield absorption
+    # is recorded separately and never counted as HP damage or experience.
     damage: int = 0
+    virtual_shield_absorbed: int = 0
     award_experience: bool = True
