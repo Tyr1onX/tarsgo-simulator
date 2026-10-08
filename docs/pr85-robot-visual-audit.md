@@ -1,4 +1,4 @@
-# PR #85 — RMUC 机器人视觉保真审计
+# 计划 PR #85（GitHub PR #86）— RMUC 机器人视觉保真审计
 
 审计基线：`main 123713539f25a5487537baa007d1336af53c552c`（PR #84 合并后的稳定版）。
 
@@ -21,7 +21,7 @@ Alpha 覆盖率由原始 RGBA PNG 逐像素统计。`alpha > 0` 包含柔边像�
 
 四类素材的原始采样密度足够。Infantry 底盘可辨四个麦克纳姆轮组、外露电机和 CNC 横梁；分离的云台素材包含传感器、摩擦轮和发射口。Sentry 底盘保持开放式四轮框架，独立云台包含传感器和双发射轨。Engineer 保留开放式底盘、升降组件与伸向一侧的机械臂；没有闭合装甲外壳。Drone 显示四个带网罩的旋翼、机臂与中央机身。四种素材均保留，无需新增或重绘 PNG。
 
-除云台覆盖面积外，各图层 alpha 质心与画布中心的差值在实际显示尺寸下不超过约 1.1 px。底盘和云台继续以同一 Pygame 屏幕中心绘制，独立角度继续通过原有 `body_angle` / `turret_angle` 传入。
+Infantry/Sentry 的底盘与云台 alpha 质心相对画布中心最大约 1.1 px，继续以同一 Pygame 屏幕中心绘制，独立角度继续通过原有 `body_angle` / `turret_angle` 传入。Engineer 的开放机械臂造成 alpha 质心比画布中心偏右 137.7 px、偏下 43.6 px；按最终 70×47 显示尺寸换算为 6.3×2.0 px。第二阶段将这项偏移用于 Pygame 绘制中心补偿，使旋转期间主体质心固定在机器人位置，LED 图层使用相同补偿。Drone alpha 质心与画布中心相差不到 0.5 px，无需补偿。
 
 ### 第一批：Infantry 与 Sentry
 
@@ -44,7 +44,7 @@ Infantry 云台保留与素材接近的 1.48 宽高比，显示宽度改为与�
 
 | 验收视图 | 修改前 | 修改后 |
 |---|---|---|
-| 全场 | ![修改前全场](previews/pr85/before/full-before.png) | ![修改后全场](previews/pr85/after/full-after.png) |
+| 全场 | ![修改前全场](previews/pr85/before/full-before.png) | ![第一批完成后的全场](previews/pr85/after/full-batch1-after.png) |
 | Infantry 普通局部 | ![修改前局部](previews/pr85/before/infantry-local-before.png) | ![修改后局部](previews/pr85/after/infantry-local-after.png) |
 | Infantry 最大合理缩放 3.6× | ![修改前最大缩放](previews/pr85/before/infantry-max-before.png) | ![修改后最大缩放](previews/pr85/after/infantry-max-after.png) |
 | Sentry 普通局部 | ![修改前局部](previews/pr85/before/sentry-local-before.png) | ![修改后局部](previews/pr85/after/sentry-local-after.png) |
@@ -58,7 +58,36 @@ Infantry 云台保留与素材接近的 1.48 宽高比，显示宽度改为与�
 
 ### 第二批：Engineer 与 Drone
 
-素材审计结论：Engineer 的机械臂、升降轨和四组轮子清楚，保持现有开放式结构；Drone 的旋翼网罩、机臂和机身清楚，已有轻微上下悬停和死亡状态熄灯。两张 PNG 暂不重绘。第二批的显示尺寸与旋转策略、相同镜头下前后截图、动态证据和状态展示将在第二阶段验收后补入本报告。
+素材审计确认两张 PNG 均保留：Engineer 的四组轮子、开放底盘、升降轨和机械臂可辨；Drone 的四个旋翼、保护网罩、机臂和机身完整。没有增加装甲，也没有重绘素材。
+
+| 机器人 | 稳定基线显示尺寸 | PR #85 显示尺寸 | 选择依据 |
+|---|---:|---:|---|
+| Engineer | 70×36 | 70×47 | 保持 70 px 宽度并恢复源图 1.50 宽高比；alpha 质心偏移 6.3×2.0 px，旋转补偿围绕主体位置 |
+| Drone | 48×48 | 48×48 | 方形源图、旋翼护圈与机身均清楚；alpha 质心与画布中心对齐，保留原尺寸与悬停动画 |
+
+两种素材均继续使用 AssetManager 尺寸/角度缓存。Engineer 的渲染最长边达到 96 px 后、Drone 达到 64 px 后使用 `rotozoom`；低倍率沿用轻量 `rotate`。Drone 继续使用已有 ±2 px 悬停与轻微姿态摆动，不叠加代码绘制的旋翼零件。
+
+![Engineer 修改前近景](previews/pr85/before/engineer-close-before.png)
+![Engineer 修改后近景](previews/pr85/after/engineer-close-after.png)
+
+![Drone 修改前近景](previews/pr85/before/drone-close-before.png)
+![Drone 修改后近景](previews/pr85/after/drone-close-after.png)
+
+| 验收视图 | 稳定基线 | 第二批完成 |
+|---|---|---|
+| 全场 | ![基线全场](previews/pr85/before/full-before.png) | ![两批完成后的全场](previews/pr85/after/full-after.png) |
+| Engineer 普通局部 | ![基线 Engineer 局部](previews/pr85/before/engineer-local-before.png) | ![新 Engineer 局部](previews/pr85/after/engineer-local-after.png) |
+| Engineer 最大合理缩放 3.6× | ![基线 Engineer 最大缩放](previews/pr85/before/engineer-max-before.png) | ![新 Engineer 最大缩放](previews/pr85/after/engineer-max-after.png) |
+| Drone 普通局部 | ![基线 Drone 局部](previews/pr85/before/drone-local-before.png) | ![新 Drone 局部](previews/pr85/after/drone-local-after.png) |
+| Drone 最大合理缩放 3.6× | ![基线 Drone 最大缩放](previews/pr85/before/drone-max-before.png) | ![新 Drone 最大缩放](previews/pr85/after/drone-max-after.png) |
+
+![Engineer 与 Drone 红蓝阵营、阵亡熄灯](previews/pr85/after/states-batch2-after.png)
+
+![Engineer 旋转与机械臂定位](previews/pr85/after/engineer-rotation-after.gif)
+
+![Drone 轻微姿态变化与悬停](previews/pr85/after/drone-rotation-after.gif)
+
+前后图由同一场景、机器人位置、姿态、动画时间、倍率和 Pygame `_draw` / `_draw_rmuc_robot_shape` 路径生成。动态 GIF 每段均为 30 帧。所有源素材边界展示于上方 alpha-bound 图。
 
 ## 来源与许可
 

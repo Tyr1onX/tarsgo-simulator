@@ -40,15 +40,23 @@ def test_detailed_robot_rotation_antialiasing_keeps_alpha_and_uses_transform_cac
         assert rendered.get_flags() & pygame.SRCALPHA
     assert calls == 5
 
-    # Engineer and Drone join this filtered path in the second delivery batch.
-    assert manager.render("robots/engineer.png", size=(120, 92), angle=37)
-    assert manager.render("robots/drone.png", size=(120, 92), angle=37)
+    # Engineer only needs filtering above its corrected default size; Drone
+    # keeps the common threshold because its default sprite is smaller.
+    assert manager.render("robots/engineer.png", size=(70, 47), angle=37)
     assert calls == 5
+    assert manager.render("robots/engineer.png", size=(120, 92), angle=37)
+    assert calls == 6
+    assert manager.render("robots/drone.png", size=(48, 48), angle=37)
+    assert calls == 6
+    assert manager.render("robots/drone.png", size=(120, 120), angle=37)
+    assert calls == 7
 
 
 def test_infantry_and_sentry_turrets_leave_chassis_space_visible() -> None:
     assert app._RMUC_ROBOT_SPRITE_SIZES["infantry"] == ((34, 26), (34, 23))
     assert app._RMUC_ROBOT_SPRITE_SIZES["sentry"] == ((58, 38), (56, 33))
+    assert app._RMUC_ROBOT_SPRITE_SIZES["engineer"] == ((70, 47),)
+    assert app._RMUC_ROBOT_SPRITE_SIZES["drone"] == ((48, 48),)
 
 
 def test_hero_layers_rotate_independently_and_dead_lights_are_off() -> None:

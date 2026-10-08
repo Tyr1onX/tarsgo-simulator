@@ -21,9 +21,14 @@ _FILTERED_ROBOT_ROTATION_ASSETS = frozenset(
         "robots/infantry-turret.png",
         "robots/sentry-chassis.png",
         "robots/sentry-turret.png",
+        "robots/engineer.png",
+        "robots/drone.png",
     }
 )
 _FILTERED_ROBOT_ROTATION_MIN_SIZE = 64
+_FILTERED_ROBOT_ROTATION_MIN_SIZE_BY_ASSET = {
+    "robots/engineer.png": 96,
+}
 
 
 def quantize_transform_angle(angle: float) -> float:
@@ -169,7 +174,11 @@ class AssetManager:
             ) or (
                 key in _FILTERED_ROBOT_ROTATION_ASSETS
                 and normalized_size is not None
-                and max(normalized_size) >= _FILTERED_ROBOT_ROTATION_MIN_SIZE
+                and max(normalized_size)
+                >= _FILTERED_ROBOT_ROTATION_MIN_SIZE_BY_ASSET.get(
+                    key,
+                    _FILTERED_ROBOT_ROTATION_MIN_SIZE,
+                )
             )
             if filtered_rotation:
                 rendered = pygame.transform.rotozoom(rendered, normalized_angle, 1.0)
