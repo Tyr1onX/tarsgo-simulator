@@ -151,7 +151,11 @@ class AssetManager:
                 self._prepared_cache.move_to_end(prepared_key)
             rendered = prepared
         if normalized_angle:
-            rendered = pygame.transform.rotate(rendered, normalized_angle)
+            # The Hero's fine mechanical details need antialiased rotation at close-up.
+            if key in ("robots/hero-chassis.png", "robots/hero-turret.png"):
+                rendered = pygame.transform.rotozoom(rendered, normalized_angle, 1.0)
+            else:
+                rendered = pygame.transform.rotate(rendered, normalized_angle)
         if normalized_tint is not None:
             # Multiplication tints only RGB and keeps the source alpha channel.
             strength = 0.30

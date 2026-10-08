@@ -37,6 +37,18 @@ lift and manipulator, Infantry's compact four-mecanum frame, Sentry's
 autonomous gimbal, and the Drone's four large mesh rotor guards. Text, team
 numbers and logos are omitted from generated sprites.
 
+## PR #84 Hero detail trial (2026-10-08)
+
+The two Hero PNGs are **derived from the existing V2 originals** in commit
+`fdb79dfcc50e372af0ec1d524156f0638961760e`; no third-party photos, new
+AI illustrations, or externally sourced geometry were added. The pixel-level
+trial preserves native size, transparent alpha, and layer registration, using
+a mild per-channel gamma adjustment (0.83) and native-resolution unsharp mask
+(radius 1.65, 62%, threshold 4). Source authorship and MIT permission remain
+unchanged. The presentation-only gimbal footprint was reduced to uncover the
+wheel modules, and its display rotation uses Pygame's filtered `rotozoom`.
+See `docs/pr84-hero-visual-audit.md` for reproducible comparison evidence.
+
 Sprite dimensions and pixel bounds are presentation data only. The renderer
 scales them using desktop visual profiles; collision footprints, navigation,
 AI, official millimeter geometry, and rules do not read these files. If any

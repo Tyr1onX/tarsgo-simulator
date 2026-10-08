@@ -222,7 +222,7 @@ def _install_instrumentation(measurements: Measurements, frame_count: int, fps: 
     ASSET_MANAGER.render = timed_asset_render.__get__(ASSET_MANAGER, type(ASSET_MANAGER))
     restorers.append(lambda: setattr(ASSET_MANAGER, "render", original_render))
 
-    for name in ("rotate", "smoothscale"):
+    for name in ("rotate", "smoothscale", "rotozoom"):
         original = getattr(pygame.transform, name)
 
         def make_wrapper(transform_name, original_transform):
@@ -352,6 +352,15 @@ def main() -> None:
             "misses": measurements.cache_misses,
             "hit_rate": measurements.cache_hits / cache_total if cache_total else 0.0,
             "transform_calls": transform_calls,
+            "resident_bytes": sum(
+                surface.get_pitch() * surface.get_height()
+                for cache in (
+                    ASSET_MANAGER._source_cache,
+                    ASSET_MANAGER._prepared_cache,
+                    ASSET_MANAGER._transform_cache,
+                )
+                for surface in cache.values()
+            ),
         },
         "pathfinding_scheduler": pathfinding_counters,
         "movement_diagnostics": movement_counters,
