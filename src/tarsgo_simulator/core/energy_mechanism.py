@@ -7,25 +7,29 @@ import math
 
 
 SMALL_ENERGY_ROTATION_SPEED_RAD_S = math.pi / 3.0
+SMALL_ENERGY_TARGET_MAX_DIAMETER_MM = 308.0
+SMALL_ENERGY_TARGET_DETECTION_DIAMETER_MM = 300.0
 
 
 @dataclass(frozen=True, slots=True)
 class EnergyMechanismPanel:
-    """One of the five rotating target modules in the planar field model."""
+    """One visible lamp arm and its official circular detection target."""
 
     module_index: int
     center: tuple[float, float]
     vertices: tuple[tuple[float, float], ...]
+    detection_radius_mm: float = SMALL_ENERGY_TARGET_DETECTION_DIAMETER_MM / 2.0
 
 
 @dataclass(frozen=True, slots=True)
 class SmallEnergyMechanism:
     """Shared central mechanism entity; each team has separate rule state.
 
-    V1.4.0 specifies five armor modules and a constant small-mechanism speed,
-    but does not publish a dimensioned module footprint or exact XY center.
-    The centered location and radial panel dimensions are Rules Lab
-    approximations. Collision and rendering consume these same projections.
+    V1.4.0 specifies a 300 mm effective circular detection region within a
+    lamp target whose maximum diameter is 308 mm, and a constant small-
+    mechanism speed. The target center's full-field coordinates, panel-arm
+    silhouette, height, and 2D projection are Rules Lab approximations. The
+    official detection circle is shared by collision and rendering.
     """
 
     center: tuple[float, float]

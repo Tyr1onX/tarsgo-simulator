@@ -632,8 +632,11 @@ def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> N
     assert pygame.image.tostring(screen_a, "RGBA") != pygame.image.tostring(screen_b, "RGBA")
 
 
-def test_small_energy_active_lamp_uses_the_shared_rotating_panel_pose() -> None:
+def test_small_energy_active_lamp_uses_the_shared_detection_circle_pose(
+    monkeypatch,
+) -> None:
     app = _app()
+    pygame = importlib.import_module("pygame")
     match = _match()
     rules = match.ruleset
     sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
@@ -652,6 +655,9 @@ def test_small_energy_active_lamp_uses_the_shared_rotating_panel_pose() -> None:
         if panel.module_index == team_state.lit_module_index
     )
     assert display.panels[team_state.lit_module_index].vertices == panel.vertices
+    assert display.panels[team_state.lit_module_index].detection_radius_mm == (
+        panel.detection_radius_mm
+    )
 
     base = app._viewport_for_match(match)
     center = (match.map.width / 2.0, match.map.height / 2.0)
@@ -666,6 +672,16 @@ def test_small_energy_active_lamp_uses_the_shared_rotating_panel_pose() -> None:
         world_size=base.world_size,
     )
     screen, _font, small_font = _surface_and_fonts()
+    drawn_circles = []
+    original_circle = pygame.draw.circle
+
+    def capture_circle(surface, color, position, radius, *args, **kwargs):
+        drawn_circles.append(
+            (position, radius, kwargs.get("width", args[0] if args else 0))
+        )
+        return original_circle(surface, color, position, radius, *args, **kwargs)
+
+    monkeypatch.setattr(pygame.draw, "circle", capture_circle)
     app._draw_rmuc_small_energy_mechanism(
         screen,
         small_font,
@@ -679,6 +695,12 @@ def test_small_energy_active_lamp_uses_the_shared_rotating_panel_pose() -> None:
     lamp = (lamp_center[0] - 4, lamp_center[1])
 
     assert screen.get_at(lamp)[:3] == app._rmuc_team_color(match, sentry.team)
+    expected_target = (
+        lamp_center,
+        max(1, round(viewport.world_length_to_screen(panel.detection_radius_mm))),
+        1,
+    )
+    assert expected_target in drawn_circles
 
 
 def test_returning_pose_matches_real_projectile_hit_and_desktop_projection(

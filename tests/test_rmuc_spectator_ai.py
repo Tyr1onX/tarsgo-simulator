@@ -293,10 +293,16 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     longest_collision_stall = {robot.id: 0.0 for robot in match.robots}
     stationary_classes: dict[str, int] = {}
     maximum_path_queue = 0
+    small_energy_contacts = []
 
     for tick in range(420 * 60):
         before = {robot.id: robot.position for robot in match.robots}
         match.update(dt)
+        small_energy_contacts.extend(
+            impact
+            for impact in match.projectile_system.impacts
+            if impact.target_kind == "energy_mechanism"
+        )
         maximum_path_queue = max(
             maximum_path_queue,
             len(match._path_work_queue),
@@ -352,6 +358,30 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     assert stationary_classes["dead_or_respawning"] > 0
     assert stationary_classes["collision_yield"] > 0
     assert stationary_classes.get("path_without_motion", 0) == 0
+
+    # This is a normal, unassisted match start. Keep any autonomous mechanism
+    # contacts tied to real eligible AI fire and to the existing reward event;
+    # no near-field teleport/fixture is part of this full-match evidence.
+    activation_times = match.ruleset._small_energy_mechanism_activation_times_by_team
+    eligible_ai_ids = {
+        robot.id
+        for robot in match.robots
+        if match.is_ai_controlled(robot.id) and robot.type in {"infantry", "sentry"}
+    }
+    for team_id, state in match.ruleset._small_energy_mechanism_by_team.items():
+        completions = [
+            impact
+            for impact in small_energy_contacts
+            if impact.shooter_team_id == team_id
+            and impact.outcome == "energy_activated"
+        ]
+        assert len(completions) == len(activation_times[team_id])
+        assert state.opportunities_used <= 2
+    assert all(
+        impact.caliber == "17mm"
+        and impact.shooter_id in eligible_ai_ids
+        for impact in small_energy_contacts
+    )
 
 
 def test_team_strategy_switches_for_structure_crisis_and_finish_opportunity() -> None:

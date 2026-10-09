@@ -3382,7 +3382,10 @@ def _draw_rmuc_small_energy_mechanism(
         color = _rmuc_team_color(match, state.team_id)
         if state.status == "failed":
             failure_colors.append(color)
-        if state.status == "activating" and state.lit_module_index is not None:
+        if (
+            state.status in {"activating", "failed"}
+            and state.lit_module_index is not None
+        ):
             active_lights.setdefault(state.lit_module_index, []).append(color)
         for module_index in state.completed_module_indices:
             completed_lights.setdefault(module_index, []).append(color)
@@ -3398,6 +3401,17 @@ def _draw_rmuc_small_energy_mechanism(
         pygame.draw.polygon(screen, (124, 137, 145), points, width=2)
         panel_center = tuple(
             round(value) for value in viewport.world_to_screen(panel.center)
+        )
+        target_radius = max(
+            1,
+            round(viewport.world_length_to_screen(panel.detection_radius_mm)),
+        )
+        pygame.draw.circle(
+            screen,
+            (156, 169, 177),
+            panel_center,
+            target_radius,
+            width=1,
         )
         completed = completed_lights.get(panel.module_index, ())
         if completed:

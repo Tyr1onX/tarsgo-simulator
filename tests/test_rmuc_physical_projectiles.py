@@ -59,6 +59,10 @@ def _ticks(match: Match, count: int) -> None:
 def test_17mm_continuous_fire_keeps_multiple_independent_projectiles_in_flight() -> None:
     match = _match()
     shooter, target = _prepare_duel(match)
+    # Keep the firing lane clear of the now-physical energy-mechanism target
+    # at field center; this test measures independent projectile lifetimes.
+    shooter.position = (12000.0, 3000.0)
+    target.position = (14000.0, 3000.0)
     target_hp = target.hp
 
     match.update(TICK)

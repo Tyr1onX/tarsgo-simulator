@@ -88,6 +88,7 @@ class EnergyMechanismPanelDisplayState:
     module_index: int
     center: tuple[float, float]
     vertices: tuple[tuple[float, float], ...]
+    detection_radius_mm: float
 
 
 @dataclass(frozen=True, slots=True)

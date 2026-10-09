@@ -461,10 +461,14 @@ class ProjectileSystem:
                 if target_kind == "energy_mechanism":
                     special = target
                     if isinstance(special, ProjectileSpecialHitbox) and on_special_hit:
+                        surface_point = (
+                            point[0] - projectile.radius * normal[0],
+                            point[1] - projectile.radius * normal[1],
+                        )
                         outcome = on_special_hit(
                             projectile,
                             special,
-                            point,
+                            surface_point,
                             impact_speed,
                             simulation_start_time + max(0.0, dt) * fraction,
                         )
@@ -769,10 +773,21 @@ def _first_collision(
             )
 
     for special in special_hitboxes:
-        hit = _polygon_contact(start, end, special.vertices, projectile_radius)
+        hit = _moving_circle_contact(
+            start,
+            end,
+            special.center,
+            special.radius + projectile_radius,
+        )
         if hit is None:
             continue
-        fraction, normal = hit
+        fraction, contact_center = hit
+        normal = _unit_vector(
+            contact_center[0] - special.center[0],
+            contact_center[1] - special.center[1],
+        )
+        if normal == (0.0, 0.0):
+            normal = _unit_vector(start[0] - end[0], start[1] - end[1])
         candidates.append(
             (
                 fraction,

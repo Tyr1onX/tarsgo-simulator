@@ -4671,7 +4671,8 @@ class RMUC2026RegionalRules:
                 id=entity.id,
                 target_kind="energy_mechanism",
                 module_id=str(panel.module_index),
-                vertices=panel.vertices,
+                center=panel.center,
+                radius=panel.detection_radius_mm,
             )
             for panel in entity.panels_at(elapsed_time)
         )
@@ -4684,7 +4685,6 @@ class RMUC2026RegionalRules:
         impact_speed: float,
         impact_time: float,
     ) -> str:
-        del impact_position
         if projectile.caliber != "17mm":
             return "energy_mechanism_illegal_projectile"
         if impact_speed <= 12_000.0 + 1e-9:
@@ -4694,23 +4694,32 @@ class RMUC2026RegionalRules:
         )
         if state is None or state.status != "activating":
             return "energy_mechanism_inactive"
+        try:
+            module_index = int(hitbox.module_id)
+        except ValueError:
+            return "energy_mechanism_ignored"
+        if math.dist(impact_position, hitbox.center) > hitbox.radius + 1.0 + 1e-9:
+            return "energy_mechanism_outside_detection_area"
         if (
             state.attempt_deadline is None
             or state.lit_module_deadline is None
             or impact_time > state.attempt_deadline + 1e-9
-            or impact_time > state.lit_module_deadline + 1e-9
             or impact_time >= _SMALL_ENERGY_PHASE_END - 1e-9
         ):
             self._fail_small_energy_activation(
                 projectile.shooter_team_id,
                 state,
-                impact_time,
+                min(state.attempt_deadline or _SMALL_ENERGY_PHASE_END,
+                    _SMALL_ENERGY_PHASE_END),
             )
             return "energy_activation_failed"
-        try:
-            module_index = int(hitbox.module_id)
-        except ValueError:
-            return "energy_mechanism_ignored"
+        if impact_time > state.lit_module_deadline + 1e-9:
+            self._fail_small_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                state.lit_module_deadline,
+            )
+            return "energy_activation_failed"
         if module_index != state.lit_module_index:
             self._fail_small_energy_activation(
                 projectile.shooter_team_id,
@@ -4814,6 +4823,22 @@ class RMUC2026RegionalRules:
         state: _SmallEnergyMechanismTeamState,
         at_time: float,
     ) -> None:
+        state.completed_modules.clear()
+        state.last_failure_at = at_time
+        state.failure_count += 1
+        activation_deadline = min(
+            state.attempt_deadline or _SMALL_ENERGY_PHASE_END,
+            _SMALL_ENERGY_PHASE_END,
+        )
+        if (
+            state.attempt_deadline is not None
+            and at_time < activation_deadline - 1e-9
+        ):
+            # A failed 2.5-second lamp attempt resets the module sequence but
+            # stays in the same 20-second activation. Only the overall window
+            # timeout returns the mechanism to inactive.
+            self._light_next_small_energy_module(team_id, state, at_time)
+            return
         state.status = "inactive"
         state.attempt_started_at = None
         state.attempt_deadline = None
@@ -4821,9 +4846,6 @@ class RMUC2026RegionalRules:
         state.lit_module_index = None
         state.lit_module_deadline = None
         state.lit_approach_position = None
-        state.completed_modules.clear()
-        state.last_failure_at = at_time
-        state.failure_count += 1
 
     def _complete_small_energy_activation(
         self,
@@ -4857,17 +4879,26 @@ class RMUC2026RegionalRules:
         now = min(match.elapsed_time, _SMALL_ENERGY_PHASE_END)
         for team_id, state in self._small_energy_mechanism_by_team.items():
             if state.status == "activating":
-                deadline = min(
+                activation_deadline = min(
                     value
-                    for value in (
-                        state.attempt_deadline,
-                        state.lit_module_deadline,
-                        _SMALL_ENERGY_PHASE_END,
-                    )
+                    for value in (state.attempt_deadline, _SMALL_ENERGY_PHASE_END)
                     if value is not None
                 )
-                if now + 1e-9 >= deadline:
-                    self._fail_small_energy_activation(team_id, state, deadline)
+                if now + 1e-9 >= activation_deadline:
+                    self._fail_small_energy_activation(
+                        team_id,
+                        state,
+                        activation_deadline,
+                    )
+                elif (
+                    state.lit_module_deadline is not None
+                    and now + 1e-9 >= state.lit_module_deadline
+                ):
+                    self._fail_small_energy_activation(
+                        team_id,
+                        state,
+                        state.lit_module_deadline,
+                    )
             elif state.status == "activated" and self._small_energy_buff_remaining(
                 team_id
             ) <= 1e-9:
@@ -4924,6 +4955,7 @@ class RMUC2026RegionalRules:
                     module_index=panel.module_index,
                     center=panel.center,
                     vertices=panel.vertices,
+                    detection_radius_mm=panel.detection_radius_mm,
                 )
                 for panel in panels
             ),

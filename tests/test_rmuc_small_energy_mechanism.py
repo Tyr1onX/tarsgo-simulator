@@ -162,16 +162,28 @@ def test_small_energy_live_command_eligibility_and_accumulated_chances() -> None
     assert rules.request_small_energy_mechanism_activation(match, red_infantry)
     assert not rules.request_small_energy_mechanism_activation(match, red_sentry)
 
-    # A missed first lit window fails and resets the active state. The manual
-    # does not specify chance refunds; Rules Lab consumes one at command start.
+    # A missed lamp resets the sequence but remains in the same 20-second
+    # activation. The command consumed one cumulative opportunity on start.
     match.update(2.5)
     state = rules._small_energy_mechanism_by_team[RED]
-    assert state.status == "inactive"
+    assert state.status == "activating"
     assert state.failure_count == 1
     assert state.opportunities_used == 1
+    assert state.attempt_started_at == pytest.approx(0.0)
+    assert state.attempt_deadline == pytest.approx(20.0)
+    assert state.lit_module_deadline == pytest.approx(5.0)
+    assert not rules.request_small_energy_mechanism_activation(match, red_sentry)
     assert not rules.small_energy_mechanism_activation_available(RED)
 
-    match.update(87.499)
+    # The independent overall 20-second timeout, rather than the first lamp
+    # timeout, finally returns the mechanism to inactive.
+    match.update(17.5)
+    assert match.elapsed_time == pytest.approx(20.0)
+    assert state.status == "inactive"
+    assert state.failure_count == 2
+    assert state.opportunities_used == 1
+
+    match.update(69.999)
     assert not rules.request_small_energy_mechanism_activation(match, red_sentry)
     match.update(0.001)
     assert match.elapsed_time == pytest.approx(90.0)
@@ -242,6 +254,94 @@ def test_small_energy_real_projectiles_complete_five_lit_modules_and_reward() ->
     assert rules._current_small_energy_mechanism_defense(RED) == pytest.approx(0.25)
     assert rules._current_small_energy_mechanism_defense(BLUE) == 0.0
     assert rules._energy_mechanism_buffs_by_team[RED][0].experience_bonus_remaining == 1200.0
+
+
+def test_small_energy_real_projectile_uses_official_detection_circle() -> None:
+    match = _match()
+    rules = match.ruleset
+    sentry = _robot(match, "tarsgo-sentry")
+    match.robots = [sentry]
+    assert rules.request_small_energy_mechanism_activation(match, sentry)
+    state = rules._small_energy_mechanism_by_team[RED]
+    entity = rules._small_energy_mechanism_entity
+    assert entity is not None
+    panel = next(
+        item
+        for item in entity.panels_at(match.elapsed_time)
+        if item.module_index == state.lit_module_index
+    )
+    assert panel.detection_radius_mm == pytest.approx(150.0)
+    hitbox = next(
+        item
+        for item in rules.small_energy_mechanism_projectile_hitboxes(0.0)
+        if item.module_id == str(panel.module_index)
+    )
+    assert hitbox.center == panel.center
+    assert hitbox.radius == panel.detection_radius_mm
+    dx = panel.center[0] - entity.center[0]
+    dy = panel.center[1] - entity.center[1]
+    radial_length = math.hypot(dx, dy)
+    radial = (dx / radial_length, dy / radial_length)
+    speed = 25_000.0
+
+    def inject_projectile(projectile_id: int, end_radius: float) -> float:
+        start_radius = 1_000.0
+        start = (
+            entity.center[0] + radial[0] * start_radius,
+            entity.center[1] + radial[1] * start_radius,
+        )
+        displacement = start_radius - end_radius
+        dt = displacement / speed
+        match.projectile_system.projectiles.append(
+            Projectile(
+                id=projectile_id,
+                shooter_id=sentry.id,
+                shooter_team_id=RED,
+                caliber="17mm",
+                damage=20,
+                radius=8.4,
+                speed=speed,
+                effective_range=2400.0,
+                position=start,
+                previous_position=start,
+                velocity=(-radial[0] * speed, -radial[1] * speed),
+                height_mm=match.map.terrain_height_at(start),
+                target_id=f"circle-test:{projectile_id}",
+            )
+        )
+        return dt
+
+    # This path crosses the drawn arm silhouette but ends 1 mm outside the
+    # 300 mm target after accounting for the physical projectile radius.
+    panel_middle_radius = (
+        entity.panel_inner_radius_mm + entity.panel_outer_radius_mm
+    ) / 2.0
+    outside_radius = panel_middle_radius + panel.detection_radius_mm + 8.4 + 1.0
+    assert entity.panel_inner_radius_mm < outside_radius < entity.panel_outer_radius_mm
+    match.update(inject_projectile(9910, outside_radius))
+    assert not match.projectile_system.impacts
+    assert state.status == "activating"
+    assert not state.completed_modules
+
+    # A second real swept projectile reaches the same lit detector circle.
+    match.projectile_system.projectiles.clear()
+    match.update(inject_projectile(9911, 600.0))
+    contact = next(
+        impact
+        for impact in match.projectile_system.impacts
+        if impact.target_kind == "energy_mechanism"
+    )
+    assert contact.armor_face == str(panel.module_index)
+    assert contact.outcome == "energy_module_activated"
+    impact_panel = next(
+        item
+        for item in entity.panels_at(match.elapsed_time)
+        if item.module_index == panel.module_index
+    )
+    surface_radius = math.dist(contact.position, impact_panel.center)
+    assert surface_radius == pytest.approx(150.0 + 8.4, abs=1.0)
+    assert state.status == "activating"
+    assert len(state.completed_modules) == 1
 
 
 def test_spectator_ai_activates_small_energy_through_real_projectiles() -> None:
@@ -351,8 +451,12 @@ def test_small_energy_real_unlit_module_contact_resets_only_its_team() -> None:
     )
     assert contact.armor_face == str(wrong_index)
     assert contact.outcome == "energy_activation_failed"
-    assert red_state.status == "inactive"
+    assert red_state.status == "activating"
     assert red_state.failure_count == 1
+    assert red_state.attempt_deadline == pytest.approx(20.0)
+    assert red_state.opportunities_used == 1
+    assert red_state.completed_modules == set()
+    assert red_state.lit_module_index is not None
     assert blue_state.status == "activating"
     assert blue_state.completed_modules == set()
 
@@ -382,7 +486,8 @@ def test_small_energy_projectile_speed_caliber_and_lit_window_boundaries() -> No
             id=entity.id,
             target_kind="energy_mechanism",
             module_id=str(panel.module_index),
-            vertices=panel.vertices,
+            center=panel.center,
+            radius=panel.detection_radius_mm,
         )
         return rules.on_small_energy_mechanism_projectile_hit(
             projectile,
@@ -418,8 +523,12 @@ def test_small_energy_projectile_speed_caliber_and_lit_window_boundaries() -> No
         )
         == "energy_activation_failed"
     )
-    assert state.status == "inactive"
+    assert state.status == "activating"
     assert state.failure_count == 1
+    assert state.attempt_deadline == pytest.approx(20.0)
+    assert state.lit_module_deadline == pytest.approx(7.5)
+    assert state.opportunities_used == 1
+    assert state.completed_modules == set()
 
 
 def test_small_energy_defense_is_team_scoped_for_robots_and_structures() -> None:

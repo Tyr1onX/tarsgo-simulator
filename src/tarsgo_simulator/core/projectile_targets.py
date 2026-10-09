@@ -22,4 +22,5 @@ class ProjectileSpecialHitbox:
     id: str
     target_kind: str
     module_id: str
-    vertices: tuple[tuple[float, float], ...]
+    center: tuple[float, float]
+    radius: float
