@@ -322,42 +322,38 @@ def test_energy_mechanism_timers_use_team_scoped_display_state() -> None:
     assert app._rmuc_energy_timer_labels(match, opponent_team) == ()
 
 
-def test_rmuc_map_labels_separate_when_robots_cluster() -> None:
+def test_robot_labels_stay_fixed_above_health_bars() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
     pygame.font.init()
-    label_surface = app.ui_font(12).render("步兵2 · 3级", True, (255, 255, 255))
-    field_rect = pygame.Rect(0, 0, 300, 200)
-    centers = [(150, 100)] * 6
-    body_rects = []
-    for center in centers:
-        body = pygame.Rect(0, 0, 54, 54)
-        body.center = center
-        body_rects.append(body)
+    label_surface = app.ui_font(12).render("步兵1 · LV3", True, (255, 255, 255))
     health_bar = pygame.Rect(110, 52, 80, 4)
 
-    placed = []
-    for index, center in enumerate(centers):
-        label_rect = app._rmuc_map_label_rect(
-            label_surface,
-            center=center,
-            radius=20,
-            field_rect=field_rect,
-            occupied_labels=placed,
-            other_robot_bodies=[
-                body
-                for body_index, body in enumerate(body_rects)
-                if body_index != index
-            ] + [health_bar],
-        )
-        assert not any(label_rect.colliderect(other) for other in placed)
-        assert not any(
-            label_rect.colliderect(body)
-            for body_index, body in enumerate(body_rects)
-            if body_index != index
-        )
-        assert not label_rect.colliderect(health_bar)
-        placed.append(label_rect)
+    first = app._robot_label_rect(
+        label_surface,
+        center=(150, 100),
+        radius=20,
+        health_bar_rect=health_bar,
+    )
+    second = app._robot_label_rect(
+        label_surface,
+        center=(150, 100),
+        radius=20,
+        health_bar_rect=health_bar,
+    )
+
+    assert first == second
+    assert first.centerx == health_bar.centerx
+    assert first.bottom == health_bar.top - 2
+
+    no_bar = app._robot_label_rect(
+        label_surface,
+        center=(150, 100),
+        radius=20,
+        health_bar_rect=None,
+    )
+    assert no_bar.centerx == 150
+    assert no_bar.bottom == 100 - 20 - 4
 
 
 def test_rmuc_spectator_map_uses_chinese_names_and_only_real_levels() -> None:
@@ -410,17 +406,17 @@ def test_rmuc_spectator_map_uses_chinese_names_and_only_real_levels() -> None:
     debug_labels = render_labels(True)
     for robot_id, name in display_names.items():
         assert any(
-            text == name or text.startswith(f"{name} ·")
+            text == name or text.startswith(f"{name} · LV")
             for text in normal_labels
         ), (robot_id, name, normal_labels)
-    assert any(text.startswith("英雄 · 1级") for text in normal_labels)
+    assert "英雄 · LV1" in normal_labels
     assert "工程" in normal_labels
     assert "哨兵" in normal_labels
     assert "空中" in normal_labels
-    assert not any(text.startswith("工程 · ") for text in normal_labels)
-    assert not any(text.startswith("哨兵 · ") for text in normal_labels)
+    assert not any(text.startswith("工程 · LV") for text in normal_labels)
+    assert not any(text.startswith("哨兵 · LV") for text in normal_labels)
     assert all(
-        any(text == name or text.startswith(f"{name} ·") for text in debug_labels)
+        any(text == name or text.startswith(f"{name} · LV") for text in debug_labels)
         for name in display_names.values()
     )
 
