@@ -509,7 +509,8 @@ def test_match_reset_clears_all_terrain_state_and_first_acquired_history() -> No
     assert state.road_reacquire_remaining == 0
     assert state.sequence.terrain_type is None
     assert state.first_acquired_types == set()
-    assert state.occupied_rfid_zone_ids == set()
+    assert match.zone_events == []
+    assert match.rfid_read_events == []
 
 
 def test_large_dt_expires_all_active_terrain_timers() -> None:

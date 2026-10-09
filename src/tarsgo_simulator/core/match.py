@@ -8,7 +8,13 @@ import random
 
 from tarsgo_simulator.core.combat import update_combat
 from tarsgo_simulator.core.config import MatchConfig, load_match_config
-from tarsgo_simulator.core.events import MatchEvent, MatchEventType
+from tarsgo_simulator.core.events import (
+    MatchEvent,
+    MatchEventType,
+    RFIDReadEvent,
+    ZoneEvent,
+    ZoneEventType,
+)
 from tarsgo_simulator.core.map import GameMap
 from tarsgo_simulator.core.pathfinding import IncrementalAStar, find_path
 from tarsgo_simulator.core.projectiles import Projectile, ProjectileImpact, ProjectileSystem
@@ -176,6 +182,16 @@ class Match:
         self.finished = False
         self.winner: str | None = None
         self.current_events: list[MatchEvent] = []
+        self.zone_events: list[ZoneEvent] = []
+        self._pending_zone_events: list[ZoneEvent] = []
+        self.rfid_read_events: list[RFIDReadEvent] = []
+        self._in_update = False
+        self._robot_zone_presence: dict[str, set[str]] = {
+            robot.id: set() for robot in self.robots
+        }
+        self._robot_position_at_zone_sync: dict[str, tuple[float, float]] = {}
+        self._robot_alive_at_zone_sync: dict[str, bool] = {}
+        self._rfid_read_latches: set[tuple[str, str]] = set()
         self.battle_statistics = BattleStatistics(self.robots)
         self._events_from_last_update = 0
         self._active_update_dt: float | None = None
@@ -274,6 +290,7 @@ class Match:
             team_id: False for team_id in self._rmuc_radar_ai_elapsed
         }
         self.ruleset.reset(self)
+        self._prime_zone_presence()
 
     @property
     def time_limit(self) -> float:
@@ -479,6 +496,8 @@ class Match:
             self.current_events.append(event)
             self.battle_statistics.record(event)
         if was_alive and not target.alive:
+            if isinstance(target, Robot):
+                self._remove_robot_zone_presence(target, event_time, cause="death")
             event = MatchEvent(
                 type=destroyed_event,
                 time=event_time,
@@ -892,8 +911,12 @@ class Match:
         if self._events_from_last_update:
             del self.current_events[: self._events_from_last_update]
             self._events_from_last_update = 0
+        self.zone_events = self._pending_zone_events
+        self._pending_zone_events = []
+        self.rfid_read_events.clear()
         self._active_update_dt = dt
         self._active_update_start_time = self.elapsed_time
+        self._in_update = True
         try:
             self._update_ai(dt)
             self._advance_path_requests()
@@ -901,6 +924,11 @@ class Match:
                 robot.update_cooldown(dt)
             self.ruleset.prepare_movement(self, dt)
             self._move_robots(dt)
+            self._update_zone_presence(
+                self._active_update_start_time + dt
+                if self._active_update_start_time is not None
+                else self.elapsed_time + dt
+            )
             self.ruleset.prepare_combat(self, dt)
             if self.uses_physical_projectiles:
                 existing_projectile_ids = tuple(
@@ -972,6 +1000,7 @@ class Match:
             self.elapsed_time += dt
             self.ruleset.update(self, dt)
         finally:
+            self._in_update = False
             self._active_update_dt = None
             self._active_update_start_time = None
         self._events_from_last_update = len(self.current_events)
@@ -1402,6 +1431,196 @@ class Match:
     def _zone(self, zone_id: str):
         return next((zone for zone in self.map.zones if zone.id == zone_id), None)
 
+    def is_robot_in_zone(self, robot_id: str, zone_id: str) -> bool:
+        """Return the shared post-movement occupancy snapshot for a robot."""
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if robot is not None and (
+            self._robot_position_at_zone_sync.get(robot_id) != robot.position
+            or self._robot_alive_at_zone_sync.get(robot_id) != robot.alive
+        ):
+            # Keep the shared occupancy state correct for explicit simulator
+            # controls and tests that reposition a robot between fixed ticks.
+            # This path records a position sync but never fabricates an RFID
+            # read; only the ruleset's entered-event consumer can do that.
+            self._sync_robot_zone_presence(
+                robot,
+                self._zone_event_time(),
+                emit_stayed=False,
+                cause="position_sync",
+            )
+        return zone_id in self._robot_zone_presence.get(robot_id, ())
+
+    def is_robot_position_in_zone(self, robot_id: str, zone_id: str) -> bool:
+        """Check coordinates independently from alive-only zone occupancy.
+
+        Respawn rules may depend on where a robot died; a dead robot is not an
+        occupant and therefore must not appear in ``is_robot_in_zone``.
+        """
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        zone = self._zone(zone_id)
+        return (
+            robot is not None
+            and zone is not None
+            and zone.contains(robot.position)
+        )
+
+    def _zone_event_time(self) -> float:
+        if (
+            self._active_update_start_time is not None
+            and self._active_update_dt is not None
+        ):
+            return self._active_update_start_time + self._active_update_dt
+        return self.elapsed_time
+
+    def _emit_zone_event(self, event: ZoneEvent) -> None:
+        if self._in_update:
+            self.zone_events.append(event)
+        else:
+            self._pending_zone_events.append(event)
+
+    def record_projected_rfid_read(
+        self,
+        robot_id: str,
+        zone_id: str,
+        *,
+        time: float,
+    ) -> RFIDReadEvent | None:
+        """Record the Rules Lab's schematic card read after a real zone entry.
+
+        The rulebook does not define exact card footprints or reader latency;
+        callers must pass an ENTERED zone event, and the event remains labeled
+        as an approximation so it cannot be mistaken for a hardware RFID read.
+        """
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if (
+            robot is None
+            or not robot.alive
+            or not self.is_robot_in_zone(robot_id, zone_id)
+            or (robot_id, zone_id) in self._rfid_read_latches
+            or not any(
+                event.type is ZoneEventType.ENTERED
+                and event.robot_id == robot_id
+                and event.zone_id == zone_id
+                and event.cause == "movement"
+                for event in self.zone_events
+            )
+        ):
+            return None
+
+        event = RFIDReadEvent(
+            time=time,
+            robot_id=robot.id,
+            team_id=robot.team,
+            zone_id=zone_id,
+        )
+        self._rfid_read_latches.add((robot_id, zone_id))
+        self.rfid_read_events.append(event)
+        return event
+
+    def _prime_zone_presence(self) -> None:
+        """Seed reset-time occupancy without synthesizing an entry or RFID read."""
+        self._robot_zone_presence = {
+            robot.id: (
+                {
+                    zone.id
+                    for zone in self.map.zones
+                    if zone.contains(robot.position)
+                }
+                if robot.alive
+                else set()
+            )
+            for robot in self.robots
+        }
+        self._robot_position_at_zone_sync = {
+            robot.id: robot.position for robot in self.robots
+        }
+        self._robot_alive_at_zone_sync = {
+            robot.id: robot.alive for robot in self.robots
+        }
+        self._rfid_read_latches.clear()
+
+    def _update_zone_presence(self, event_time: float) -> None:
+        for robot in self.robots:
+            self._sync_robot_zone_presence(
+                robot,
+                event_time,
+                emit_stayed=True,
+                cause="movement",
+            )
+
+    def _sync_robot_zone_presence(
+        self,
+        robot: Robot,
+        event_time: float,
+        *,
+        emit_stayed: bool,
+        cause: str,
+    ) -> None:
+        previous = self._robot_zone_presence.setdefault(robot.id, set())
+        was_alive = self._robot_alive_at_zone_sync.get(robot.id, robot.alive)
+        event_cause = "respawn" if robot.alive and not was_alive else cause
+        current = (
+            {
+                zone.id
+                for zone in self.map.zones
+                if zone.contains(robot.position)
+            }
+            if robot.alive
+            else set()
+        )
+        for zone_id in sorted(previous - current):
+            self._rfid_read_latches.discard((robot.id, zone_id))
+            self._emit_zone_event(
+                ZoneEvent(
+                    ZoneEventType.EXITED,
+                    event_time,
+                    robot.id,
+                    robot.team,
+                    zone_id,
+                    cause=event_cause,
+                )
+            )
+        for zone_id in sorted(current):
+            entered = zone_id not in previous
+            if entered or emit_stayed:
+                self._emit_zone_event(
+                    ZoneEvent(
+                        ZoneEventType.ENTERED if entered else ZoneEventType.STAYED,
+                        event_time,
+                        robot.id,
+                        robot.team,
+                        zone_id,
+                        cause=event_cause,
+                    )
+                )
+        self._robot_zone_presence[robot.id] = current
+        self._robot_position_at_zone_sync[robot.id] = robot.position
+        self._robot_alive_at_zone_sync[robot.id] = robot.alive
+
+    def _remove_robot_zone_presence(
+        self,
+        robot: Robot,
+        event_time: float,
+        *,
+        cause: str,
+    ) -> None:
+        previous = self._robot_zone_presence.setdefault(robot.id, set())
+        for zone_id in sorted(previous):
+            self._rfid_read_latches.discard((robot.id, zone_id))
+            self._emit_zone_event(
+                ZoneEvent(
+                    ZoneEventType.EXITED,
+                    event_time,
+                    robot.id,
+                    robot.team,
+                    zone_id,
+                    cause=cause,
+                )
+            )
+        previous.clear()
+        self._robot_position_at_zone_sync[robot.id] = robot.position
+        self._robot_alive_at_zone_sync[robot.id] = robot.alive
+
     @staticmethod
     def _zone_center(zone) -> tuple[float, float]:
         return (zone.x + zone.width / 2, zone.y + zone.height / 2)
@@ -1796,7 +2015,7 @@ class Match:
                 self._zone_goal(assembly_zone, robot),
                 target_key=f"zone:assembly:{side}",
             )
-            if phase == "active" and current_step > 0 and assembly_zone.contains(robot.position):
+            if phase == "active" and current_step > 0 and self.is_robot_in_zone(robot.id, assembly_zone.id):
                 confirm = getattr(self.ruleset, "confirm_d4_step", None)
                 if callable(confirm):
                     confirm(self, robot, "own", current_step)
@@ -1810,7 +2029,7 @@ class Match:
                 self._zone_goal(assembly_zone, robot),
                 target_key=f"zone:assembly:{side}",
             )
-            if assembly_zone.contains(robot.position):
+            if self.is_robot_in_zone(robot.id, assembly_zone.id):
                 confirm = getattr(self.ruleset, "confirm_tech_core_assembly", None)
                 if callable(confirm):
                     confirm(self, robot)
@@ -1827,7 +2046,7 @@ class Match:
                 self._zone_goal(resource_zone, robot),
                 target_key=f"zone:resource:{side}",
             )
-            if resource_zone.contains(robot.position):
+            if self.is_robot_in_zone(robot.id, resource_zone.id):
                 pickup = getattr(self.ruleset, "pickup_energy_unit", None)
                 if callable(pickup):
                     pickup(self, robot)
@@ -1839,7 +2058,7 @@ class Match:
             self._zone_goal(assembly_zone, robot),
             target_key=f"zone:assembly:{side}",
         )
-        if assembly_zone.contains(robot.position):
+        if self.is_robot_in_zone(robot.id, assembly_zone.id):
             start = getattr(self.ruleset, "start_tech_core_assembly", None)
             if callable(start) and start(self, robot, difficulty) and difficulty < 4:
                 confirm = getattr(self.ruleset, "confirm_tech_core_assembly", None)
@@ -2365,7 +2584,7 @@ class Match:
         ammo = projectiles.get(robot.id)
         low_ammo = ammo is not None and ammo <= (0 if robot.type == "hero" else 8)
         if low_ammo:
-            if supply_zone.contains(robot.position):
+            if self.is_robot_in_zone(robot.id, supply_zone.id):
                 exchange = getattr(self.ruleset, "exchange_projectiles", None)
                 purchased = bool(callable(exchange) and exchange(self, robot))
                 self._clear_ai_path(robot)

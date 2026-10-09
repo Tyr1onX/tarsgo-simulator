@@ -5,7 +5,7 @@ import math
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
-from tarsgo_simulator.core.events import MatchEventType
+from tarsgo_simulator.core.events import MatchEventType, ZoneEventType
 from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import (
@@ -348,7 +348,6 @@ class _TerrainCrossingState:
         default_factory=_TerrainSequenceState
     )
     first_acquired_types: set[str] = field(default_factory=set)
-    occupied_rfid_zone_ids: set[str] = field(default_factory=set)
 
 
 class RMUC2026RegionalRules:
@@ -2647,6 +2646,7 @@ class RMUC2026RegionalRules:
         self._rebuild_zone_by_team: dict[str, Zone] = {}
         self._robot_types_by_id: dict[str, str] = {}
         self._robots_by_id: dict[str, Robot] = {}
+        self._match: "Match | None" = None
         self._drone_helipad_by_robot: dict[str, tuple[float, float]] = {}
         self._drone_air_support_by_robot: dict[str, _DroneAirSupportState] = {}
         self._progression_by_robot: dict[str, _RobotProgressionState] = {}
@@ -3782,7 +3782,7 @@ class RMUC2026RegionalRules:
         else:
             zones = self._projectile_exchange_zones_by_team.get(robot.team, ())
             if lifecycle_state.weak or not any(
-                zone.contains(robot.position)
+                self._is_robot_in_zone(robot, zone)
                 and not self._field_buff_zone_disabled(zone.id)
                 for zone in zones
             ):
@@ -3865,7 +3865,7 @@ class RMUC2026RegionalRules:
             resource_state is None
             or resource_state.energy_unit_credits >= 2
             or resource_zone is None
-            or not resource_zone.contains(engineer.position)
+            or not self._is_robot_in_zone(engineer, resource_zone)
         ):
             return False
         resource_state.energy_unit_credits += 1
@@ -3901,7 +3901,7 @@ class RMUC2026RegionalRules:
             or resource_state is None
             or resource_state.energy_unit_credits < 1
             or assembly_zone is None
-            or not assembly_zone.contains(engineer.position)
+            or not self._is_robot_in_zone(engineer, assembly_zone)
             or team_state.active_attempt is not None
             or team_state.d4_attempt is not None
             or match.elapsed_time + 1e-9 < rule.available_after
@@ -3943,7 +3943,7 @@ class RMUC2026RegionalRules:
             or team_state.active_attempt is None
             or team_state.active_attempt.engineer_id != engineer.id
             or assembly_zone is None
-            or not assembly_zone.contains(engineer.position)
+            or not self._is_robot_in_zone(engineer, assembly_zone)
         ):
             return False
 
@@ -3989,7 +3989,7 @@ class RMUC2026RegionalRules:
             or step != attempt.current_step
             or core_slot in attempt.completed_core_slots
             or assembly_zone is None
-            or not assembly_zone.contains(engineer.position)
+            or not self._is_robot_in_zone(engineer, assembly_zone)
         ):
             return False
 
@@ -4046,7 +4046,7 @@ class RMUC2026RegionalRules:
             or resource_state is None
             or resource_state.energy_unit_credits < 2
             or assembly_zone is None
-            or not assembly_zone.contains(engineer.position)
+            or not self._is_robot_in_zone(engineer, assembly_zone)
             or team_state.active_attempt is not None
             or team_state.d4_attempt is not None
             or team_state.completion_count_by_difficulty[4] >= 1
@@ -4784,6 +4784,14 @@ class RMUC2026RegionalRules:
             math.floor(delta / self._fortress_cooling_hp_step),
         )
 
+    def _is_robot_in_zone(self, robot: Robot, zone: Zone) -> bool:
+        match = self._match
+        return (
+            match is not None
+            and robot.alive
+            and match.is_robot_in_zone(robot.id, zone.id)
+        )
+
     def _advance_fortress_occupancy(self, dt: float) -> None:
         for team_id, zone in self._fortress_zone_by_team.items():
             state = self._fortress_state_by_team[team_id]
@@ -4803,7 +4811,7 @@ class RMUC2026RegionalRules:
                 and not self._is_weak(owner)
                 and owner.team == team_id
                 and owner.type in self._fortress_eligible_types
-                and zone.contains(owner.position)
+                and self._is_robot_in_zone(owner, zone)
             ):
                 state.release_remaining = self._field_occupy_release_delay
                 self._sync_fortress_reserved(
@@ -4830,7 +4838,7 @@ class RMUC2026RegionalRules:
                     and not self._is_weak(robot)
                     and robot.team == team_id
                     and robot.type in self._fortress_eligible_types
-                    and zone.contains(robot.position)
+                    and self._is_robot_in_zone(robot, zone)
                 ),
                 key=lambda robot: robot.id,
             )
@@ -4879,7 +4887,7 @@ class RMUC2026RegionalRules:
                     fortress_team_id,
                     frame_end,
                 )
-                and zone.contains(robot.position)
+                and self._is_robot_in_zone(robot, zone)
             ):
                 state.occupy_remaining = self._field_occupy_release_delay
                 state.retention_remaining = 0.0
@@ -4912,7 +4920,7 @@ class RMUC2026RegionalRules:
                     fortress_team_id,
                     frame_end,
                 )
-                and zone.contains(robot.position)
+                and self._is_robot_in_zone(robot, zone)
             )
             armor_already_deployed = armor_at_frame_start[
                 fortress_team_id
@@ -5130,13 +5138,35 @@ class RMUC2026RegionalRules:
         match: "Match",
         event_time: float,
     ) -> None:
-        del match
+        # V1.4.0 shows the interaction regions but does not publish exact RFID
+        # card outlines, dead bands, or reader latency. The deterministic
+        # Rules Lab approximation emits one read for a real projected-zone
+        # entry. Continuous occupancy remains a separate Match state.
+        for zone_event in match.zone_events:
+            if (
+                zone_event.type is not ZoneEventType.ENTERED
+                or zone_event.zone_id not in self._terrain_interrupt_zones_by_id
+            ):
+                continue
+            robot = self._robots_by_id.get(zone_event.robot_id)
+            if (
+                robot is None
+                or not robot.alive
+                or robot.type == "drone"
+                or self._is_weak(robot)
+            ):
+                continue
+            match.record_projected_rfid_read(
+                robot.id,
+                zone_event.zone_id,
+                time=event_time,
+            )
+
         for robot in self._robots_by_id.values():
             state = self._terrain_crossing_by_robot.get(robot.id)
             if state is None:
                 continue
             if not robot.alive or self._is_weak(robot):
-                state.occupied_rfid_zone_ids.clear()
                 self._reset_terrain_sequence(state)
                 continue
 
@@ -5146,51 +5176,47 @@ class RMUC2026RegionalRules:
             ):
                 self._reset_terrain_sequence(state)
 
-            current_zone_ids = {
-                zone_id
-                for zone_id, zone in self._terrain_interrupt_zones_by_id.items()
-                if zone.contains(robot.position)
-            }
-            entered_zone_ids = sorted(
-                current_zone_ids - state.occupied_rfid_zone_ids
-            )
-
             # Figure 5-23 identifies the central highland as both a buff
             # location and a terrain-crossing RFID location. If one position
             # enters both mapped regions in the same update, handle the
             # terrain crossing first; a separate entry into another RFID
             # region still interrupts the sequence as before.
-            entered_terrain_zone_ids = [
-                zone_id
-                for zone_id in entered_zone_ids
-                if zone_id in self._terrain_zone_lookup
+            reads = sorted(
+                (
+                    event
+                    for event in match.rfid_read_events
+                    if event.robot_id == robot.id
+                ),
+                key=lambda event: event.zone_id,
+            )
+            terrain_reads = [
+                event for event in reads
+                if event.zone_id in self._terrain_zone_lookup
             ]
-            entered_other_zone_ids = [
-                zone_id
-                for zone_id in entered_zone_ids
-                if zone_id not in self._terrain_zone_lookup
+            other_reads = [
+                event for event in reads
+                if event.zone_id not in self._terrain_zone_lookup
             ]
-            for zone_id in entered_terrain_zone_ids:
+            for event in terrain_reads:
                 self._process_terrain_rfid_entry(
                     robot,
                     state,
-                    zone_id,
+                    event.zone_id,
                     event_time,
                 )
-            if not entered_terrain_zone_ids:
-                for zone_id in entered_other_zone_ids:
+            if not terrain_reads:
+                for event in other_reads:
                     self._process_terrain_rfid_entry(
                         robot,
                         state,
-                        zone_id,
+                        event.zone_id,
                         event_time,
                     )
 
-            state.occupied_rfid_zone_ids = current_zone_ids
-
     def _process_terrain_rfid_entry(
         self,
-        robot: Robot,        state: _TerrainCrossingState,
+        robot: Robot,
+        state: _TerrainCrossingState,
         zone_id: str,
         event_time: float,
     ) -> None:
@@ -5292,7 +5318,7 @@ class RMUC2026RegionalRules:
         dt: float,
     ) -> float:
         key = (robot.id, zone.id)
-        if eligible and zone.contains(robot.position):
+        if eligible and self._is_robot_in_zone(robot, zone):
             self._field_occupy_remaining[key] = self._field_occupy_release_delay
             return max(0.0, dt)
         if not eligible:
@@ -5325,7 +5351,7 @@ class RMUC2026RegionalRules:
                 if robot.alive
                 and not self._is_weak(robot)
                 and robot.type in {"hero", "infantry", "sentry"}
-                and zone.contains(robot.position)
+                and self._is_robot_in_zone(robot, zone)
             }
 
             if point_state.owner_team_id is not None:
@@ -5611,6 +5637,7 @@ class RMUC2026RegionalRules:
                     break
 
     def reset(self, match: "Match") -> None:
+        self._match = match
         expected_roster = {
             "hero": 1,
             "engineer": 1,
@@ -6155,16 +6182,16 @@ class RMUC2026RegionalRules:
         own_base = self._field_base_zone_by_team.get(robot.team)
         if (
             own_supply is not None
-            and own_supply.contains(robot.position)
+            and self._is_robot_in_zone(robot, own_supply)
         ) or (
             own_base is not None
-            and own_base.contains(robot.position)
+            and self._is_robot_in_zone(robot, own_base)
         ):
             return True
 
         return any(
             self._outpost_buff_eligible(robot, point_team)
-            and zone.contains(robot.position)
+            and self._is_robot_in_zone(robot, zone)
             for point_team, zone in self._field_outpost_zone_by_team.items()
         )
 
@@ -6201,7 +6228,7 @@ class RMUC2026RegionalRules:
                 supply_zone = self._supply_buff_zone_by_team[robot.team]
                 base = self._base_by_team[robot.team]
                 accelerated = (
-                    supply_zone.contains(robot.position)
+                    match.is_robot_position_in_zone(robot.id, supply_zone.id)
                     or base.hp < self._respawn_accelerated_base_hp_below
                 )
                 rate = (
@@ -6263,7 +6290,7 @@ class RMUC2026RegionalRules:
                 robot.id in newly_respawned
                 or not robot.alive
                 or state.weak
-                or not supply_zone.contains(robot.position)
+                or not self._is_robot_in_zone(robot, supply_zone)
                 or robot.hp >= robot.max_hp
             ):
                 state.healing_rounding_residual = 0.0
@@ -6382,7 +6409,7 @@ class RMUC2026RegionalRules:
                 or not sentry.alive
                 or self._is_weak(sentry)
                 or supply_zone is None
-                or not supply_zone.contains(sentry.position)
+                or not self._is_robot_in_zone(sentry, supply_zone)
             ):
                 continue
             state = self._projectile_allowance_by_robot[sentry.id]
@@ -6783,7 +6810,6 @@ class RMUC2026RegionalRules:
                     terrain.standard_defense_remaining = 0.0
                     terrain.tunnel_defense_remaining = 0.0
                     terrain.tunnel_cooling_remaining = 0.0
-                    terrain.occupied_rfid_zone_ids.clear()
                     self._reset_terrain_sequence(terrain)
                 shooting_heat = self._shooting_heat_by_robot.get(event.robot_id)
                 if shooting_heat is not None:
@@ -6878,7 +6904,7 @@ class RMUC2026RegionalRules:
             assembly_zone = self._assembly_zone_by_team[team_id]
             if (
                 not self._is_weak(engineer)
-                and assembly_zone.contains(engineer.position)
+                and self._is_robot_in_zone(engineer, assembly_zone)
             ):
                 attempt.outside_zone_elapsed = 0.0
                 continue
@@ -6957,7 +6983,7 @@ class RMUC2026RegionalRules:
         assembly_zone = self._assembly_zone_by_team[team_id]
         if (
             not self._is_weak(engineer)
-            and assembly_zone.contains(engineer.position)
+            and self._is_robot_in_zone(engineer, assembly_zone)
         ):
             attempt.outside_zone_elapsed = 0.0
         else:
@@ -7007,7 +7033,7 @@ class RMUC2026RegionalRules:
                 and robot.alive
                 and not self._is_weak(robot)
                 and robot.type in _REBUILD_ROBOT_TYPES
-                and zone.contains(robot.position)
+                and self._is_robot_in_zone(robot, zone)
             ]
             eligible_ids = {robot.id for robot in eligible}
             for robot_id in list(state.rebuild_progress_by_robot):
