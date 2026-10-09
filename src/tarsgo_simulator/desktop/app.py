@@ -1839,59 +1839,22 @@ def _draw_compact_badges(
         cursor_x += width + 3
 
 
-def _rmuc_map_label_rect(
+def _robot_label_rect(
     label_surface: pygame.Surface,
     *,
     center: tuple[int, int],
     radius: int,
-    field_rect: pygame.Rect,
-    occupied_labels: list[pygame.Rect],
-    other_robot_bodies: list[pygame.Rect],
+    health_bar_rect: pygame.Rect | None,
 ) -> pygame.Rect:
-    width = label_surface.get_width() + 10
-    height = label_surface.get_height() + 4
-    x, y = center
-    directions = (
-        (0, 1), (0, -1), (1, 0), (-1, 0),
-        (1, 1), (-1, 1), (1, -1), (-1, -1),
+    """Keep each robot label at a stable position immediately above its bar."""
+    label_bottom = (
+        health_bar_rect.top - 4
+        if health_bar_rect is not None
+        else center[1] - radius - 6
     )
-    spacing = max(width, height) + 8
-    base_distance = radius + 9 + max(width, height) // 2
-    candidates = []
-    for ring in range(4):
-        distance = base_distance + ring * spacing
-        for dx, dy in directions:
-            diagonal_scale = 0.7071 if dx and dy else 1.0
-            candidate = label_surface.get_rect(
-                center=(
-                    round(x + dx * distance * diagonal_scale),
-                    round(y + dy * distance * diagonal_scale),
-                )
-            ).inflate(10, 4)
-            candidates.append(candidate)
-    default_center = candidates[0].center
-    best_rect = candidates[0].copy()
-    best_score: tuple[int, int, int] | None = None
-    for index, candidate in enumerate(candidates):
-        candidate = candidate.copy()
-        candidate.clamp_ip(field_rect)
-        label_collisions = sum(
-            candidate.colliderect(occupied)
-            for occupied in occupied_labels
-        )
-        body_collisions = sum(
-            candidate.colliderect(body)
-            for body in other_robot_bodies
-        )
-        displacement = (
-            abs(candidate.centerx - default_center[0])
-            + abs(candidate.centery - default_center[1])
-        )
-        score = (body_collisions, label_collisions, displacement + index)
-        if best_score is None or score < best_score:
-            best_rect = candidate
-            best_score = score
-    return best_rect
+    return label_surface.get_rect(
+        midbottom=(center[0], label_bottom),
+    ).inflate(10, 4)
 
 
 def _draw_rmuc_roster_tile(
@@ -2273,89 +2236,6 @@ def _draw_rmuc_battlefield(
         )
 
 
-def _draw_rmuc_field_regions(
-    screen: pygame.Surface,
-    field_rect: pygame.Rect,
-    viewport: Viewport,
-    zones: tuple,
-) -> tuple[str, ...]:
-    """Tint confirmed region polygons as floor treatment, never as debug wireframes."""
-    suffix_styles = {
-        "start": ("start", 38, 12),
-        "resource": ("resource", 24, 10),
-        "assembly": ("assembly", 24, 10),
-        "base-buff": ("base", 20, 32),
-        "outpost-buff": ("outpost", 18, 24),
-    }
-    rendered: list[str] = []
-    for zone in zones:
-        suffix = zone.id.removeprefix("red-").removeprefix("blue-")
-        spec = suffix_styles.get(suffix)
-        if spec is None or len(zone.vertices) < 3:
-            continue
-        family, fill_alpha, edge_alpha = spec
-        team_color = TEAM_RED_COLOR if zone.id.startswith("red-") else TEAM_BLUE_COLOR
-        family_color = {
-            "resource": RESOURCE_COLOR,
-            "assembly": ASSEMBLY_COLOR,
-        }.get(family, team_color)
-        color = _blend_color(family_color, team_color, 0.5)
-        points = tuple(
-            tuple(round(value) for value in viewport.world_to_screen(point))
-            for point in zone.vertices
-        )
-        left = min(point[0] for point in points)
-        top = min(point[1] for point in points)
-        right = max(point[0] for point in points)
-        bottom = max(point[1] for point in points)
-        bounds = pygame.Rect(
-            left,
-            top,
-            max(1, right - left + 1),
-            max(1, bottom - top + 1),
-        )
-        if not bounds.colliderect(field_rect):
-            continue
-        local_points = tuple((x - left, y - top) for x, y in points)
-        layer = pygame.Surface(bounds.size, pygame.SRCALPHA)
-        pygame.draw.polygon(layer, (*color, fill_alpha), local_points)
-
-        if family in {"start", "resource"}:
-            pattern = pygame.Surface(bounds.size, pygame.SRCALPHA)
-            step = 22 if family == "start" else 26
-            for offset in range(-bounds.height, bounds.width + bounds.height, step):
-                pygame.draw.line(
-                    pattern,
-                    (*_blend_color(color, TEXT_COLOR, 0.28), 9),
-                    (offset, bounds.height),
-                    (offset + bounds.height, 0),
-                    width=1,
-                )
-            mask = pygame.mask.from_surface(layer, threshold=0)
-            pattern.blit(
-                mask.to_surface(
-                    setcolor=(255, 255, 255, 255),
-                    unsetcolor=(255, 255, 255, 0),
-                ),
-                (0, 0),
-                special_flags=pygame.BLEND_RGBA_MULT,
-            )
-            layer.blit(pattern, (0, 0))
-        elif family == "assembly":
-            center = (bounds.width // 2, bounds.height // 2)
-            radius = max(4, min(bounds.width, bounds.height) // 4)
-            pygame.draw.circle(layer, (*color, 16), center, radius, width=1)
-
-        if edge_alpha:
-            pygame.draw.polygon(layer, (*color, edge_alpha), local_points, width=1)
-        old_clip = screen.get_clip()
-        screen.set_clip(field_rect)
-        screen.blit(layer, bounds.topleft)
-        screen.set_clip(old_clip)
-        rendered.append(zone.id)
-    return tuple(rendered)
-
-
 def _draw_rmuc_terrain(
     screen: pygame.Surface,
     legend_font: pygame.font.Font,
@@ -2645,8 +2525,6 @@ class RMUCStaticFieldCache:
             source_viewport = Viewport((0.0, 0.0), source_scale, base.world_size)
             floor = pygame.Surface(size, pygame.SRCALPHA, 32)
             _draw_rmuc_battlefield(floor, source_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(floor, source_rect, source_viewport, match.map.zones)
             for obstacle in match.map.obstacles:
                 bounds = _world_rect_to_screen(
                     source_viewport, obstacle.x, obstacle.y, obstacle.width, obstacle.height
@@ -2730,13 +2608,6 @@ class RMUCStaticFieldCache:
                 world_size=viewport.world_size,
             )
             _draw_rmuc_battlefield(surface, local_field_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(
-                    surface,
-                    local_field_rect,
-                    local_viewport,
-                    match.map.zones,
-                )
             for obstacle in match.map.obstacles:
                 obstacle_rect = _world_rect_to_screen(
                     local_viewport,
@@ -5005,13 +4876,6 @@ def _draw(
     if is_rmuc:
         if static_field_cache is None:
             _draw_rmuc_battlefield(screen, field_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(
-                    screen,
-                    field_rect,
-                    viewport,
-                    match.map.zones,
-                )
         else:
             static_field_cache.draw(
                 screen,
@@ -5050,6 +4914,11 @@ def _draw(
         selected_robot_ids,
     )
     for zone in match.map.zones:
+        # RMUC region polygons continue to drive rules and RFID. Ordinary
+        # spectator view keeps the battlefield readable; use Debug to inspect
+        # the underlying zone bounds and labels on demand.
+        if is_rmuc and not debug_geometry:
+            continue
         zone_rect = _world_rect_to_screen(
             viewport,
             zone.x,
@@ -5255,7 +5124,7 @@ def _draw(
         )
         for robot in match.robots
     }
-    robot_body_rects: dict[str, pygame.Rect] = {}
+    robot_radii: dict[str, int] = {}
     robot_health_bar_rects: dict[str, pygame.Rect] = {}
     for robot in match.robots:
         if is_rmuc:
@@ -5268,14 +5137,12 @@ def _draw(
                 50 if robot.type == "drone" else 0,
             )
             radius = max(9, round((body_extent // 2 + 7) * magnification))
-            body_rect = pygame.Rect(0, 0, radius * 2, radius * 2)
-            body_rect.center = map_centers[robot.id]
-            robot_body_rects[robot.id] = body_rect
         else:
             radius = max(
                 9,
                 round(viewport.world_length_to_screen(match.map.collision_radius)),
             )
+        robot_radii[robot.id] = radius
         if is_rmuc or robot.type != "drone":
             bar_width = min(96, round(44 * magnification)) if is_rmuc else 48
             bar_height = 4 if is_rmuc else 6
@@ -5286,10 +5153,9 @@ def _draw(
                 bar_height,
             )
             robot_health_bar_rects[robot.id] = bar_rect
-    occupied_map_labels: list[pygame.Rect] = []
-    occupied_level_tags: list[pygame.Rect] = []
     for robot in match.robots:
         center = map_centers[robot.id]
+        radius = robot_radii[robot.id]
         if (
             is_rmuc and magnification > 1.001
             and not screen.get_clip().inflate(
@@ -5402,75 +5268,36 @@ def _draw(
 
         progression = progression_by_robot.get(robot.id)
         robot_label = display_names.get(robot.id, "机器人")
-        if is_rmuc:
-            map_label = (
-                f"{robot_label} · {progression[0]}级"
-                if progression is not None
-                else robot_label
-            )
-            if debug_geometry:
-                if not robot.alive:
-                    map_label = f"{map_label} · 阵亡"
-                elif visual_robot is not None and visual_robot.respawn_remaining > 0:
-                    map_label = f"{map_label} · 复活"
-            label_surface = hud_font.render(
-                map_label,
-                True,
-                TEXT_COLOR if robot.alive else MUTED_COLOR,
-            )
-            label_rect = _rmuc_map_label_rect(
-                label_surface,
-                center=center,
-                radius=radius,
-                field_rect=field_rect,
-                occupied_labels=occupied_map_labels,
-                other_robot_bodies=[
-                    body_rect
-                    for robot_id, body_rect in robot_body_rects.items()
-                    if robot_id != robot.id
-                ] + list(robot_health_bar_rects.values()),
-            )
-            occupied_map_labels.append(label_rect)
-            pygame.draw.rect(screen, PANEL_BACKGROUND, label_rect, border_radius=4)
-            pygame.draw.rect(
-                screen,
-                color if robot.alive else MUTED_COLOR,
-                label_rect,
-                width=1,
-                border_radius=4,
-            )
-            screen.blit(label_surface, label_surface.get_rect(center=label_rect.center))
-        else:
-            if progression is not None:
-                level_surface = hud_font.render(
-                    f"{progression[0]}级",
-                    True,
-                    TEXT_COLOR,
-                )
-                level_rect = _robot_level_tag_rect(
-                    level_surface,
-                    robot_id=robot.id,
-                    center=center,
-                    radius=radius,
-                    field_rect=field_rect,
-                    robot_body_rects=robot_body_rects,
-                    occupied_tags=occupied_level_tags,
-                )
-                occupied_level_tags.append(level_rect)
-                pygame.draw.rect(screen, PANEL_BACKGROUND, level_rect, border_radius=4)
-                pygame.draw.rect(screen, color, level_rect, width=1, border_radius=4)
-                screen.blit(level_surface, level_surface.get_rect(center=level_rect.center))
-            label_surface = small_font.render(
-                robot_label,
-                True,
-                TEXT_COLOR if robot.alive else MUTED_COLOR,
-            )
-            screen.blit(
-                label_surface,
-                label_surface.get_rect(
-                    center=(center[0], center[1] + radius + 11)
-                ),
-            )
+        map_label = (
+            f"{robot_label} · LV{progression[0]}"
+            if progression is not None
+            else robot_label
+        )
+        if is_rmuc and debug_geometry:
+            if not robot.alive:
+                map_label = f"{map_label} · 阵亡"
+            elif visual_robot is not None and visual_robot.respawn_remaining > 0:
+                map_label = f"{map_label} · 复活"
+        label_surface = hud_font.render(
+            map_label,
+            True,
+            TEXT_COLOR if robot.alive else MUTED_COLOR,
+        )
+        label_rect = _robot_label_rect(
+            label_surface,
+            center=center,
+            radius=radius,
+            health_bar_rect=robot_health_bar_rects.get(robot.id),
+        )
+        pygame.draw.rect(screen, PANEL_BACKGROUND, label_rect, border_radius=4)
+        pygame.draw.rect(
+            screen,
+            color if robot.alive else MUTED_COLOR,
+            label_rect,
+            width=1,
+            border_radius=4,
+        )
+        screen.blit(label_surface, label_surface.get_rect(center=label_rect.center))
         if debug_geometry:
             robot_status = robot_statuses.get(robot.id)
             if robot_status:
@@ -5717,51 +5544,6 @@ def _draw_report_value(
 ) -> None:
     surface = font.render(text, True, TEXT_COLOR)
     screen.blit(surface, surface.get_rect(midright=(right, y + 7)))
-
-
-def _robot_level_tag_rect(
-    level_surface: pygame.Surface,
-    *,
-    robot_id: str,
-    center: tuple[int, int],
-    radius: int,
-    field_rect: pygame.Rect,
-    robot_body_rects: dict[str, pygame.Rect],
-    occupied_tags: list[pygame.Rect],
-) -> pygame.Rect:
-    candidates = (
-        level_surface.get_rect(
-            midbottom=(center[0], center[1] - radius - 18),
-        ).inflate(8, 4),
-        level_surface.get_rect(
-            midtop=(center[0], center[1] + radius + 12),
-        ).inflate(8, 4),
-        level_surface.get_rect(
-            midright=(center[0] - radius - 8, center[1]),
-        ).inflate(8, 4),
-        level_surface.get_rect(
-            midleft=(center[0] + radius + 8, center[1]),
-        ).inflate(8, 4),
-    )
-    best_rect = candidates[0].copy()
-    best_score = None
-    for index, candidate in enumerate(candidates):
-        candidate = candidate.copy()
-        candidate.clamp_ip(field_rect)
-        body_collisions = sum(
-            candidate.colliderect(body)
-            for other_id, body in robot_body_rects.items()
-            if other_id != robot_id
-        )
-        tag_collisions = sum(
-            candidate.colliderect(tag)
-            for tag in occupied_tags
-        )
-        score = (body_collisions, tag_collisions, index)
-        if best_score is None or score < best_score:
-            best_rect = candidate
-            best_score = score
-    return best_rect
 
 
 def _format_match_duration(seconds: float) -> str:
