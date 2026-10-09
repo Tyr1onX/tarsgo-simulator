@@ -11,6 +11,38 @@ class MatchEventType(StrEnum):
     STRUCTURE_DESTROYED = "structure_destroyed"
 
 
+class ZoneEventType(StrEnum):
+    ENTERED = "entered"
+    STAYED = "stayed"
+    EXITED = "exited"
+
+
+class RFIDReadSource(StrEnum):
+    # V1.4.0 does not publish card footprints or a reader timing model. This
+    # event records the simulator's deterministic projected-zone assumption.
+    SIMULATED_ZONE_ENTRY = "simulated_zone_entry"
+
+
+@dataclass(frozen=True)
+class ZoneEvent:
+    type: ZoneEventType
+    time: float
+    robot_id: str
+    team_id: str
+    zone_id: str
+    cause: str = "movement"
+
+
+@dataclass(frozen=True)
+class RFIDReadEvent:
+    time: float
+    robot_id: str
+    team_id: str
+    zone_id: str
+    source: RFIDReadSource = RFIDReadSource.SIMULATED_ZONE_ENTRY
+    approximate: bool = True
+
+
 @dataclass(frozen=True)
 class MatchEvent:
     type: MatchEventType
