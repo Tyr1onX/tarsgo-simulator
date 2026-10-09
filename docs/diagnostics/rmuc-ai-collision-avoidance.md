@@ -1,7 +1,7 @@
 # RMUC AI collision avoidance recovery
 
-Baseline: `69dd2f94a140314cd064066ec71b9af2e66e3472`  
-Scenario: `configs/scenarios/rmuc-2026-region-rules-lab.yaml`  
+Baseline: `69dd2f94a140314cd064066ec71b9af2e66e3472`
+Scenario: `configs/scenarios/rmuc-2026-region-rules-lab.yaml`
 Frame rate: fixed 60 Hz
 
 ## Reproduced deadlock
