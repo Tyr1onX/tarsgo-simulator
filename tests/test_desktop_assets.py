@@ -250,16 +250,19 @@ def test_rmuc_static_field_cache_matches_uncached_scene_pixels() -> None:
             obstacle.height,
         )
         app._draw_rmuc_obstacle(reference, obstacle_rect)
+    reference_terrain = pygame.Surface(app.WINDOW_SIZE, pygame.SRCALPHA, 32)
     app._draw_rmuc_terrain(
-        reference,
+        reference_terrain,
         font,
         field_rect,
         viewport,
         terrain_features=match.map.terrain_features,
         terrain_connections=match.map.terrain_connections,
         zones=match.map.zones,
+        terrain_regions=match.map.terrain_regions,
         debug_geometry=False,
     )
+    reference.blit(reference_terrain, (0, 0))
 
     assert pygame.image.tostring(cached, "RGB") == pygame.image.tostring(
         reference,

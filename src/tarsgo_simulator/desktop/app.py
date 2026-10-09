@@ -2365,9 +2365,18 @@ def _draw_rmuc_terrain(
     terrain_features: tuple,
     terrain_connections: tuple,
     zones: tuple,
+    terrain_regions: tuple = (),
     debug_geometry: bool = True,
 ) -> tuple[tuple[str, tuple[int, int]], ...]:
-    """Draw symbolic terrain cues only; never render their anchor as a footprint."""
+    """Draw modeled terrain geometry and symbolic cues from the same map data."""
+    _draw_rmuc_terrain_regions(
+        screen,
+        legend_font,
+        field_rect,
+        viewport,
+        terrain_regions,
+        debug_geometry=debug_geometry,
+    )
     markers = terrain_visual_markers(
         terrain_features,
         terrain_connections,
@@ -2510,6 +2519,74 @@ def _draw_rmuc_terrain(
     return tuple(rendered)
 
 
+def _draw_rmuc_terrain_regions(
+    screen: pygame.Surface,
+    legend_font: pygame.font.Font,
+    field_rect: pygame.Rect,
+    viewport: Viewport,
+    terrain_regions: tuple,
+    *,
+    debug_geometry: bool,
+) -> tuple[str, ...]:
+    colors = {
+        "platform": (151, 178, 143),
+        "ramp": (196, 157, 105),
+        "tunnel": (117, 145, 164),
+    }
+    rendered: list[str] = []
+    old_clip = screen.get_clip()
+    screen.set_clip(field_rect)
+    for region in terrain_regions:
+        points = tuple(
+            tuple(round(value) for value in viewport.world_to_screen(point))
+            for point in region.vertices
+        )
+        if not points:
+            continue
+        color = colors.get(region.kind, (145, 156, 160))
+        pygame.draw.polygon(screen, (*color, 44), points)
+        edge_color = color if debug_geometry else _blend_color(color, TEXT_COLOR, 0.25)
+        pygame.draw.polygon(screen, edge_color, points, width=2 if debug_geometry else 1)
+        if region.kind == "ramp" and region.axis_start and region.axis_end:
+            axis_start = viewport.world_to_screen(region.axis_start)
+            axis_end = viewport.world_to_screen(region.axis_end)
+            dx, dy = axis_end[0] - axis_start[0], axis_end[1] - axis_start[1]
+            length = math.hypot(dx, dy)
+            if length > 1:
+                ux, uy = dx / length, dy / length
+                midpoint = ((axis_start[0] + axis_end[0]) / 2, (axis_start[1] + axis_end[1]) / 2)
+                for offset in (-0.22, 0.0, 0.22):
+                    center = (
+                        midpoint[0] + offset * (axis_end[1] - axis_start[1]),
+                        midpoint[1] - offset * (axis_end[0] - axis_start[0]),
+                    )
+                    start = (round(center[0] - ux * 7), round(center[1] - uy * 7))
+                    end = (round(center[0] + ux * 7), round(center[1] + uy * 7))
+                    pygame.draw.line(screen, edge_color, start, end, width=2)
+                    tip = end
+                    left = (round(tip[0] - ux * 4 - uy * 3), round(tip[1] - uy * 4 + ux * 3))
+                    right = (round(tip[0] - ux * 4 + uy * 3), round(tip[1] - uy * 4 - ux * 3))
+                    pygame.draw.polygon(screen, edge_color, (tip, left, right))
+        if region.kind == "platform":
+            center = (
+                sum(point[0] for point in region.vertices) / len(region.vertices),
+                sum(point[1] for point in region.vertices) / len(region.vertices),
+            )
+            label = f"中央高地 约 {int(round(region.height_mm))} mm"
+            if region.approximation:
+                label += " · 近似"
+            surface = legend_font.render(label, True, (230, 237, 224))
+            label_rect = surface.get_rect(center=tuple(round(v) for v in viewport.world_to_screen(center)))
+            if field_rect.contains(label_rect):
+                background = pygame.Surface(label_rect.inflate(12, 8).size, pygame.SRCALPHA, 32)
+                pygame.draw.rect(background, (20, 31, 34, 188), background.get_rect(), border_radius=5)
+                screen.blit(background, label_rect.inflate(12, 8).topleft)
+                screen.blit(surface, label_rect)
+        rendered.append(region.id)
+    screen.set_clip(old_clip)
+    return tuple(rendered)
+
+
 def _draw_rmuc_obstacle(
     screen: pygame.Surface,
     rect: pygame.Rect,
@@ -2584,6 +2661,7 @@ class RMUCStaticFieldCache:
                 terrain_features=match.map.terrain_features,
                 terrain_connections=match.map.terrain_connections,
                 zones=match.map.zones,
+                terrain_regions=match.map.terrain_regions,
                 debug_geometry=debug_geometry,
             )
             self._zoom_floor = floor
@@ -2685,6 +2763,7 @@ class RMUCStaticFieldCache:
                 terrain_features=match.map.terrain_features,
                 terrain_connections=match.map.terrain_connections,
                 zones=match.map.zones,
+                terrain_regions=match.map.terrain_regions,
                 debug_geometry=debug_geometry,
             )
             self._key = key
@@ -5038,6 +5117,7 @@ def _draw(
                 terrain_features=match.map.terrain_features,
                 terrain_connections=match.map.terrain_connections,
                 zones=match.map.zones,
+                terrain_regions=match.map.terrain_regions,
                 debug_geometry=debug_geometry,
             )
         else:

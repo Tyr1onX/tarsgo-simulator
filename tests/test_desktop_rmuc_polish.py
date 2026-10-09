@@ -225,6 +225,135 @@ def test_terrain_markers_are_symbolic_and_renderer_does_not_mutate_map_geometry(
     } == original_bounds
 
 
+def test_approximate_central_terrain_is_visible_in_pygame_field_layer() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    viewport = app._viewport_for_match(match)
+    field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
+    screen, _font, small_font = _surface_and_fonts()
+    rendered = app._draw_rmuc_terrain_regions(
+        screen,
+        small_font,
+        field,
+        viewport,
+        match.map.terrain_regions,
+        debug_geometry=False,
+    )
+
+    assert rendered == tuple(region.id for region in match.map.terrain_regions)
+    platform_point = tuple(round(value) for value in viewport.world_to_screen((11000, 3000)))
+    ramp_point = tuple(round(value) for value in viewport.world_to_screen((14000, 1147)))
+    assert screen.get_at(platform_point).a > 0
+    assert screen.get_at(ramp_point).a > 0
+
+
+@pytest.mark.parametrize(
+    ("debug_geometry", "zoom"),
+    [(False, 1.0), (True, 1.0), (False, 1.35)],
+)
+def test_rmuc_terrain_renderer_keeps_combat_robot_sprites_above_terrain(
+    monkeypatch: pytest.MonkeyPatch,
+    debug_geometry: bool,
+    zoom: float,
+) -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    base_viewport = app._viewport_for_match(match)
+    viewport = base_viewport
+
+    if zoom > 1.0:
+        # Center each role on the modeled highland so the zoomed view checks
+        # the same terrain/sprite composition as the full-field view.
+        role_positions = {
+            "hero": [(12400.0, 5600.0)],
+            "engineer": [(13400.0, 6600.0)],
+            "infantry": [(14500.0, 5600.0), (15000.0, 9000.0)],
+            "sentry": [(15600.0, 7000.0)],
+            "drone": [(14300.0, 9200.0)],
+        }
+        placed_roles: dict[tuple[str, str], int] = {}
+        for robot in match.robots:
+            key = (robot.team, robot.type)
+            role_index = placed_roles.get(key, 0)
+            placed_roles[key] = role_index + 1
+            x, y = role_positions[robot.type][role_index]
+            if robot.team != match.config.scenario.player_team:
+                robot.position = (match.map.width - x, match.map.height - y)
+            else:
+                robot.position = (x, y)
+        focus = (14000.0, 7500.0)
+        focus_screen = base_viewport.world_to_screen(focus)
+        scale = base_viewport.scale * zoom
+        viewport = type(base_viewport)(
+            origin=(
+                focus_screen[0] - focus[0] * scale,
+                focus_screen[1] - focus[1] * scale,
+            ),
+            scale=scale,
+            world_size=base_viewport.world_size,
+        )
+
+    visual_state = CombatVisualState()
+    visual_state.reset(match)
+    assert set(visual_state.robots) == {robot.id for robot in match.robots}
+
+    draw_order: list[str] = []
+    rendered_shapes: list[str] = []
+    rendered_sprites: list[str] = []
+    original_terrain = app._draw_rmuc_terrain_regions
+    original_shape = app._draw_rmuc_robot_shape
+    original_sprites = app._draw_rmuc_robot_sprites
+
+    def track_terrain(*args, **kwargs):
+        result = original_terrain(*args, **kwargs)
+        draw_order.append("terrain")
+        return result
+
+    def track_shape(surface, **kwargs):
+        rendered_shapes.append(kwargs["robot_type"])
+        draw_order.append("robot")
+        return original_shape(surface, **kwargs)
+
+    def track_sprites(surface, **kwargs):
+        rendered_sprites.append(kwargs["robot_type"])
+        return original_sprites(surface, **kwargs)
+
+    monkeypatch.setattr(app, "_draw_rmuc_terrain_regions", track_terrain)
+    monkeypatch.setattr(app, "_draw_rmuc_robot_shape", track_shape)
+    monkeypatch.setattr(app, "_draw_rmuc_robot_sprites", track_sprites)
+
+    player_team = match.config.scenario.player_team
+    opponent_team = next(
+        team.team_id
+        for team in match.config.scenario.teams.values()
+        if team.team_id != player_team
+    )
+    screen, font, small_font = _surface_and_fonts()
+    app._draw(
+        screen,
+        font,
+        small_font,
+        match,
+        player_team,
+        opponent_team,
+        set(),
+        None,
+        viewport,
+        debug_geometry=debug_geometry,
+        visual_state=visual_state,
+        static_field_cache=app.RMUCStaticFieldCache(),
+    )
+
+    expected_types = {"hero", "engineer", "infantry", "sentry", "drone"}
+    assert len(rendered_shapes) == len(match.robots)
+    assert len(rendered_sprites) == len(match.robots)
+    assert expected_types <= set(rendered_shapes)
+    assert expected_types <= set(rendered_sprites)
+    assert draw_order.index("terrain") < draw_order.index("robot")
+
+
 def test_maps_without_terrain_metadata_render_without_terrain_cues() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")
