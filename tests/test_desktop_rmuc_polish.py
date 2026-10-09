@@ -632,6 +632,55 @@ def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> N
     assert pygame.image.tostring(screen_a, "RGBA") != pygame.image.tostring(screen_b, "RGBA")
 
 
+def test_small_energy_active_lamp_uses_the_shared_rotating_panel_pose() -> None:
+    app = _app()
+    match = _match()
+    rules = match.ruleset
+    sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
+    assert rules.request_small_energy_mechanism_activation(match, sentry)
+    display = rules.display_state.small_energy_mechanism
+    assert display is not None
+    team_state = next(state for state in display.teams if state.team_id == sentry.team)
+    assert team_state.status == "activating"
+    assert team_state.lit_module_index is not None
+
+    entity = rules._small_energy_mechanism_entity
+    assert entity is not None
+    panel = next(
+        panel
+        for panel in entity.panels_at(match.elapsed_time)
+        if panel.module_index == team_state.lit_module_index
+    )
+    assert display.panels[team_state.lit_module_index].vertices == panel.vertices
+
+    base = app._viewport_for_match(match)
+    center = (match.map.width / 2.0, match.map.height / 2.0)
+    screen_center = base.world_to_screen(center)
+    scale = base.scale * 2.5
+    viewport = type(base)(
+        origin=(
+            screen_center[0] - center[0] * scale,
+            screen_center[1] - center[1] * scale,
+        ),
+        scale=scale,
+        world_size=base.world_size,
+    )
+    screen, _font, small_font = _surface_and_fonts()
+    app._draw_rmuc_small_energy_mechanism(
+        screen,
+        small_font,
+        viewport,
+        match,
+        display,
+    )
+    lamp_center = tuple(
+        round(value) for value in viewport.world_to_screen(panel.center)
+    )
+    lamp = (lamp_center[0] - 4, lamp_center[1])
+
+    assert screen.get_at(lamp)[:3] == app._rmuc_team_color(match, sentry.team)
+
+
 def test_returning_pose_matches_real_projectile_hit_and_desktop_projection(
     monkeypatch,
 ) -> None:

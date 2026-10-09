@@ -13,6 +13,10 @@ from tarsgo_simulator.core.map import (
     _point_in_polygon,
 )
 from tarsgo_simulator.core.robot import Robot
+from tarsgo_simulator.core.projectile_targets import (
+    ProjectileAimTarget,
+    ProjectileSpecialHitbox,
+)
 from tarsgo_simulator.core.structure import (
     Structure,
     StructureProjectileHitContext,
@@ -45,6 +49,7 @@ class Projectile:
     traveled: float = 0.0
     height_mm: float | None = None
     vertical_velocity_mm_s: float = 0.0
+    target_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +122,7 @@ class ProjectileSystem:
         can_target: Callable[[DamageableTarget], bool],
         parameters_for: Callable[[Robot], ProjectileParameters | None],
         aim_parameters_for: Callable[[Robot], AimMotionParameters],
+        special_aim_targets: dict[str, ProjectileAimTarget] | None = None,
     ) -> None:
         """Track visible targets from current state and last-tick velocity only."""
         step = max(0.0, dt)
@@ -130,13 +136,24 @@ class ProjectileSystem:
                 shooter.chassis_angular_velocity = 0.0
                 continue
 
-            target = _nearest_visible_target(
-                shooter,
-                robot_targets,
-                structure_targets,
-                game_map,
-                can_target,
-                min(shooter.attack_range, parameters.effective_range),
+            maximum_range = min(shooter.attack_range, parameters.effective_range)
+            special = (special_aim_targets or {}).get(shooter.id)
+            special_is_visible = bool(
+                special is not None
+                and math.dist(shooter.position, special.position) <= maximum_range
+                and game_map.has_line_of_sight(shooter.position, special.position)
+            )
+            target = (
+                special
+                if special_is_visible
+                else _nearest_visible_target(
+                    shooter,
+                    robot_targets,
+                    structure_targets,
+                    game_map,
+                    can_target,
+                    maximum_range,
+                )
             )
             if target is None:
                 shooter.aim_target_id = None
@@ -145,9 +162,7 @@ class ProjectileSystem:
                 _face_motion(shooter, step, aim_parameters_for(shooter).turret_turn_rate)
                 continue
 
-            target_velocity = (
-                target.velocity if isinstance(target, Robot) else (0.0, 0.0)
-            )
+            target_velocity = target.velocity if isinstance(target, Robot) else (0.0, 0.0)
             aim_point = predictive_intercept_point(
                 shooter.position,
                 target.position,
@@ -194,6 +209,7 @@ class ProjectileSystem:
         can_target: Callable[[DamageableTarget], bool],
         parameters_for: Callable[[Robot], ProjectileParameters | None],
         on_attack_committed: Callable[[Robot], None],
+        special_aim_targets: dict[str, ProjectileAimTarget] | None = None,
     ) -> tuple[int, ...]:
         """Launch at most one projectile for each ready legal shooter."""
         robot_targets = [robot for robot in robots if robot.alive and not robot.aerial]
@@ -206,8 +222,24 @@ class ProjectileSystem:
             parameters = parameters_for(shooter)
             if parameters is None or not can_attack(shooter):
                 continue
+            if (
+                shooter.aim_target_id is not None
+                and shooter.aim_target_id.startswith("small-energy:")
+                and any(
+                    projectile.shooter_id == shooter.id
+                    and projectile.target_id is not None
+                    and projectile.target_id.startswith("small-energy:")
+                    for projectile in self.projectiles
+                )
+            ):
+                # A new lamp is selected only after the previous real shot is
+                # resolved. Otherwise a queued second shot could hit the now
+                # unlit module and legally reset the team's sequence.
+                continue
 
-            candidates: list[tuple[float, str, Robot | Structure]] = []
+            candidates: list[
+                tuple[float, str, Robot | Structure | ProjectileAimTarget]
+            ] = []
             for target in [*robot_targets, *structure_targets]:
                 if target.team == shooter.team or not can_target(target):
                     continue
@@ -222,6 +254,16 @@ class ProjectileSystem:
                 ):
                     continue
                 candidates.append((distance, target.id, target))
+            special = (special_aim_targets or {}).get(shooter.id)
+            if (
+                special is not None
+                and math.dist(shooter.position, special.position)
+                <= min(shooter.attack_range, parameters.effective_range)
+                and game_map.has_line_of_sight(shooter.position, special.position)
+            ):
+                candidates.append(
+                    (math.dist(shooter.position, special.position), special.id, special)
+                )
             if not candidates:
                 continue
             intended_target = next(
@@ -232,6 +274,28 @@ class ProjectileSystem:
                 ),
                 min(candidates, key=lambda item: (item[0], item[1]))[2],
             )
+            if (
+                isinstance(intended_target, ProjectileAimTarget)
+                and intended_target.alignment_tolerance_rad is not None
+            ):
+                desired_angle = math.atan2(
+                    intended_target.position[1] - shooter.position[1],
+                    intended_target.position[0] - shooter.position[0],
+                )
+                if abs(_wrap_angle(desired_angle - shooter.turret_angle)) > (
+                    intended_target.alignment_tolerance_rad
+                ):
+                    continue
+            if (
+                isinstance(intended_target, ProjectileAimTarget)
+                and intended_target.approach_position is not None
+                and math.dist(shooter.position, intended_target.approach_position)
+                > intended_target.approach_tolerance_mm
+            ):
+                # A special moving panel may be visible from its far side, but
+                # other panels can physically intercept that shot first. The
+                # Rules Lab AI must first reach the target's clear radial side.
+                continue
             direction = (
                 math.cos(shooter.turret_angle),
                 math.sin(shooter.turret_angle),
@@ -270,6 +334,7 @@ class ProjectileSystem:
                     )
                     / max(math.dist(shooter.position, intended_target.position), 1.0)
                     * parameters.speed,
+                    target_id=intended_target.id,
                 )
             )
             shooter.attack_cooldown = parameters.firing_interval
@@ -306,6 +371,13 @@ class ProjectileSystem:
             [Structure, int, Robot, StructureProjectileHitContext], int
         ]
         | None = None,
+        special_hitboxes: Iterable[ProjectileSpecialHitbox] = (),
+        on_special_hit: Callable[
+            [Projectile, ProjectileSpecialHitbox, tuple[float, float], float, float],
+            str,
+        ]
+        | None = None,
+        simulation_start_time: float = 0.0,
     ) -> None:
         """Advance selected projectiles continuously and settle first contacts."""
         self.impacts.clear()
@@ -348,6 +420,7 @@ class ProjectileSystem:
                 structure_hitbox_profile_for,
                 start_height_mm=start_height,
                 end_height_mm=end_height,
+                special_hitboxes=special_hitboxes,
             )
             if collision is not None:
                 (
@@ -385,6 +458,18 @@ class ProjectileSystem:
                     )
                 applied = 0
                 outcome = "obstacle" if target is None else "friendly_contact"
+                if target_kind == "energy_mechanism":
+                    special = target
+                    if isinstance(special, ProjectileSpecialHitbox) and on_special_hit:
+                        outcome = on_special_hit(
+                            projectile,
+                            special,
+                            point,
+                            impact_speed,
+                            simulation_start_time + max(0.0, dt) * fraction,
+                        )
+                    else:
+                        outcome = "energy_mechanism_contact"
                 if target_kind == "robot":
                     self.robot_contacts += 1
                     if surface == "armor":
@@ -403,7 +488,11 @@ class ProjectileSystem:
                         projectile.shooter_id,
                         {"shots_fired": 0, "armor_hits": 0, "applied_damage": 0},
                     )
-                if target is not None and target.team != projectile.shooter_team_id:
+                if (
+                    target_kind != "energy_mechanism"
+                    and target is not None
+                    and target.team != projectile.shooter_team_id
+                ):
                     shooter = robot_by_id.get(projectile.shooter_id)
                     required_speed = 12_000.0 if projectile.caliber == "17mm" else 10_000.0
                     if target_kind == "robot" and surface != "armor":
@@ -580,9 +669,10 @@ def _first_collision(
     *,
     start_height_mm: float = 0.0,
     end_height_mm: float = 0.0,
+    special_hitboxes: Iterable[ProjectileSpecialHitbox] = (),
 ) -> tuple[
     float,
-    DamageableTarget | None,
+    DamageableTarget | ProjectileSpecialHitbox | None,
     str,
     tuple[float, float],
     str,
@@ -596,7 +686,7 @@ def _first_collision(
             float,
             int,
             str,
-            DamageableTarget | None,
+            DamageableTarget | ProjectileSpecialHitbox | None,
             tuple[float, float],
             str,
             str | None,
@@ -678,6 +768,26 @@ def _first_collision(
                 )
             )
 
+    for special in special_hitboxes:
+        hit = _polygon_contact(start, end, special.vertices, projectile_radius)
+        if hit is None:
+            continue
+        fraction, normal = hit
+        candidates.append(
+            (
+                fraction,
+                2,
+                f"{special.id}:{special.module_id}",
+                special,
+                normal,
+                "energy_module",
+                special.module_id,
+                None,
+                False,
+                False,
+            )
+        )
+
     for index, obstacle in enumerate(game_map.obstacles):
         hit = _rectangle_contact(start, end, projectile_radius, obstacle)
         if hit is not None:
@@ -736,8 +846,14 @@ def _first_collision(
         structure_center_hit,
         structure_hit_modeled,
     ) = min(candidates)
-    target_kind = "robot" if isinstance(target, Robot) else (
-        "structure" if isinstance(target, Structure) else "obstacle"
+    target_kind = (
+        "robot"
+        if isinstance(target, Robot)
+        else "structure"
+        if isinstance(target, Structure)
+        else target.target_kind
+        if isinstance(target, ProjectileSpecialHitbox)
+        else "obstacle"
     )
     return (
         fraction,

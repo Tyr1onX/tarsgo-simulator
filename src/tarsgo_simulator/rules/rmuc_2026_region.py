@@ -7,7 +7,14 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
 from tarsgo_simulator.core.events import MatchEventType, ZoneEventType
+from tarsgo_simulator.core.energy_mechanism import (
+    SmallEnergyMechanism,
+)
 from tarsgo_simulator.core.map import Zone
+from tarsgo_simulator.core.projectile_targets import (
+    ProjectileAimTarget,
+    ProjectileSpecialHitbox,
+)
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import (
     OUTPOST_ARMOR_STOP_SECONDS,
@@ -21,6 +28,9 @@ from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
     DamageableTarget,
     DamageResolution,
+    EnergyMechanismDisplayState,
+    EnergyMechanismPanelDisplayState,
+    EnergyMechanismTeamDisplayState,
     MatchResult,
     ProjectileParameters,
     ProjectileRobotHitboxParameters,
@@ -28,6 +38,9 @@ from tarsgo_simulator.rules.protocol import (
     RuleSetDisplayState,
     StructureParameters,
 )
+
+if TYPE_CHECKING:
+    from tarsgo_simulator.core.projectiles import Projectile
 
 
 _RMUC_ROBOT_TYPES = ("hero", "engineer", "infantry", "sentry", "drone")
@@ -38,8 +51,13 @@ _HP_PERFORMANCE_ROBOT_TYPES = {"hero", "infantry"}
 _SMALL_ENERGY_PHASE_END = 180.0
 _SMALL_ENERGY_OPPORTUNITY_INTERVAL = 90.0
 _SMALL_ENERGY_ACTIVATION_WINDOW = 20.0
+_SMALL_ENERGY_LIT_HIT_WINDOW = 2.5
 _SMALL_ENERGY_BUFF_DURATION = 45.0
 _SMALL_ENERGY_EXPERIENCE_BONUS_CAP = 1200.0
+# The manual describes the failed state and reset but does not specify how long
+# the failure lamp remains visible. This short presentation interval is a
+# Rules Lab approximation and does not delay the next legal activation.
+_SMALL_ENERGY_FAILURE_DISPLAY_SECONDS = 0.75
 _DART_OPPORTUNITY_TIMES = (30.0, 240.0)
 _DART_GATE_OPENING_SECONDS = 7.0
 _DART_FIRING_WINDOW_SECONDS = 30.0
@@ -221,6 +239,21 @@ class _TimedEnergyMechanismBuff:
     cooling_multiplier: float
     remaining: float
     experience_bonus_remaining: float = 0.0
+
+
+@dataclass
+class _SmallEnergyMechanismTeamState:
+    opportunities_used: int = 0
+    status: str = "inactive"
+    attempt_started_at: float | None = None
+    attempt_deadline: float | None = None
+    initiator_robot_id: str | None = None
+    lit_module_index: int | None = None
+    lit_module_deadline: float | None = None
+    lit_approach_position: tuple[float, float] | None = None
+    completed_modules: set[int] = field(default_factory=set)
+    last_failure_at: float | None = None
+    failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -2638,6 +2671,12 @@ class RMUC2026RegionalRules:
         self._field_buff_disabled_until_by_zone: dict[str, float] = {}
         self._current_time = 0.0
         self._outpost_rotation_generation = 0
+        self._small_energy_mechanism_generation = 0
+        self._small_energy_mechanism_entity: SmallEnergyMechanism | None = None
+        self._small_energy_mechanism_by_team: dict[
+            str, _SmallEnergyMechanismTeamState
+        ] = {}
+        self._small_energy_rng_by_team: dict[str, random.Random] = {}
         self._small_energy_mechanism_activation_times_by_team: dict[
             str, list[float]
         ] = {}
@@ -2966,6 +3005,7 @@ class RMUC2026RegionalRules:
                 for buff in buffs
                 if buff.remaining > 0
             ),
+            small_energy_mechanism=self._small_energy_display_state(),
             dart_system_statuses=tuple(
                 self._dart_display_status(team_id, state)
                 for team_id, state in sorted(self._dart_system_by_team.items())
@@ -4420,24 +4460,25 @@ class RMUC2026RegionalRules:
         initiator: Robot,
         activation_started_at: float,
     ) -> bool:
-        """Apply one referee-confirmed Small Energy Mechanism activation.
+        """Apply a referee-confirmed result for compatibility with PR #55.
 
-        The caller supplies the activation start time from the upstream
-        mechanism event. This rule-level result boundary checks the V1.4.0
-        phase, accumulated opportunity, permitted command source, and 20-second
-        completion window; rotating hardware and hit recognition stay outside
-        the Rules Lab.
+        Normal match play enters through ``request_small_energy_mechanism``
+        and reaches this same reward consumer only after five real 17 mm
+        projectile contacts. This boundary remains available to rule-result
+        integrations and older deterministic result tests.
         """
         team_id = initiator.team
         buffs = self._energy_mechanism_buffs_by_team.get(team_id)
         activation_times = self._small_energy_mechanism_activation_times_by_team.get(
             team_id
         )
+        state = self._small_energy_mechanism_by_team.get(team_id)
         elapsed = match.elapsed_time
         if (
             match.finished
             or buffs is None
             or activation_times is None
+            or state is None
             or self._robots_by_id.get(initiator.id) is not initiator
             or initiator.type not in {"infantry", "sentry"}
             or not math.isfinite(activation_started_at)
@@ -4447,10 +4488,8 @@ class RMUC2026RegionalRules:
             or elapsed >= _SMALL_ENERGY_PHASE_END
             or elapsed - activation_started_at
             >= _SMALL_ENERGY_ACTIVATION_WINDOW - 1e-9
-            or any(
-                buff.mechanism == "small" and buff.remaining > 0
-                for buff in buffs
-            )
+            or self._small_energy_buff_remaining(team_id) > 0
+            or state.status == "activating"
             or any(
                 abs(previous - activation_started_at) <= 1e-9
                 for previous in activation_times
@@ -4458,12 +4497,283 @@ class RMUC2026RegionalRules:
         ):
             return False
 
-        available_opportunities = 1 + int(
-            activation_started_at + 1e-9 >= _SMALL_ENERGY_OPPORTUNITY_INTERVAL
-        )
-        if len(activation_times) >= available_opportunities:
+        if self._small_energy_opportunities_remaining(team_id, elapsed) <= 0:
             return False
 
+        state.opportunities_used += 1
+        if not self._grant_small_energy_mechanism_buff(team_id):
+            state.opportunities_used -= 1
+            return False
+        state.status = "activated"
+        state.completed_modules = set(range(5))
+        activation_times.append(float(activation_started_at))
+        return True
+
+    def request_small_energy_mechanism_activation(
+        self,
+        match: "Match",
+        initiator: Robot,
+    ) -> bool:
+        """Start the legal Infantry/Sentry command window for one team."""
+        team_state = self._small_energy_mechanism_by_team.get(initiator.team)
+        if (
+            match.finished
+            or self._match is not match
+            or team_state is None
+            or self._robots_by_id.get(initiator.id) is not initiator
+            or initiator.type not in {"infantry", "sentry"}
+            or not initiator.alive
+            or match.elapsed_time >= _SMALL_ENERGY_PHASE_END - 1e-9
+            or team_state.status == "activating"
+            or self._small_energy_buff_remaining(initiator.team) > 0
+            or self._small_energy_opportunities_remaining(
+                initiator.team,
+                match.elapsed_time,
+            ) <= 0
+        ):
+            return False
+
+        # V1.4.0 does not state whether a failed attempt refunds its chance.
+        # Rules Lab consumes the opportunity when the legal command starts.
+        team_state.opportunities_used += 1
+        team_state.status = "activating"
+        team_state.attempt_started_at = match.elapsed_time
+        team_state.attempt_deadline = (
+            match.elapsed_time + _SMALL_ENERGY_ACTIVATION_WINDOW
+        )
+        team_state.initiator_robot_id = initiator.id
+        team_state.completed_modules.clear()
+        team_state.last_failure_at = None
+        self._light_next_small_energy_module(
+            initiator.team,
+            team_state,
+            match.elapsed_time,
+        )
+        return True
+
+    def small_energy_mechanism_activation_available(
+        self,
+        team_id: str,
+    ) -> bool:
+        state = self._small_energy_mechanism_by_team.get(team_id)
+        return bool(
+            self._match is not None
+            and not self._match.finished
+            and state is not None
+            and state.status == "inactive"
+            and self._current_time < _SMALL_ENERGY_PHASE_END - 1e-9
+            and self._small_energy_buff_remaining(team_id) <= 1e-9
+            and self._small_energy_opportunities_remaining(
+                team_id,
+                self._current_time,
+            ) > 0
+        )
+
+    def _small_energy_approach_position(
+        self,
+        module_index: int | None,
+        *,
+        team_id: str | None = None,
+        at_time: float | None = None,
+    ) -> tuple[float, float] | None:
+        entity = self._small_energy_mechanism_entity
+        if entity is None:
+            return None
+        if module_index is None:
+            if self._match is None or team_id is None:
+                return None
+            side = next(
+                (
+                    side
+                    for side, team in self._match.config.scenario.teams.items()
+                    if team.team_id == team_id
+                ),
+                None,
+            )
+            if side is None:
+                return None
+            dx, dy = (-1.0, 0.0) if side == "red" else (1.0, 0.0)
+        else:
+            panel = next(
+                (
+                    panel
+                    for panel in entity.panels_at(
+                        self._current_time if at_time is None else at_time
+                    )
+                    if panel.module_index == module_index
+                ),
+                None,
+            )
+            if panel is None:
+                return None
+            dx = panel.center[0] - entity.center[0]
+            dy = panel.center[1] - entity.center[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        # The module radial axis is the unobstructed shot lane. This distance
+        # and the panel dimensions are Rules Lab geometry approximations.
+        approach_distance = entity.panel_outer_radius_mm + 700.0
+        return (
+            entity.center[0] + dx / length * approach_distance,
+            entity.center[1] + dy / length * approach_distance,
+        )
+
+    def small_energy_mechanism_activation_position(
+        self,
+        team_id: str,
+    ) -> tuple[float, float] | None:
+        """Return a deterministic pre-command position for spectator AI."""
+        return self._small_energy_approach_position(None, team_id=team_id)
+
+    def small_energy_mechanism_aim_targets(
+        self,
+    ) -> dict[str, ProjectileAimTarget]:
+        entity = self._small_energy_mechanism_entity
+        if entity is None:
+            return {}
+        panels = {
+            panel.module_index: panel
+            for panel in entity.panels_at(self._current_time)
+        }
+        targets: dict[str, ProjectileAimTarget] = {}
+        for team_id, state in self._small_energy_mechanism_by_team.items():
+            robot_id = state.initiator_robot_id
+            panel = panels.get(state.lit_module_index)
+            robot = self._robots_by_id.get(robot_id) if robot_id else None
+            if (
+                state.status != "activating"
+                or panel is None
+                or robot is None
+                or not robot.alive
+            ):
+                continue
+            targets[robot.id] = ProjectileAimTarget(
+                id=f"small-energy:{team_id}:{panel.module_index}",
+                position=panel.center,
+                robot_id=robot.id,
+                # Rotating-panel target centering is a Rules Lab controller
+                # approximation; require a tight alignment before firing.
+                alignment_tolerance_rad=0.025,
+                approach_position=state.lit_approach_position,
+            )
+        return targets
+
+    def small_energy_mechanism_projectile_hitboxes(
+        self,
+        elapsed_time: float,
+    ) -> tuple[ProjectileSpecialHitbox, ...]:
+        entity = self._small_energy_mechanism_entity
+        if entity is None:
+            return ()
+        return tuple(
+            ProjectileSpecialHitbox(
+                id=entity.id,
+                target_kind="energy_mechanism",
+                module_id=str(panel.module_index),
+                vertices=panel.vertices,
+            )
+            for panel in entity.panels_at(elapsed_time)
+        )
+
+    def on_small_energy_mechanism_projectile_hit(
+        self,
+        projectile: "Projectile",
+        hitbox: ProjectileSpecialHitbox,
+        impact_position: tuple[float, float],
+        impact_speed: float,
+        impact_time: float,
+    ) -> str:
+        del impact_position
+        if projectile.caliber != "17mm":
+            return "energy_mechanism_illegal_projectile"
+        if impact_speed <= 12_000.0 + 1e-9:
+            return "energy_mechanism_ineffective"
+        state = self._small_energy_mechanism_by_team.get(
+            projectile.shooter_team_id
+        )
+        if state is None or state.status != "activating":
+            return "energy_mechanism_inactive"
+        if (
+            state.attempt_deadline is None
+            or state.lit_module_deadline is None
+            or impact_time > state.attempt_deadline + 1e-9
+            or impact_time > state.lit_module_deadline + 1e-9
+            or impact_time >= _SMALL_ENERGY_PHASE_END - 1e-9
+        ):
+            self._fail_small_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                impact_time,
+            )
+            return "energy_activation_failed"
+        try:
+            module_index = int(hitbox.module_id)
+        except ValueError:
+            return "energy_mechanism_ignored"
+        if module_index != state.lit_module_index:
+            self._fail_small_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                impact_time,
+            )
+            return "energy_activation_failed"
+
+        state.completed_modules.add(module_index)
+        if len(state.completed_modules) >= 5:
+            if self._complete_small_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                impact_time,
+            ):
+                return "energy_activated"
+            self._fail_small_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                impact_time,
+            )
+            return "energy_activation_failed"
+
+        self._light_next_small_energy_module(
+            projectile.shooter_team_id,
+            state,
+            impact_time,
+        )
+        return "energy_module_activated"
+
+    def _small_energy_opportunities_earned(self, elapsed_time: float) -> int:
+        if elapsed_time < 0 or elapsed_time >= _SMALL_ENERGY_PHASE_END - 1e-9:
+            return 0
+        return 1 + int(elapsed_time + 1e-9 >= _SMALL_ENERGY_OPPORTUNITY_INTERVAL)
+
+    def _small_energy_opportunities_remaining(
+        self,
+        team_id: str,
+        elapsed_time: float,
+    ) -> int:
+        state = self._small_energy_mechanism_by_team.get(team_id)
+        if state is None:
+            return 0
+        return max(
+            0,
+            self._small_energy_opportunities_earned(elapsed_time)
+            - state.opportunities_used,
+        )
+
+    def _small_energy_buff_remaining(self, team_id: str) -> float:
+        return max(
+            (
+                buff.remaining
+                for buff in self._energy_mechanism_buffs_by_team.get(team_id, ())
+                if buff.mechanism == "small" and buff.remaining > 0
+            ),
+            default=0.0,
+        )
+
+    def _grant_small_energy_mechanism_buff(self, team_id: str) -> bool:
+        buffs = self._energy_mechanism_buffs_by_team.get(team_id)
+        if buffs is None or self._small_energy_buff_remaining(team_id) > 0:
+            return False
         buffs.append(
             _TimedEnergyMechanismBuff(
                 mechanism="small",
@@ -4473,8 +4783,152 @@ class RMUC2026RegionalRules:
                 experience_bonus_remaining=_SMALL_ENERGY_EXPERIENCE_BONUS_CAP,
             )
         )
-        activation_times.append(float(activation_started_at))
         return True
+
+    def _light_next_small_energy_module(
+        self,
+        team_id: str,
+        state: _SmallEnergyMechanismTeamState,
+        at_time: float,
+    ) -> None:
+        remaining = sorted(set(range(5)) - state.completed_modules)
+        if not remaining:
+            state.lit_module_index = None
+            state.lit_module_deadline = None
+            return
+        state.lit_module_index = self._small_energy_rng_by_team[team_id].choice(
+            remaining
+        )
+        state.lit_approach_position = self._small_energy_approach_position(
+            state.lit_module_index,
+            at_time=at_time,
+        )
+        state.lit_module_deadline = min(
+            state.attempt_deadline or at_time,
+            at_time + _SMALL_ENERGY_LIT_HIT_WINDOW,
+        )
+
+    def _fail_small_energy_activation(
+        self,
+        team_id: str,
+        state: _SmallEnergyMechanismTeamState,
+        at_time: float,
+    ) -> None:
+        state.status = "inactive"
+        state.attempt_started_at = None
+        state.attempt_deadline = None
+        state.initiator_robot_id = None
+        state.lit_module_index = None
+        state.lit_module_deadline = None
+        state.lit_approach_position = None
+        state.completed_modules.clear()
+        state.last_failure_at = at_time
+        state.failure_count += 1
+
+    def _complete_small_energy_activation(
+        self,
+        team_id: str,
+        state: _SmallEnergyMechanismTeamState,
+        at_time: float,
+    ) -> bool:
+        if (
+            self._match is None
+            or state.attempt_started_at is None
+            or self._match.elapsed_time >= _SMALL_ENERGY_PHASE_END - 1e-9
+            or not self._grant_small_energy_mechanism_buff(team_id)
+        ):
+            return False
+        self._small_energy_mechanism_activation_times_by_team[team_id].append(
+            state.attempt_started_at
+        )
+        state.status = "activated"
+        state.attempt_started_at = None
+        state.attempt_deadline = None
+        state.initiator_robot_id = None
+        state.lit_module_index = None
+        state.lit_module_deadline = None
+        state.lit_approach_position = None
+        return True
+
+    def _advance_small_energy_mechanisms(
+        self,
+        match: "Match",
+    ) -> None:
+        now = min(match.elapsed_time, _SMALL_ENERGY_PHASE_END)
+        for team_id, state in self._small_energy_mechanism_by_team.items():
+            if state.status == "activating":
+                deadline = min(
+                    value
+                    for value in (
+                        state.attempt_deadline,
+                        state.lit_module_deadline,
+                        _SMALL_ENERGY_PHASE_END,
+                    )
+                    if value is not None
+                )
+                if now + 1e-9 >= deadline:
+                    self._fail_small_energy_activation(team_id, state, deadline)
+            elif state.status == "activated" and self._small_energy_buff_remaining(
+                team_id
+            ) <= 1e-9:
+                state.status = "inactive"
+                state.completed_modules.clear()
+
+    def _small_energy_display_state(self) -> EnergyMechanismDisplayState | None:
+        entity = self._small_energy_mechanism_entity
+        if entity is None:
+            return None
+        panels = entity.panels_at(self._current_time)
+        team_display = []
+        for team_id, state in sorted(self._small_energy_mechanism_by_team.items()):
+            effect_remaining = self._small_energy_buff_remaining(team_id)
+            status = state.status
+            if effect_remaining > 0:
+                status = "activated"
+            elif status == "activated":
+                status = "inactive"
+            elif (
+                state.last_failure_at is not None
+                and self._current_time - state.last_failure_at
+                < _SMALL_ENERGY_FAILURE_DISPLAY_SECONDS
+            ):
+                status = "failed"
+            team_display.append(
+                EnergyMechanismTeamDisplayState(
+                    team_id=team_id,
+                    status=status,
+                    lit_module_index=state.lit_module_index,
+                    completed_modules=len(state.completed_modules),
+                    completed_module_indices=tuple(sorted(state.completed_modules)),
+                    lit_remaining=max(
+                        0.0,
+                        (state.lit_module_deadline or self._current_time)
+                        - self._current_time,
+                    ),
+                    activation_remaining=max(
+                        0.0,
+                        (state.attempt_deadline or self._current_time)
+                        - self._current_time,
+                    ),
+                    opportunities_remaining=self._small_energy_opportunities_remaining(
+                        team_id,
+                        self._current_time,
+                    ),
+                    effect_remaining=effect_remaining,
+                )
+            )
+        return EnergyMechanismDisplayState(
+            rotation_angle=entity.angle_at(self._current_time),
+            panels=tuple(
+                EnergyMechanismPanelDisplayState(
+                    module_index=panel.module_index,
+                    center=panel.center,
+                    vertices=panel.vertices,
+                )
+                for panel in panels
+            ),
+            teams=tuple(team_display),
+        )
 
     def _grant_large_energy_mechanism_experience(self, team_id: str) -> None:
         """Split the activation's 750 XP pool across living eligible teammates."""
@@ -5762,6 +6216,24 @@ class RMUC2026RegionalRules:
         self._small_energy_mechanism_activation_times_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
+        self._small_energy_mechanism_by_team = {
+            team_id: _SmallEnergyMechanismTeamState()
+            for team_id in team_by_side.values()
+        }
+        self._small_energy_mechanism_generation += 1
+        rotation_direction = random.Random(
+            f"RMUC-2026-small-energy-rotation:{self._small_energy_mechanism_generation}"
+        ).choice((-1, 1))
+        self._small_energy_mechanism_entity = SmallEnergyMechanism(
+            center=(match.map.width / 2.0, match.map.height / 2.0),
+            rotation_direction=rotation_direction,
+        )
+        self._small_energy_rng_by_team = {
+            team_id: random.Random(
+                f"RMUC-2026-small-energy-sequence:{self._small_energy_mechanism_generation}:{team_id}"
+            )
+            for team_id in team_by_side.values()
+        }
         self._radar_vulnerability_by_robot = {}
         self._radar_double_vulnerability_by_team = {
             team_id: _RadarDoubleVulnerabilityState()
@@ -6132,6 +6604,7 @@ class RMUC2026RegionalRules:
     def update(self, match: "Match", dt: float) -> None:
         self._current_time = match.elapsed_time
         newly_destroyed = self._consume_events(match)
+        self._advance_small_energy_mechanisms(match)
         self._advance_outpost_armor_rotation(match)
         frame_start = match.elapsed_time - dt
         active_dt = max(

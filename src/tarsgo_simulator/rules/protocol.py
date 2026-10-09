@@ -70,6 +70,33 @@ class MatchResult:
     winner: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class EnergyMechanismTeamDisplayState:
+    team_id: str
+    status: str
+    lit_module_index: int | None
+    completed_modules: int
+    completed_module_indices: tuple[int, ...]
+    lit_remaining: float
+    activation_remaining: float
+    opportunities_remaining: int
+    effect_remaining: float
+
+
+@dataclass(frozen=True, slots=True)
+class EnergyMechanismPanelDisplayState:
+    module_index: int
+    center: tuple[float, float]
+    vertices: tuple[tuple[float, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EnergyMechanismDisplayState:
+    rotation_angle: float
+    panels: tuple[EnergyMechanismPanelDisplayState, ...]
+    teams: tuple[EnergyMechanismTeamDisplayState, ...]
+
+
 @dataclass(frozen=True)
 class StructureParameters:
     max_hp: int
@@ -106,6 +133,7 @@ class RuleSetDisplayState:
         tuple[str, str, float, float, float, int, int, bool], ...
     ] = ()
     energy_mechanism_effect_timers: tuple[tuple[str, str, float], ...] = ()
+    small_energy_mechanism: EnergyMechanismDisplayState | None = None
     dart_system_statuses: tuple[
         tuple[str, int, int, str, float, str, str], ...
     ] = ()
