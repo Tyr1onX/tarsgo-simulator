@@ -51,6 +51,9 @@ _PATHFINDING_WORK_BUDGET_PER_TICK = 512
 _PATHFINDING_WORK_QUANTUM = 16
 _PATH_CACHE_MAX_ENTRIES = 512
 _LOCAL_AVOIDANCE_DISTANCE = 2.2
+_LOCAL_AVOIDANCE_SEARCH_BUDGET = 512
+_LOCAL_AVOIDANCE_ROBOT_CLEARANCE = 20.0
+_LOCAL_AVOIDANCE_RIGHT_OF_WAY_SECONDS = 1.0
 _STUCK_RECOVERY_AFTER_SECONDS = 0.75
 _STUCK_REPATH_AFTER_SECONDS = 1.75
 _STUCK_REPATH_COOLDOWN_SECONDS = 1.5
@@ -64,6 +67,108 @@ def _stable_spin_direction(robot_id: str, team_id: str) -> int:
     return 1 if value % 2 == 0 else -1
 
 
+def _distance_to_segment(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    delta_x = end[0] - start[0]
+    delta_y = end[1] - start[1]
+    length_squared = delta_x * delta_x + delta_y * delta_y
+    if length_squared <= 1e-12:
+        return math.dist(point, start)
+    progress = (
+        (point[0] - start[0]) * delta_x
+        + (point[1] - start[1]) * delta_y
+    ) / length_squared
+    progress = min(1.0, max(0.0, progress))
+    closest = (
+        start[0] + progress * delta_x,
+        start[1] + progress * delta_y,
+    )
+    return math.dist(point, closest)
+
+
+def _point_along_path(
+    points: list[tuple[float, float]],
+    distance: float,
+) -> tuple[tuple[float, float], int] | None:
+    traversed = 0.0
+    for index, (start, end) in enumerate(zip(points, points[1:])):
+        segment_length = math.dist(start, end)
+        if segment_length <= 1e-8:
+            continue
+        if traversed + segment_length >= distance:
+            ratio = (distance - traversed) / segment_length
+            point = (
+                start[0] + (end[0] - start[0]) * ratio,
+                start[1] + (end[1] - start[1]) * ratio,
+            )
+            return point, index
+        traversed += segment_length
+    return None
+
+
+def _local_rejoin_window(
+    route_points: list[tuple[float, float]],
+    blocker_position: tuple[float, float],
+    minimum_distance: float,
+) -> tuple[float, float] | None:
+    nearest_distance = math.inf
+    nearest_progress = 0.0
+    progress = 0.0
+    total_length = 0.0
+    for start, end in zip(route_points, route_points[1:]):
+        segment_length = math.dist(start, end)
+        if segment_length <= 1e-8:
+            continue
+        delta_x = end[0] - start[0]
+        delta_y = end[1] - start[1]
+        ratio = (
+            (blocker_position[0] - start[0]) * delta_x
+            + (blocker_position[1] - start[1]) * delta_y
+        ) / (segment_length * segment_length)
+        ratio = min(1.0, max(0.0, ratio))
+        projected = (
+            start[0] + ratio * delta_x,
+            start[1] + ratio * delta_y,
+        )
+        distance = math.dist(projected, blocker_position)
+        if distance < nearest_distance:
+            nearest_distance = distance
+            nearest_progress = progress + ratio * segment_length
+        progress += segment_length
+        total_length = progress
+
+    first_rejoin = nearest_progress + minimum_distance + 80.0
+    last_rejoin = min(total_length, minimum_distance * 8.0)
+    if first_rejoin > last_rejoin:
+        return None
+    return first_rejoin, last_rejoin
+
+
+def _collision_right_of_way(
+    first: Robot,
+    second: Robot,
+    first_moving: bool,
+    second_moving: bool,
+    elapsed_time: float,
+) -> tuple[Robot, Robot]:
+    """Choose a stable winner, alternating moving pairs on fixed time slices."""
+    if first_moving != second_moving:
+        return (second, first) if first_moving else (first, second)
+    first, second = sorted((first, second), key=lambda robot: robot.id)
+    pair_key = f"{first.id}|{second.id}"
+    pair_phase = sum(
+        (index + 1) * ord(char)
+        for index, char in enumerate(pair_key)
+    )
+    turn = max(0, math.floor(elapsed_time / _LOCAL_AVOIDANCE_RIGHT_OF_WAY_SECONDS))
+    winner = (first, second)[(pair_phase + turn) % 2]
+    yielding = second if winner is first else first
+    return winner, yielding
+
+
 @dataclass(slots=True)
 class _AIPathPlan:
     robot_id: str
@@ -75,6 +180,50 @@ class _AIPathPlan:
     candidates: list[
         tuple[int, bool, float, int, list[tuple[float, float]]]
     ] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalAvoidanceMap:
+    """Map view that adds temporary robot clearances for a bounded detour."""
+
+    game_map: GameMap
+    robot_obstacles: tuple[tuple[tuple[float, float], float], ...]
+
+    @property
+    def path_grid_size(self) -> float:
+        return self.game_map.path_grid_size
+
+    def is_passable(
+        self,
+        point: tuple[float, float],
+        *,
+        agent_height_mm: float | None = None,
+    ) -> bool:
+        return self.game_map.is_passable(
+            point,
+            agent_height_mm=agent_height_mm,
+        ) and all(
+            math.dist(point, center) >= clearance
+            for center, clearance in self.robot_obstacles
+        )
+
+    def can_traverse(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        *,
+        agent_height_mm: float | None = None,
+    ) -> bool:
+        if not self.game_map.can_traverse(
+            start,
+            end,
+            agent_height_mm=agent_height_mm,
+        ):
+            return False
+        for center, clearance in self.robot_obstacles:
+            if _distance_to_segment(center, start, end) < clearance:
+                return False
+        return True
 
 
 @dataclass(slots=True)
@@ -251,6 +400,9 @@ class Match:
             "yield_decisions": 0,
             "local_avoidance_attempts": 0,
             "local_avoidance_moves": 0,
+            "local_replan_searches": 0,
+            "local_replan_expansions": 0,
+            "local_replan_failures": 0,
             "stuck_recovery_attempts": 0,
             "stuck_recovery_successes": 0,
             "stuck_path_replans": 0,
@@ -1042,7 +1194,19 @@ class Match:
                         target, amount, source_robot=attacker
                     ),
                 )
-            self.elapsed_time += dt
+            next_elapsed_time = self.elapsed_time + dt
+            if (
+                next_elapsed_time >= self.time_limit
+                or math.isclose(
+                    next_elapsed_time,
+                    self.time_limit,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+            ):
+                self.elapsed_time = self.time_limit
+            else:
+                self.elapsed_time = next_elapsed_time
             self.ruleset.update(self, dt)
         finally:
             self._in_update = False
@@ -1099,10 +1263,10 @@ class Match:
         avoidance_sides = dict(self._local_avoidance_side_by_robot)
         avoidance_moves: set[str] = set()
 
-        # Resolve one conflict at a time in a stable order. The lower-priority
-        # mover first tries a deterministic side-step; if the pair is still too
-        # close during the first sidestep tick, the right-of-way robot waits for
-        # that tick instead of permanently freezing both paths.
+        # Resolve one conflict at a time in a stable order. When both robots
+        # are moving, their deterministic right-of-way alternates by time slice;
+        # the yielding robot first tries a terrain-safe local route around the
+        # blocker, while an unsafe first step leaves both original paths intact.
         iteration_limit = max(1, len(priority) * len(priority) * 2)
         for _ in range(iteration_limit):
             conflict_pair = None
@@ -1119,7 +1283,17 @@ class Match:
                         proposals[second.id][0],
                         minimum_distance,
                     ):
-                        conflict_pair = first, second
+                        conflict_pair = (
+                            _collision_right_of_way(
+                                first,
+                                second,
+                                intended_to_move[first.id],
+                                intended_to_move[second.id],
+                                self.elapsed_time,
+                            )
+                            if self._rmuc_spectator_ai
+                            else (first, second)
+                        )
                         break
                 if conflict_pair is not None:
                     break
@@ -1243,7 +1417,14 @@ class Match:
                 self._blocked_seconds_by_robot[robot.id] = 0.0
 
             if intended_to_move[robot.id] and robot.path:
-                goal = robot.path[-1]
+                detour_goal = active_detours.get(robot.id)
+                goal = (
+                    robot.path[0]
+                    if self._rmuc_spectator_ai
+                    and detour_goal is not None
+                    and detour_goal in robot.path
+                    else robot.path[-1]
+                )
                 remaining = math.dist(robot.position, goal)
                 previous_goal = self._stuck_goal_by_robot.get(robot.id)
                 best_remaining = self._best_goal_distance_by_robot.get(
@@ -1279,6 +1460,186 @@ class Match:
 
         self._local_detour_by_robot = active_detours
         self._local_avoidance_side_by_robot = avoidance_sides
+
+    def _local_avoidance_connector(
+        self,
+        robot: Robot,
+        blocker: Robot,
+        escape_goal: tuple[float, float],
+        minimum_distance: float,
+        work_budget: int,
+    ) -> tuple[
+        tuple[list[tuple[float, float]], tuple[float, float]] | None,
+        int,
+    ]:
+        """Plan a short terrain-safe connector around nearby robot footprints."""
+        route_points = [robot.position, *robot.path]
+        rejoin_window = _local_rejoin_window(
+            route_points,
+            blocker.position,
+            minimum_distance,
+        )
+        if rejoin_window is None:
+            self._movement_counters["local_replan_failures"] += 1
+            return None, 0
+        minimum_rejoin_distance, maximum_rejoin_distance = rejoin_window
+        obstacle_clearance = minimum_distance + _LOCAL_AVOIDANCE_ROBOT_CLEARANCE
+        work_used = 0
+        rejoin_distance = minimum_rejoin_distance
+        while rejoin_distance <= maximum_rejoin_distance + 1e-8:
+            sample = _point_along_path(route_points, rejoin_distance)
+            if sample is None:
+                break
+            rejoin, segment_index = sample
+            if (
+                math.dist(rejoin, blocker.position) >= obstacle_clearance
+                and self.map.is_passable(
+                    rejoin,
+                    agent_height_mm=robot.body_height_mm,
+                )
+            ):
+                nearby_obstacles = tuple(
+                    (other.position, obstacle_clearance)
+                    for other in sorted(self.robots, key=lambda item: item.id)
+                    if other.id != robot.id
+                    and not other.aerial
+                    and min(
+                        math.dist(other.position, robot.position),
+                        math.dist(other.position, escape_goal),
+                        math.dist(other.position, rejoin),
+                    )
+                    <= minimum_distance * 8.0
+                )
+                if not nearby_obstacles or work_used >= work_budget:
+                    return None, work_used
+                avoidance_map = _LocalAvoidanceMap(self.map, nearby_obstacles)
+                search = IncrementalAStar(
+                    avoidance_map,
+                    escape_goal,
+                    rejoin,
+                    agent_height_mm=robot.body_height_mm,
+                )
+                self._movement_counters["local_replan_searches"] += 1
+                used = search.advance(work_budget - work_used)
+                work_used += used
+                self._movement_counters["local_replan_expansions"] += used
+                if search.done and search.result is not None:
+                    tail = [
+                        point
+                        for point in route_points[segment_index + 1 :]
+                        if math.dist(point, rejoin) > 1e-3
+                    ]
+                    connector = [
+                        escape_goal,
+                        *search.result[1:],
+                        *tail,
+                    ]
+                    if all(
+                        self.map.can_traverse(
+                            first,
+                            second,
+                            agent_height_mm=robot.body_height_mm,
+                        )
+                        for first, second in zip(
+                            [robot.position, *connector],
+                            connector,
+                        )
+                    ):
+                        return (connector, rejoin), work_used
+                else:
+                    self._movement_counters["local_replan_failures"] += 1
+                    return None, work_used
+            rejoin_distance += minimum_distance * 0.5
+        self._movement_counters["local_replan_failures"] += 1
+        return None, work_used
+
+    def _local_avoidance_repath(
+        self,
+        robot: Robot,
+        blocker: Robot,
+        minimum_distance: float,
+        work_budget: int,
+    ) -> tuple[list[tuple[float, float]], tuple[float, float]] | None:
+        """Find a bounded route from the current point around a blocker."""
+        route_points = [robot.position, *robot.path]
+        rejoin_window = _local_rejoin_window(
+            route_points,
+            blocker.position,
+            minimum_distance,
+        )
+        if rejoin_window is None:
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+        sample = _point_along_path(route_points, rejoin_window[0])
+        if sample is None:
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+        rejoin, segment_index = sample
+        if not self.map.is_passable(
+            rejoin,
+            agent_height_mm=robot.body_height_mm,
+        ):
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+
+        obstacles = []
+        for other in sorted(self.robots, key=lambda item: item.id):
+            if other.id == robot.id or other.aerial:
+                continue
+            start_distance = math.dist(robot.position, other.position)
+            if min(start_distance, math.dist(rejoin, other.position)) > (
+                minimum_distance * 8.0
+            ):
+                continue
+            # A robot can already be close to the legal collision threshold.
+            # Keep that valid start state searchable without reducing the
+            # actual pairwise collision distance used by the movement resolver.
+            clearance = min(
+                minimum_distance + _LOCAL_AVOIDANCE_ROBOT_CLEARANCE,
+                start_distance,
+            )
+            if clearance < minimum_distance - 1e-6:
+                self._movement_counters["local_replan_failures"] += 1
+                return None
+            obstacles.append((other.position, clearance))
+        if not obstacles:
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+
+        avoidance_map = _LocalAvoidanceMap(self.map, tuple(obstacles))
+        search = IncrementalAStar(
+            avoidance_map,
+            robot.position,
+            rejoin,
+            agent_height_mm=robot.body_height_mm,
+        )
+        self._movement_counters["local_replan_searches"] += 1
+        used = search.advance(work_budget)
+        self._movement_counters["local_replan_expansions"] += used
+        if not search.done or search.result is None:
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+
+        tail = [
+            point
+            for point in route_points[segment_index + 1 :]
+            if math.dist(point, rejoin) > 1e-3
+        ]
+        detour_path = [*search.result[1:], *tail]
+        if not detour_path or not all(
+            self.map.can_traverse(
+                first,
+                second,
+                agent_height_mm=robot.body_height_mm,
+            )
+            for first, second in zip(
+                [robot.position, *detour_path],
+                detour_path,
+            )
+        ):
+            self._movement_counters["local_replan_failures"] += 1
+            return None
+        return detour_path, rejoin
 
     def _local_avoidance_proposals(
         self,
@@ -1323,6 +1684,7 @@ class Match:
             )
             preferred_side = 1 if stable_value % 2 == 0 else -1
         result = []
+        local_search_budget = _LOCAL_AVOIDANCE_SEARCH_BUDGET
         for side in (preferred_side, -preferred_side):
             direction_x = away_x * 0.82 + tangent_x * side * 0.57
             direction_y = away_y * 0.82 + tangent_y * side * 0.57
@@ -1341,13 +1703,40 @@ class Match:
                     robot.position[1] + direction_y * distance,
                 )
                 if (
-                    not self.map.is_passable(goal)
-                    or not self.map.can_traverse(robot.position, goal)
-                    or robot.path
-                    and not self.map.can_traverse(goal, robot.path[0])
+                    not self.map.is_passable(
+                        goal,
+                        agent_height_mm=robot.body_height_mm,
+                    )
+                    or not self.map.can_traverse(
+                        robot.position,
+                        goal,
+                        agent_height_mm=robot.body_height_mm,
+                    )
                 ):
                     continue
-                detour_path = [goal, *robot.path]
+                if self.map.can_traverse(
+                    goal,
+                    robot.path[0],
+                    agent_height_mm=robot.body_height_mm,
+                ):
+                    detour_path = [goal, *robot.path]
+                    detour_marker = goal
+                elif self._rmuc_spectator_ai:
+                    connector, work_used = self._local_avoidance_connector(
+                        robot,
+                        blocker,
+                        goal,
+                        minimum_distance,
+                        local_search_budget,
+                    )
+                    local_search_budget -= work_used
+                    if connector is None:
+                        if local_search_budget <= 0:
+                            break
+                        continue
+                    detour_path, detour_marker = connector
+                else:
+                    continue
                 original_path = robot.path
                 try:
                     robot.path = detour_path
@@ -1356,7 +1745,34 @@ class Match:
                     robot.path = original_path
                 if math.dist(robot.position, proposal[0]) <= 1e-8:
                     continue
-                result.append((proposal, goal, side))
+                result.append((proposal, detour_marker, side))
+        if (
+            not result
+            and self._rmuc_spectator_ai
+            and self._blocked_seconds_by_robot.get(robot.id, 0.0) + 1e-9
+            >= _STUCK_RECOVERY_AFTER_SECONDS
+            and self.elapsed_time >= self._stuck_recovery_after[robot.id]
+            and local_search_budget > 0
+        ):
+            self._stuck_recovery_after[robot.id] = (
+                self.elapsed_time + _STUCK_RECOVERY_AFTER_SECONDS
+            )
+            detour = self._local_avoidance_repath(
+                robot,
+                blocker,
+                minimum_distance,
+                local_search_budget,
+            )
+            if detour is not None:
+                detour_path, detour_marker = detour
+                original_path = robot.path
+                try:
+                    robot.path = detour_path
+                    proposal = robot.propose_movement(dt, self.map)
+                finally:
+                    robot.path = original_path
+                if math.dist(robot.position, proposal[0]) > 1e-8:
+                    result.append((proposal, detour_marker, preferred_side))
         return result
 
     def _recover_stuck_robot(
@@ -1400,8 +1816,10 @@ class Match:
                     minimum_distance,
                 )
                 if candidates:
-                    _proposal, goal, side = candidates[0]
-                    if goal not in robot.path:
+                    proposal, goal, side = candidates[0]
+                    if self._rmuc_spectator_ai:
+                        robot.path = list(proposal[1])
+                    elif goal not in robot.path:
                         robot.path.insert(0, goal)
                     active_detours[robot.id] = goal
                     avoidance_sides[robot.id] = side

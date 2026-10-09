@@ -358,6 +358,19 @@ def test_timeout_is_seven_minutes_and_equal_match_draws() -> None:
     assert match.winner is None
 
 
+def test_timeout_settles_on_the_exact_420_second_fixed_tick() -> None:
+    match = _match()
+    match.elapsed_time = 419.0
+    dt = 1.0 / 60.0
+
+    for _ in range(60):
+        match.update(dt)
+
+    assert match.elapsed_time == 420.0
+    assert match.finished
+    assert match.winner is None
+
+
 def test_base_destroyed_finishes_match_immediately() -> None:
     match = _match()
     _destroy_outpost(match, RED)

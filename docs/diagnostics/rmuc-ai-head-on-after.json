@@ -1,0 +1,50 @@
+{
+  "elapsed_seconds": 10.000000000000076,
+  "minimum_center_separation_mm": 377.97512884430125,
+  "required_separation_mm": 360.0,
+  "movement_counters": {
+    "blocked_ticks": 0,
+    "blocked_events": 0,
+    "yield_decisions": 1,
+    "local_avoidance_attempts": 1,
+    "local_avoidance_moves": 1,
+    "local_replan_searches": 3,
+    "local_replan_expansions": 113,
+    "local_replan_failures": 0,
+    "stuck_recovery_attempts": 0,
+    "stuck_recovery_successes": 0,
+    "stuck_path_replans": 0
+  },
+  "robots": {
+    "tarsgo-infantry-1": {
+      "start": [
+        13341.26,
+        260.92
+      ],
+      "end": [
+        2905.685060733717,
+        10303.835770010553
+      ],
+      "displacement_mm": 14483.141284837664,
+      "alive": true,
+      "can_move": true,
+      "path_waypoints": 1,
+      "longest_contiguous_collision_block_s": 0.0
+    },
+    "opponent-hero": {
+      "start": [
+        12989.04,
+        401.59
+      ],
+      "end": [
+        25994.0,
+        1950.0
+      ],
+      "displacement_mm": 13096.81480855937,
+      "alive": true,
+      "can_move": true,
+      "path_waypoints": 0,
+      "longest_contiguous_collision_block_s": 0.0
+    }
+  }
+}

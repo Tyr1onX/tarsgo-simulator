@@ -1,0 +1,323 @@
+{
+  "simulated_seconds": 420.0,
+  "time_limit": 420.0,
+  "finished": true,
+  "winner": "opponent-rmuc-2026-region",
+  "ticks": 25200,
+  "wall_seconds": 67.80772804096341,
+  "sim_rate": 6.193984257167166,
+  "min_robot_separation_mm": 360.0264772421265,
+  "max_path_queue": 12,
+  "pathfinding": {
+    "requests": 3349,
+    "cache_hits": 43,
+    "cache_misses": 1250,
+    "searches_started": 1250,
+    "searches_completed": 1243,
+    "searches_failed": 104,
+    "node_pops": 2033233,
+    "node_expansions": 2024037,
+    "max_queue_length": 12
+  },
+  "movement": {
+    "blocked_ticks": 1597,
+    "blocked_events": 75,
+    "yield_decisions": 1852,
+    "local_avoidance_attempts": 1445,
+    "local_avoidance_moves": 288,
+    "local_replan_searches": 93,
+    "local_replan_expansions": 6964,
+    "local_replan_failures": 9,
+    "stuck_recovery_attempts": 18,
+    "stuck_recovery_successes": 0,
+    "stuck_path_replans": 7
+  },
+  "max_collision_stall_seconds": 1.816666666666665,
+  "robot_stats": {
+    "tarsgo-hero": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "hero",
+      "start": [
+        2407.0,
+        5900.0
+      ],
+      "end": [
+        4520.002752978464,
+        13500.371138104601
+      ],
+      "displacement": 7888.626120626329,
+      "alive_at_end": true,
+      "target": "zone:supply:red",
+      "intent": "前往补给区",
+      "path_waypoints": 1,
+      "collision_stall_seconds": 1.816666666666665,
+      "stationary_classification_ticks": {
+        "legal_wait": 770,
+        "pathfinding_pending": 974,
+        "power_or_rule_lock": 3877,
+        "collision_yield": 326,
+        "dead_or_respawning": 2099
+      }
+    },
+    "tarsgo-engineer": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "engineer",
+      "start": [
+        900.0,
+        7000.0
+      ],
+      "end": [
+        3194.0,
+        13050.0
+      ],
+      "displacement": 6470.311893564328,
+      "alive_at_end": true,
+      "target": "zone:supply:red",
+      "intent": "后方待命",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 0.08333333333333333,
+      "stationary_classification_ticks": {
+        "legal_wait": 23172,
+        "collision_yield": 5
+      }
+    },
+    "tarsgo-infantry-1": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "infantry",
+      "start": [
+        3900.0,
+        7000.0
+      ],
+      "end": [
+        6282.297304325668,
+        13121.404410824145
+      ],
+      "displacement": 6568.632460950654,
+      "alive_at_end": true,
+      "target": "robot:opponent-infantry-2",
+      "intent": "追击敌方步兵",
+      "path_waypoints": 3,
+      "collision_stall_seconds": 0.6000000000000002,
+      "stationary_classification_ticks": {
+        "legal_wait": 1290,
+        "pathfinding_pending": 99,
+        "collision_yield": 68,
+        "power_or_rule_lock": 4214,
+        "dead_or_respawning": 2698
+      }
+    },
+    "tarsgo-infantry-2": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "infantry",
+      "start": [
+        900.0,
+        8000.0
+      ],
+      "end": [
+        4290.298709707445,
+        9901.007170533943
+      ],
+      "displacement": 3886.8951109420786,
+      "alive_at_end": true,
+      "target": "robot:opponent-hero",
+      "intent": "追击敌方英雄",
+      "path_waypoints": 2,
+      "collision_stall_seconds": 0.5666666666666668,
+      "stationary_classification_ticks": {
+        "legal_wait": 5193,
+        "pathfinding_pending": 163,
+        "collision_yield": 156,
+        "power_or_rule_lock": 2408,
+        "dead_or_respawning": 1859
+      }
+    },
+    "tarsgo-sentry": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "sentry",
+      "start": [
+        3900.0,
+        8000.0
+      ],
+      "end": [
+        2941.7432651705603,
+        12169.451187099432
+      ],
+      "displacement": 4278.151373134294,
+      "alive_at_end": true,
+      "target": "zone:fortress:red",
+      "intent": "占领堡垒",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 1.7833333333333319,
+      "stationary_classification_ticks": {
+        "legal_wait": 8474,
+        "pathfinding_pending": 38,
+        "power_or_rule_lock": 1641,
+        "dead_or_respawning": 6013,
+        "collision_yield": 336
+      }
+    },
+    "tarsgo-drone": {
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "drone",
+      "start": [
+        2000.0,
+        2400.0
+      ],
+      "end": [
+        24253.996798918015,
+        3253.2242856047565
+      ],
+      "displacement": 22270.34721794429,
+      "alive_at_end": true,
+      "target": "robot:opponent-engineer",
+      "intent": "空中压制敌方工程",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 0.0,
+      "stationary_classification_ticks": {
+        "legal_wait": 21375,
+        "pathfinding_pending": 42
+      }
+    },
+    "opponent-hero": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "hero",
+      "start": [
+        25593.0,
+        9100.0
+      ],
+      "end": [
+        2497.0944415776025,
+        687.7834290087911
+      ],
+      "displacement": 24580.200186345628,
+      "alive_at_end": true,
+      "target": "structure:red-base",
+      "intent": "进攻基地",
+      "path_waypoints": 1,
+      "collision_stall_seconds": 0.31666666666666665,
+      "stationary_classification_ticks": {
+        "legal_wait": 2292,
+        "pathfinding_pending": 1228,
+        "power_or_rule_lock": 2559,
+        "dead_or_respawning": 3778,
+        "collision_yield": 45
+      }
+    },
+    "opponent-engineer": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "engineer",
+      "start": [
+        27100.0,
+        8000.0
+      ],
+      "end": [
+        24806.0,
+        1950.0
+      ],
+      "displacement": 6470.311893564328,
+      "alive_at_end": true,
+      "target": "zone:supply:blue",
+      "intent": "后方待命",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 0.0,
+      "stationary_classification_ticks": {
+        "legal_wait": 23285,
+        "pathfinding_pending": 3
+      }
+    },
+    "opponent-infantry-1": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "infantry",
+      "start": [
+        24100.0,
+        8000.0
+      ],
+      "end": [
+        20896.013371617177,
+        9955.433704709247
+      ],
+      "displacement": 3753.565143749188,
+      "alive_at_end": true,
+      "target": "robot:tarsgo-hero",
+      "intent": "追击敌方英雄",
+      "path_waypoints": 3,
+      "collision_stall_seconds": 1.1166666666666676,
+      "stationary_classification_ticks": {
+        "legal_wait": 3512,
+        "pathfinding_pending": 81,
+        "power_or_rule_lock": 2709,
+        "dead_or_respawning": 2699,
+        "collision_yield": 70
+      }
+    },
+    "opponent-infantry-2": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "infantry",
+      "start": [
+        27100.0,
+        7000.0
+      ],
+      "end": [
+        19174.61459326455,
+        11495.551315876151
+      ],
+      "displacement": 9111.625292941488,
+      "alive_at_end": true,
+      "target": "zone:supply:blue",
+      "intent": "前往补给区",
+      "path_waypoints": 2,
+      "collision_stall_seconds": 1.816666666666665,
+      "stationary_classification_ticks": {
+        "legal_wait": 5822,
+        "pathfinding_pending": 71,
+        "power_or_rule_lock": 3612,
+        "collision_yield": 591
+      }
+    },
+    "opponent-sentry": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "sentry",
+      "start": [
+        24100.0,
+        7000.0
+      ],
+      "end": [
+        25075.0,
+        2836.0
+      ],
+      "displacement": 4276.624954330225,
+      "alive_at_end": true,
+      "target": "zone:fortress:blue",
+      "intent": "占领堡垒",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 0.0,
+      "stationary_classification_ticks": {
+        "legal_wait": 22307,
+        "pathfinding_pending": 50
+      }
+    },
+    "opponent-drone": {
+      "team": "opponent-rmuc-2026-region",
+      "type": "drone",
+      "start": [
+        26000.0,
+        12600.0
+      ],
+      "end": [
+        26000.0,
+        12600.0
+      ],
+      "displacement": 0.0,
+      "alive_at_end": false,
+      "target": null,
+      "intent": "空中弹量耗尽",
+      "path_waypoints": 0,
+      "collision_stall_seconds": 0.0,
+      "stationary_classification_ticks": {
+        "legal_wait": 11440,
+        "pathfinding_pending": 64,
+        "dead_or_respawning": 8145
+      }
+    }
+  }
+}
