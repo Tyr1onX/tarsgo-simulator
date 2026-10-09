@@ -146,6 +146,7 @@ class Match:
             scenario.path_grid_size,
             scenario.terrain_features,
             scenario.terrain_connections,
+            scenario.terrain_regions,
         )
         self.robots: list[Robot] = []
         for team, definition in definitions:
@@ -230,7 +231,7 @@ class Match:
         self._pending_ai_paths: dict[str, _AIPathPlan] = {}
         self._path_work_queue: deque[_AIPathSearchJob] = deque()
         self._path_cache: OrderedDict[
-            tuple[tuple[int, int], tuple[int, int]],
+            tuple[tuple[int, int], tuple[int, int], float | None],
             tuple[tuple[float, float], ...],
         ] = OrderedDict()
         self._pathfinding_counters = {
@@ -562,7 +563,12 @@ class Match:
                 anchor_goal[0] + robot.position[0] - centroid[0],
                 anchor_goal[1] + robot.position[1] - centroid[1],
             )
-            path = find_path(self.map, robot.position, goal)
+            path = find_path(
+                self.map,
+                robot.position,
+                goal,
+                agent_height_mm=robot.body_height_mm,
+            )
             if path is None:
                 return False
             planned_paths.append((robot, path))
@@ -572,7 +578,12 @@ class Match:
         return True
 
     def _set_robot_destination(self, robot: Robot, goal: tuple[float, float]) -> bool:
-        path = find_path(self.map, robot.position, goal)
+        path = find_path(
+            self.map,
+            robot.position,
+            goal,
+            agent_height_mm=robot.body_height_mm,
+        )
         if path is None:
             return False
         robot.set_path(path)
@@ -608,7 +619,12 @@ class Match:
         if path is None:
             self._pathfinding_counters["searches_failed"] += 1
         else:
-            self._store_cached_path(job.start, job.goal, path)
+            self._store_cached_path(
+                job.start,
+                job.goal,
+                path,
+                job.search.agent_height_mm,
+            )
             self._add_ai_path_candidate(
                 plan,
                 job.index,
@@ -730,22 +746,28 @@ class Match:
         self,
         start: tuple[float, float],
         goal: tuple[float, float],
-    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        agent_height_mm: float | None = None,
+    ) -> tuple[tuple[int, int], tuple[int, int], float | None]:
         grid = self.map.path_grid_size
         return (
             (math.floor(start[0] / grid), math.floor(start[1] / grid)),
             (math.floor(goal[0] / grid), math.floor(goal[1] / grid)),
+            agent_height_mm,
         )
 
     def _cached_path(
         self,
         start: tuple[float, float],
         goal: tuple[float, float],
+        agent_height_mm: float | None = None,
     ) -> list[tuple[float, float]] | None:
-        if not self.map.is_passable(start) or not self.map.is_passable(goal):
+        if not self.map.is_passable(
+            start,
+            agent_height_mm=agent_height_mm,
+        ) or not self.map.is_passable(goal, agent_height_mm=agent_height_mm):
             self._pathfinding_counters["cache_misses"] += 1
             return None
-        key = self._path_cache_key(start, goal)
+        key = self._path_cache_key(start, goal, agent_height_mm)
         cached = self._path_cache.get(key)
         if cached is None:
             self._pathfinding_counters["cache_misses"] += 1
@@ -754,7 +776,11 @@ class Match:
         if len(rebased) == 2 and start == goal:
             rebased = [start]
         if not all(
-            self.map.can_traverse(first, second)
+            self.map.can_traverse(
+                first,
+                second,
+                agent_height_mm=agent_height_mm,
+            )
             for first, second in zip(rebased, rebased[1:])
         ):
             self._pathfinding_counters["cache_misses"] += 1
@@ -768,8 +794,9 @@ class Match:
         start: tuple[float, float],
         goal: tuple[float, float],
         path: list[tuple[float, float]],
+        agent_height_mm: float | None = None,
     ) -> None:
-        key = self._path_cache_key(start, goal)
+        key = self._path_cache_key(start, goal, agent_height_mm)
         self._path_cache[key] = tuple(path)
         self._path_cache.move_to_end(key)
         while len(self._path_cache) > _PATH_CACHE_MAX_ENTRIES:
@@ -849,7 +876,11 @@ class Match:
 
         for index, endpoint, clear_shot in approaches:
             start = robot.position
-            cached = self._cached_path(start, endpoint)
+            cached = self._cached_path(
+                start,
+                endpoint,
+                robot.body_height_mm,
+            )
             if cached is not None:
                 self._add_ai_path_candidate(
                     plan,
@@ -859,7 +890,12 @@ class Match:
                 )
                 continue
             self._pathfinding_counters["searches_started"] += 1
-            search = IncrementalAStar(self.map, start, endpoint)
+            search = IncrementalAStar(
+                self.map,
+                start,
+                endpoint,
+                agent_height_mm=robot.body_height_mm,
+            )
             job = _AIPathSearchJob(
                 plan=plan,
                 index=index,
@@ -872,7 +908,12 @@ class Match:
                 if search.result is None:
                     self._pathfinding_counters["searches_failed"] += 1
                 else:
-                    self._store_cached_path(start, endpoint, search.result)
+                    self._store_cached_path(
+                        start,
+                        endpoint,
+                        search.result,
+                        robot.body_height_mm,
+                    )
                     self._add_ai_path_candidate(
                         plan,
                         index,
@@ -895,7 +936,11 @@ class Match:
             return False
         points = [robot.position, *robot.path]
         return all(
-            self.map.can_traverse(first, second)
+            self.map.can_traverse(
+                first,
+                second,
+                agent_height_mm=robot.body_height_mm,
+            )
             for first, second in zip(points, points[1:])
         )
 

@@ -43,6 +43,8 @@ class Projectile:
     previous_position: tuple[float, float]
     velocity: tuple[float, float]
     traveled: float = 0.0
+    height_mm: float | None = None
+    vertical_velocity_mm_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +224,14 @@ class ProjectileSystem:
                 candidates.append((distance, target.id, target))
             if not candidates:
                 continue
+            intended_target = next(
+                (
+                    target
+                    for _distance, target_id, target in candidates
+                    if target_id == shooter.aim_target_id
+                ),
+                min(candidates, key=lambda item: (item[0], item[1]))[2],
+            )
             direction = (
                 math.cos(shooter.turret_angle),
                 math.sin(shooter.turret_angle),
@@ -253,6 +263,13 @@ class ProjectileSystem:
                         direction[0] * parameters.speed,
                         direction[1] * parameters.speed,
                     ),
+                    height_mm=game_map.terrain_height_at(shooter.position),
+                    vertical_velocity_mm_s=(
+                        game_map.terrain_height_at(intended_target.position)
+                        - game_map.terrain_height_at(shooter.position)
+                    )
+                    / max(math.dist(shooter.position, intended_target.position), 1.0)
+                    * parameters.speed,
                 )
             )
             shooter.attack_cooldown = parameters.firing_interval
@@ -310,6 +327,14 @@ class ProjectileSystem:
                 start[0] + projectile.velocity[0] / projectile.speed * distance,
                 start[1] + projectile.velocity[1] / projectile.speed * distance,
             )
+            start_height = (
+                game_map.terrain_height_at(start)
+                if projectile.height_mm is None
+                else projectile.height_mm
+            )
+            end_height = start_height + (
+                projectile.vertical_velocity_mm_s / projectile.speed * distance
+            )
             projectile.previous_position = start
             collision = _first_collision(
                 start,
@@ -321,6 +346,8 @@ class ProjectileSystem:
                 game_map,
                 robot_hitboxes,
                 structure_hitbox_profile_for,
+                start_height_mm=start_height,
+                end_height_mm=end_height,
             )
             if collision is not None:
                 (
@@ -436,6 +463,7 @@ class ProjectileSystem:
                 continue
 
             projectile.position = end
+            projectile.height_mm = end_height
             projectile.traveled += distance
             if projectile.traveled + 1e-9 < projectile.effective_range:
                 active.append(projectile)
@@ -549,6 +577,9 @@ def _first_collision(
         [Structure], StructureProjectileHitboxProfile | None
     ]
     | None = None,
+    *,
+    start_height_mm: float = 0.0,
+    end_height_mm: float = 0.0,
 ) -> tuple[
     float,
     DamageableTarget | None,
@@ -572,8 +603,29 @@ def _first_collision(
             str | None,
             bool,
             bool,
-        ]
+    ]
     ] = []
+    terrain_contact = game_map.terrain_collision_fraction(
+        start,
+        end,
+        start_height_mm,
+        end_height_mm,
+    )
+    if terrain_contact is not None:
+        candidates.append(
+            (
+                terrain_contact,
+                2,
+                "terrain",
+                None,
+                (0.0, 0.0),
+                "obstacle",
+                None,
+                None,
+                False,
+                False,
+            )
+        )
     for robot in robots:
         if not robot.alive or robot.aerial or robot.id == shooter_id:
             continue

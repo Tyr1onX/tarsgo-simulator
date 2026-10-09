@@ -132,7 +132,7 @@ def test_engineer_entry_does_not_bypass_central_buff_robot_eligibility() -> None
     engineer = _robot(match, "tarsgo-engineer")
     zone = match.ruleset._field_central_zones[0]
     goal = (zone.x + zone.width / 2, zone.y + zone.height / 2)
-    engineer.position = (zone.x - 100.0, goal[1])
+    engineer.position = (zone.right + 100.0, goal[1])
     assert not zone.contains(engineer.position)
     assert zone.contains(goal)
 

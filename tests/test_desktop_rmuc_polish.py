@@ -225,6 +225,29 @@ def test_terrain_markers_are_symbolic_and_renderer_does_not_mutate_map_geometry(
     } == original_bounds
 
 
+def test_approximate_central_terrain_is_visible_in_pygame_field_layer() -> None:
+    app = _app()
+    pygame = importlib.import_module("pygame")
+    match = _match()
+    viewport = app._viewport_for_match(match)
+    field = pygame.Rect(*app.RMUC_FIELD_VIEW_RECT)
+    screen, _font, small_font = _surface_and_fonts()
+    rendered = app._draw_rmuc_terrain_regions(
+        screen,
+        small_font,
+        field,
+        viewport,
+        match.map.terrain_regions,
+        debug_geometry=False,
+    )
+
+    assert rendered == tuple(region.id for region in match.map.terrain_regions)
+    platform_point = tuple(round(value) for value in viewport.world_to_screen((11000, 3000)))
+    ramp_point = tuple(round(value) for value in viewport.world_to_screen((14000, 1147)))
+    assert screen.get_at(platform_point).a > 0
+    assert screen.get_at(ramp_point).a > 0
+
+
 def test_maps_without_terrain_metadata_render_without_terrain_cues() -> None:
     app = _app()
     pygame = importlib.import_module("pygame")

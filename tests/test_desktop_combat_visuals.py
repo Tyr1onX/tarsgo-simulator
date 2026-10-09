@@ -194,8 +194,8 @@ def test_physical_projectile_visual_follows_simulation_state() -> None:
     match = _match()
     attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
     target = next(item for item in match.robots if item.id == "opponent-hero")
-    attacker.position = (10000.0, 7500.0)
-    target.position = (10500.0, 7500.0)
+    attacker.position = (8000.0, 7500.0)
+    target.position = (8500.0, 7500.0)
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 9999.0
@@ -848,8 +848,8 @@ def test_physical_projectile_impact_feedback_uses_simulated_contact() -> None:
     match = _match()
     attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
     target = next(item for item in match.robots if item.id == "opponent-hero")
-    attacker.position = (10000.0, 7500.0)
-    target.position = (10500.0, 7500.0)
+    attacker.position = (8000.0, 7500.0)
+    target.position = (8500.0, 7500.0)
     for robot in match.robots:
         robot.speed = 0.0
         robot.attack_cooldown = 9999.0
@@ -883,8 +883,8 @@ def test_immune_physical_hit_has_absorbed_feedback_without_damage_flash() -> Non
     match = _match()
     attacker = next(item for item in match.robots if item.id == "tarsgo-hero")
     target = next(item for item in match.robots if item.id == "opponent-hero")
-    attacker.position = (10000.0, 7500.0)
-    target.position = (10500.0, 7500.0)
+    attacker.position = (8000.0, 7500.0)
+    target.position = (8500.0, 7500.0)
     match.ruleset._robot_lifecycle_by_robot[target.id].invincible_remaining = 5.0
     for robot in match.robots:
         robot.speed = 0.0

@@ -12,6 +12,7 @@ from tarsgo_simulator.core.map import (
     Rectangle,
     TerrainConnection,
     TerrainFeature,
+    TerrainRegion,
     Zone,
 )
 
@@ -80,6 +81,7 @@ class ScenarioDefinition:
     path_grid_size: float = 20.0
     terrain_features: tuple[TerrainFeature, ...] = ()
     terrain_connections: tuple[TerrainConnection, ...] = ()
+    terrain_regions: tuple[TerrainRegion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,7 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
     field_geometry_data: dict[str, Any] | None = None
     terrain_features: tuple[TerrainFeature, ...] = ()
     terrain_connections: tuple[TerrainConnection, ...] = ()
+    terrain_regions: tuple[TerrainRegion, ...] = ()
     if field_geometry_id is not None:
         if not isinstance(field_geometry_id, str) or not field_geometry_id.strip():
             raise ConfigError(f"{scenario_file}: `field_geometry` 必须是非空 id")
@@ -150,8 +153,11 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         )
         if field_geometry_data.get("team_symmetry") == "rotate_180":
             zones = _mirror_team_zones(zones, map_width, map_height)
-        terrain_features, terrain_connections = _terrain(
-            field_geometry_data, field_geometry_file
+        terrain_features, terrain_connections, terrain_regions = _terrain(
+            field_geometry_data,
+            field_geometry_file,
+            map_width,
+            map_height,
         )
     else:
         map_data = _mapping(setup, "map", "setup.map", scenario_file)
@@ -249,6 +255,7 @@ def load_match_config(scenario_path: str | Path) -> MatchConfig:
         path_grid_size=path_grid_size,
         terrain_features=terrain_features,
         terrain_connections=terrain_connections,
+        terrain_regions=terrain_regions,
     )
     return MatchConfig(rule_document, scenario)
 
@@ -603,8 +610,15 @@ def _field_structures(
 
 
 def _terrain(
-    data: Mapping[str, Any], path: Path
-) -> tuple[tuple[TerrainFeature, ...], tuple[TerrainConnection, ...]]:
+    data: Mapping[str, Any],
+    path: Path,
+    map_width: float,
+    map_height: float,
+) -> tuple[
+    tuple[TerrainFeature, ...],
+    tuple[TerrainConnection, ...],
+    tuple[TerrainRegion, ...],
+]:
     raw = data.get("terrain", {})
     if not isinstance(raw, dict):
         raise ConfigError(f"{path}: `terrain` 必须是映射")
@@ -701,7 +715,164 @@ def _terrain(
         seen_connections.add(key)
         used_connectors.add(via_feature)
         connections.append(TerrainConnection(*key))
-    return tuple(features), tuple(connections)
+    return tuple(features), tuple(connections), _terrain_regions(
+        raw,
+        path,
+        map_width,
+        map_height,
+    )
+
+
+def _terrain_regions(
+    terrain_data: Mapping[str, Any],
+    path: Path,
+    map_width: float,
+    map_height: float,
+) -> tuple[TerrainRegion, ...]:
+    raw_regions = terrain_data.get("regions", [])
+    if not isinstance(raw_regions, list):
+        raise ConfigError(f"{path}: `terrain.regions` 必须是列表")
+    result: list[TerrainRegion] = []
+    seen_ids: set[str] = set()
+    allowed_kinds = {"platform", "ramp", "tunnel"}
+    for index, item in enumerate(raw_regions):
+        label = f"terrain.regions[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{path}: `{label}` 必须是映射")
+        region_id = _string(item, "id", f"{label}.id", path)
+        kind = _string(item, "kind", f"{label}.kind", path)
+        if region_id in seen_ids:
+            raise ConfigError(f"{path}: terrain region id 重复：{region_id}")
+        if kind not in allowed_kinds:
+            raise ConfigError(f"{path}: `{label}.kind` 无效：{kind}")
+        seen_ids.add(region_id)
+        raw_vertices = _required(item, "points", f"{label}.points", path)
+        if not isinstance(raw_vertices, list) or len(raw_vertices) < 3:
+            raise ConfigError(f"{path}: `{label}.points` 必须至少包含三个 [x, y]")
+        vertices: list[tuple[float, float]] = []
+        for point_index, value in enumerate(raw_vertices):
+            if (
+                not isinstance(value, list)
+                or len(value) != 2
+                or any(
+                    not isinstance(number, (int, float))
+                    or isinstance(number, bool)
+                    or not math.isfinite(number)
+                    for number in value
+                )
+            ):
+                raise ConfigError(
+                    f"{path}: `{label}.points[{point_index}]` 必须是数字 [x, y]"
+                )
+            point = (float(value[0]), float(value[1]))
+            if not (0 <= point[0] <= map_width and 0 <= point[1] <= map_height):
+                raise ConfigError(f"{path}: `{label}.points[{point_index}]` 超出场地")
+            vertices.append(point)
+        if len(set(vertices)) < 3:
+            raise ConfigError(f"{path}: `{label}.points` 必须至少有三个不同顶点")
+
+        source = item.get("source", "")
+        approximation = item.get("approximation", "")
+        if not isinstance(source, str) or not isinstance(approximation, str):
+            raise ConfigError(f"{path}: `{label}.source/approximation` 必须是字串")
+        height = _optional_finite_number(item, "height_mm", label, path)
+        height_start = _optional_finite_number(item, "height_start_mm", label, path)
+        height_end = _optional_finite_number(item, "height_end_mm", label, path)
+        clearance = _optional_finite_number(item, "clearance_mm", label, path)
+        slope = _optional_finite_number(item, "slope_degrees", label, path)
+        axis_start = _optional_point(item, "axis_start", label, path)
+        axis_end = _optional_point(item, "axis_end", label, path)
+        for axis_name, axis_point in (("axis_start", axis_start), ("axis_end", axis_end)):
+            if axis_point is not None and not (
+                0 <= axis_point[0] <= map_width and 0 <= axis_point[1] <= map_height
+            ):
+                raise ConfigError(f"{path}: `{label}.{axis_name}` 超出场地")
+        if kind == "platform" and height is None:
+            raise ConfigError(f"{path}: `{label}.height_mm` 是高地必填项")
+        if kind == "ramp":
+            if (
+                height_start is None
+                or height_end is None
+                or axis_start is None
+                or axis_end is None
+                or slope is None
+            ):
+                raise ConfigError(
+                    f"{path}: `{label}` 坡道必须提供起终高度、轴线和坡度"
+                )
+            axis_length = math.dist(axis_start, axis_end)
+            if axis_length <= 0 or not 0 < slope < 90:
+                raise ConfigError(f"{path}: `{label}` 坡道轴线或坡度无效")
+            measured_slope = math.degrees(
+                math.atan(abs(height_end - height_start) / axis_length)
+            )
+            if not math.isclose(measured_slope, slope, abs_tol=0.1):
+                raise ConfigError(
+                    f"{path}: `{label}` 高差与轴线长度不符合声明坡度"
+                )
+        if kind == "tunnel":
+            if clearance is None or clearance <= 0:
+                raise ConfigError(f"{path}: `{label}.clearance_mm` 是隧道必填项")
+            if axis_start is None or axis_end is None or math.dist(axis_start, axis_end) <= 0:
+                raise ConfigError(f"{path}: `{label}` 隧道必须提供有效的通行轴线")
+        result.append(
+            TerrainRegion(
+                id=region_id,
+                kind=kind,
+                vertices=tuple(vertices),
+                height_mm=0.0 if height is None else height,
+                height_start_mm=height_start,
+                height_end_mm=height_end,
+                axis_start=axis_start,
+                axis_end=axis_end,
+                slope_degrees=slope,
+                clearance_mm=clearance,
+                source=source.strip(),
+                approximation=approximation.strip(),
+            )
+        )
+    return tuple(result)
+
+
+def _optional_finite_number(
+    data: Mapping[str, Any],
+    key: str,
+    label: str,
+    path: Path,
+) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        raise ConfigError(f"{path}: `{label}.{key}` 必须是有限数字")
+    return float(value)
+
+
+def _optional_point(
+    data: Mapping[str, Any],
+    key: str,
+    label: str,
+    path: Path,
+) -> tuple[float, float] | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or any(
+            not isinstance(number, (int, float))
+            or isinstance(number, bool)
+            or not math.isfinite(number)
+            for number in value
+        )
+    ):
+        raise ConfigError(f"{path}: `{label}.{key}` 必须是数字 [x, y]")
+    return float(value[0]), float(value[1])
 
 
 def _local_footprint_vertices(

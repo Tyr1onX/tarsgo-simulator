@@ -14,7 +14,7 @@ source:
   limitations:
     - "The field manual states 28 m × 15 m. Coordinates use the upper-left playing-surface corner as origin, x along the 28 m edge, y along the 15 m edge."
     - "Figure 5-23 is explicitly a distribution diagram and does not dimension RFID-card edges. Region projections are traced from that official diagram; exact card boundaries remain deferred."
-    - "The map is a 2D plan projection. Elevations, ramps, tunnels, steps, overhangs and traversability by height remain deferred until the manual provides a verified 2.5D model."
+    - "The map is a 2D plan projection with one explicitly approximate central-highland 2.5D closure. Exact elevations, full ramp portals, tunnel placement, steps, overhangs and robot-specific height envelopes remain deferred where the manual lacks a complete model."
     - "Section 4.1 states a black steel perimeter barrier with its upper edge 2.4 m above the field floor and notes possible ~50 mm openings where some wooden field structures meet the floor. The 2D collision model treats the field perimeter as closed; opening locations and vertical projectile/robot geometry remain deferred."
     - "Figure 4-5 states that long-edge field slopes are 1°–2° from the centerline; elevation and slope physics are deferred."
     - "The drawing gives the Outpost body diameter but not a fully dimensioned platform plan. The body circle is modeled; the supporting platform footprint remains deferred."
@@ -93,10 +93,11 @@ zones:
 # and traversable portals can be bound to the canonical mm field.
 obstacles: []
 
-# Confirmed by the V1.4.0 module diagrams and terrain descriptions. Heights
-# and grades are metadata only; symbolic A* routes can cross layers only by
-# these explicit ramp/tunnel nodes. The current diagrams do not provide every
-# portal coordinate needed to constrain the live XY path grid.
+# Terrain features and connections retain the rulebook's semantic topology.
+# The `regions` below are the subset with enough source data for a shared
+# 2.5D closure; the central-highland plan envelope, height and ramp portals
+# are explicitly marked approximations. Other source diagrams still lack the
+# globally placed geometry needed for live collision and path constraints.
 terrain:
   features:
     - {id: field-ground, kind: ground, source: "§4.1, p.31"}
@@ -130,13 +131,44 @@ terrain:
     - {from: south-road, to: central-highland, via: central-ramp-south}
     - {from: road-tunnel-west-entry, to: road-tunnel-west-exit, via: road-tunnel-west-passage}
     - {from: road-tunnel-east-entry, to: road-tunnel-east-exit, via: road-tunnel-east-passage}
+  regions:
+    # Figure 4-27 supplies the central highland's 7700 x 10820 mm envelope
+    # and 10.5-degree end slopes, but not a global polygon or portal survey.
+    # This centered rectangle and constant 350 mm top are Rules Lab
+    # approximations based on the field-center placement and section labels.
+    - id: central-highland-envelope
+      kind: platform
+      points: [[10150, 2090], [17850, 2090], [17850, 12910], [10150, 12910]]
+      height_mm: 350
+      source: "§4.3.2, Figure 4-27, p.55; center placement, Figures 4-4/4-5, pp.34-35"
+      approximation: "Centered rectangular envelope; the official outline is irregular and section heights vary from 200 to 400 mm."
+    - id: central-ramp-north-envelope
+      kind: ramp
+      points: [[10150, 203.7], [17850, 203.7], [17850, 2090], [10150, 2090]]
+      axis_start: [14000, 203.7]
+      axis_end: [14000, 2090]
+      height_start_mm: 0
+      height_end_mm: 350
+      slope_degrees: 10.5
+      source: "§4.3.2, Figure 4-27, p.55"
+      approximation: "Full-width ramp envelope; run is derived from 350 mm / tan(10.5 degrees), not a surveyed portal."
+    - id: central-ramp-south-envelope
+      kind: ramp
+      points: [[10150, 12910], [17850, 12910], [17850, 14796.3], [10150, 14796.3]]
+      axis_start: [14000, 14796.3]
+      axis_end: [14000, 12910]
+      height_start_mm: 0
+      height_end_mm: 350
+      slope_degrees: 10.5
+      source: "§4.3.2, Figure 4-27, p.55; center symmetry, §4.1, p.31"
+      approximation: "Full-width ramp envelope; run is derived from 350 mm / tan(10.5 degrees), not a surveyed portal."
 
 deferred:
   - "Complete collision geometry for bridges, roads, ramps, tunnels, fortress and elevated modules: V1.4.0 provides selected dimensions and grades, but not a complete common XY footprint, vertical face/clearance profile, and traversable portal set for every module; §4.1 also allows field-detail adjustments."
   - "Exact field perimeter wall height/slope collision and positions of the possible ~50 mm ball-recovery grooves; the map currently models the official 28 m × 15 m playing-surface extent as a closed 2D boundary."
   - "Interaction-card extents beyond the schematic region projections above."
-  - "Binding symbolic terrain layers and connectors to exact XY footprints and portal coordinates in the movement A* grid."
+  - "The central highland is now a shared 2.5D movement/path/LOS/projectile envelope; its rectangle, constant representative 350 mm surface, and full-width ramps are explicitly approximate. Exact irregular edges, local height transitions, and portal coordinates remain deferred."
   - "Traversability from field ground onto the trapezoid highlands: the drawings specify ramp angles and elevation, but the text does not establish robot-accessible paths."
-  - "Height-dependent collision/line-of-sight, central-highland absolute height, tunnel clearance, step height and bridge/overhang geometry."
+  - "Exact central-highland height contours, global tunnel placement, robot-specific passage checks, step height and bridge/overhang geometry. Figure 4-34 gives a local road-tunnel section with 700 mm passage width and 250 mm clearance; those dimensions are not enough to place both tunnels in the 28 x 15 m map."
   - "Jump trajectory and airborne movement over the road fly slope. Drone flight-area and height constraints remain separate from ground terrain."
   - "Exact Outpost platform footprint; only the 550 mm body circle is used for 2D blocking."

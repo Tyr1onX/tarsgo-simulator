@@ -15,9 +15,16 @@ def find_path(
     game_map: GameMap,
     start: tuple[float, float],
     goal: tuple[float, float],
+    *,
+    agent_height_mm: float | None = None,
 ) -> list[tuple[float, float]] | None:
     """Return world-coordinate waypoints, including start and goal."""
-    search = IncrementalAStar(game_map, start, goal)
+    search = IncrementalAStar(
+        game_map,
+        start,
+        goal,
+        agent_height_mm=agent_height_mm,
+    )
     while not search.done:
         search.advance(4096)
     return search.result
@@ -37,16 +44,22 @@ class IncrementalAStar:
         game_map: GameMap,
         start: tuple[float, float],
         goal: tuple[float, float],
+        *,
+        agent_height_mm: float | None = None,
     ) -> None:
         self.game_map = game_map
         self.start = start
         self.goal = goal
+        self.agent_height_mm = agent_height_mm
         self.done = False
         self.result: list[tuple[float, float]] | None = None
         self.heap_pops = 0
         self.expanded_nodes = 0
 
-        if not game_map.is_passable(start) or not game_map.is_passable(goal):
+        if not game_map.is_passable(
+            start,
+            agent_height_mm=agent_height_mm,
+        ) or not game_map.is_passable(goal, agent_height_mm=agent_height_mm):
             self.done = True
             return
 
@@ -59,7 +72,11 @@ class IncrementalAStar:
                 [start]
                 if start == goal
                 else [start, goal]
-                if game_map.can_traverse(start, goal)
+                if game_map.can_traverse(
+                    start,
+                    goal,
+                    agent_height_mm=self.agent_height_mm,
+                )
                 else None
             )
             return
@@ -105,6 +122,7 @@ class IncrementalAStar:
                 if neighbor in self.visited or not self.game_map.can_traverse(
                     current_point,
                     neighbor_point,
+                    agent_height_mm=self.agent_height_mm,
                 ):
                     continue
 
@@ -135,11 +153,19 @@ class IncrementalAStar:
         points.extend(_center(cell, self.grid_size) for cell in cells)
         points.append(self.goal)
         if not all(
-            self.game_map.can_traverse(first, second)
+            self.game_map.can_traverse(
+                first,
+                second,
+                agent_height_mm=self.agent_height_mm,
+            )
             for first, second in zip(points, points[1:])
         ):
             return None
-        return _smooth_path(points, self.game_map)
+        return _smooth_path(
+            points,
+            self.game_map,
+            agent_height_mm=self.agent_height_mm,
+        )
 
 
 def find_terrain_path(
@@ -220,17 +246,26 @@ def _heuristic(start: tuple[int, int], goal: tuple[int, int]) -> float:
 
 
 def _smooth_path(
-    points: list[tuple[float, float]], game_map: GameMap
+    points: list[tuple[float, float]],
+    game_map: GameMap,
+    *,
+    agent_height_mm: float | None = None,
 ) -> list[tuple[float, float]]:
     result = [points[0]]
     anchor = 0
     while anchor < len(points) - 1:
         next_index = len(points) - 1
         while next_index > anchor + 1 and not game_map.can_traverse(
-            points[anchor], points[next_index]
+            points[anchor],
+            points[next_index],
+            agent_height_mm=agent_height_mm,
         ):
             next_index -= 1
-        if not game_map.can_traverse(points[anchor], points[next_index]):
+        if not game_map.can_traverse(
+            points[anchor],
+            points[next_index],
+            agent_height_mm=agent_height_mm,
+        ):
             return points
         result.append(points[next_index])
         anchor = next_index

@@ -108,11 +108,13 @@ def test_reset_rebuilds_terrain_metadata_without_carrying_map_state() -> None:
     match = _match()
     old_map = match.map
     old_features = old_map.terrain_features
+    old_regions = old_map.terrain_regions
 
     match.reset()
 
     assert match.map is not old_map
     assert match.map.terrain_features == old_features
+    assert match.map.terrain_regions == old_regions
     assert find_terrain_path(match.map, "north-road", "central-highland") is not None
 
 
@@ -121,7 +123,9 @@ def test_training_and_rmul_maps_do_not_receive_rmuc_terrain_metadata() -> None:
         config = load_match_config(scenario)
         assert config.scenario.terrain_features == ()
         assert config.scenario.terrain_connections == ()
+        assert config.scenario.terrain_regions == ()
         assert _match(scenario).map.terrain_features == ()
+        assert _match(scenario).map.terrain_regions == ()
 
 
 def test_unverified_connections_fail_config_validation(tmp_path: Path) -> None:
