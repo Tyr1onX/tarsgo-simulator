@@ -156,7 +156,7 @@ def test_projectile_can_damage_an_enemy_structure_through_the_damage_pipeline() 
     )
     assert outpost_impact.outcome == "damage"
     assert outpost_impact.structure_hit is not None
-    assert outpost_impact.structure_hit.module_id is None
+    assert outpost_impact.structure_hit.module_id == "outpost-body"
     assert outpost_impact.applied_damage == hero.damage
 
 

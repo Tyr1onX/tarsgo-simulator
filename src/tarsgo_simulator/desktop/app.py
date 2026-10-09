@@ -3009,10 +3009,11 @@ def _draw_rmuc_structure(
     debug_geometry: bool,
     footprint_size: tuple[int, int] | None = None,
     footprint_points: tuple[tuple[int, int], ...] = (),
+    rotor_panels: tuple[tuple[tuple[int, int], ...], ...] = (),
+    rotor_panel_centers: tuple[tuple[int, int], ...] = (),
     impact_remaining: float = 0.0,
     impact_caliber: str = "17mm",
     shield_impact_remaining: float = 0.0,
-    rotor_angle: float = 0.0,
 ) -> int:
     profile = structure_visual_profile(structure_type)
     draw_color = color if alive else _blend_color(MUTED_COLOR, ARENA_FLOOR_DARK, 0.38)
@@ -3163,7 +3164,8 @@ def _draw_rmuc_structure(
                 screen,
                 center=center,
                 size=size,
-                angle=rotor_angle,
+                panels=rotor_panels,
+                panel_centers=rotor_panel_centers,
                 team_color=color,
             )
         if debug_geometry:
@@ -3310,110 +3312,39 @@ def _draw_outpost_rotor(
     *,
     center: tuple[int, int],
     size: int,
-    angle: float,
+    panels: tuple[tuple[tuple[int, int], ...], ...],
+    panel_centers: tuple[tuple[int, int], ...],
     team_color: tuple[int, int, int],
 ) -> None:
-    """Draw only the Outpost middle armor as a separately rotating layer."""
-    diameter = max(18, round(size * 1.05))
-    rotor = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
-    rotor_center = (diameter // 2, diameter // 2)
-    radius = max(4, round(size * 0.38))
-    plate_half_width = max(1.0, size * 0.075)
-
-    # Mask the fixed sprite's central cross while leaving its outer base and
-    # motors stationary beneath the three official middle-armor modules.
+    """Draw the same Ruleset panel polygons used by projectile collision."""
     pygame.draw.circle(
-        rotor,
-        (24, 30, 36, 255),
-        rotor_center,
+        screen,
+        (24, 30, 36),
+        center,
         max(3, round(size * 0.22)),
     )
-    for module_index in range(3):
-        module_angle = angle - math.pi / 2 + module_index * math.tau / 3
-        direction = (math.cos(module_angle), math.sin(module_angle))
-        tangent = (-direction[1], direction[0])
-        inner_radius = size * 0.11
-        outer_radius = radius
-        inner_half_width = plate_half_width * 0.78
-        outer_half_width = plate_half_width * 0.60
-        inner_center = (
-            rotor_center[0] + direction[0] * inner_radius,
-            rotor_center[1] + direction[1] * inner_radius,
+    for polygon in panels:
+        if len(polygon) < 3:
+            continue
+        pygame.draw.polygon(screen, (10, 14, 18), polygon)
+        centroid = (
+            sum(point[0] for point in polygon) / len(polygon),
+            sum(point[1] for point in polygon) / len(polygon),
         )
-        outer_center = (
-            rotor_center[0] + direction[0] * outer_radius,
-            rotor_center[1] + direction[1] * outer_radius,
+        inset = tuple(
+            (
+                round(centroid[0] + (point[0] - centroid[0]) * 0.88),
+                round(centroid[1] + (point[1] - centroid[1]) * 0.88),
+            )
+            for point in polygon
         )
-        points = [
-            (
-                round(inner_center[0] + tangent[0] * inner_half_width),
-                round(inner_center[1] + tangent[1] * inner_half_width),
-            ),
-            (
-                round(outer_center[0] + tangent[0] * outer_half_width),
-                round(outer_center[1] + tangent[1] * outer_half_width),
-            ),
-            (
-                round(outer_center[0] - tangent[0] * outer_half_width),
-                round(outer_center[1] - tangent[1] * outer_half_width),
-            ),
-            (
-                round(inner_center[0] - tangent[0] * inner_half_width),
-                round(inner_center[1] - tangent[1] * inner_half_width),
-            ),
-        ]
-        pygame.draw.polygon(rotor, (10, 14, 18, 255), points)
-        plate = [
-            (
-                round(inner_center[0] + tangent[0] * max(1.0, inner_half_width - 0.7)),
-                round(inner_center[1] + tangent[1] * max(1.0, inner_half_width - 0.7)),
-            ),
-            (
-                round(outer_center[0] + tangent[0] * max(1.0, outer_half_width - 0.7)),
-                round(outer_center[1] + tangent[1] * max(1.0, outer_half_width - 0.7)),
-            ),
-            (
-                round(outer_center[0] - tangent[0] * max(1.0, outer_half_width - 0.7)),
-                round(outer_center[1] - tangent[1] * max(1.0, outer_half_width - 0.7)),
-            ),
-            (
-                round(inner_center[0] - tangent[0] * max(1.0, inner_half_width - 0.7)),
-                round(inner_center[1] - tangent[1] * max(1.0, inner_half_width - 0.7)),
-            ),
-        ]
-        pygame.draw.polygon(rotor, (176, 186, 194, 255), plate)
-        slot_start = (
-            round(inner_center[0] + direction[0] * (outer_radius - inner_radius) * 0.35),
-            round(inner_center[1] + direction[1] * (outer_radius - inner_radius) * 0.35),
-        )
-        slot_end = (
-            round(inner_center[0] + direction[0] * (outer_radius - inner_radius) * 0.68),
-            round(inner_center[1] + direction[1] * (outer_radius - inner_radius) * 0.68),
-        )
-        pygame.draw.line(rotor, (48, 57, 64, 255), slot_start, slot_end, width=1)
-
-    pygame.draw.circle(
-        rotor,
-        (14, 19, 23, 255),
-        rotor_center,
-        max(2, round(size * 0.12)),
-    )
-    pygame.draw.circle(
-        rotor,
-        (191, 199, 204, 255),
-        rotor_center,
-        max(1, round(size * 0.055)),
-    )
-    led_angle = angle - math.pi / 2
-    led_center = (
-        round(rotor_center[0] + math.cos(led_angle) * radius * 0.78),
-        round(rotor_center[1] + math.sin(led_angle) * radius * 0.78),
-    )
-    pygame.draw.circle(rotor, (9, 13, 16, 255), led_center, max(2, round(size * 0.11)))
-    pygame.draw.circle(rotor, (*team_color, 255), led_center, max(1, round(size * 0.075)))
-
-    rotated = pygame.transform.rotate(rotor, -math.degrees(angle))
-    screen.blit(rotated, rotated.get_rect(center=center))
+        pygame.draw.polygon(screen, (176, 186, 194), inset)
+        pygame.draw.polygon(screen, (48, 57, 64), inset, width=1)
+    for panel_center in panel_centers:
+        pygame.draw.circle(screen, (9, 13, 16), panel_center, max(2, round(size * 0.11)))
+        pygame.draw.circle(screen, team_color, panel_center, max(1, round(size * 0.075)))
+    pygame.draw.circle(screen, (14, 19, 23), center, max(2, round(size * 0.12)))
+    pygame.draw.circle(screen, (191, 199, 204), center, max(1, round(size * 0.055)))
 
 
 def _rotate_point(
@@ -5044,6 +4975,43 @@ def _draw(
                 )
                 for x, y in structure.footprint_vertices
             )
+            armor_profile_for = getattr(
+                match.ruleset,
+                "structure_projectile_hitbox_profile",
+                None,
+            )
+            rotor_profile = (
+                armor_profile_for(structure)
+                if structure.type == "outpost" and armor_profile_for is not None
+                else None
+            )
+            rotor_panels = tuple(
+                tuple(
+                    tuple(
+                        round(value)
+                        for value in viewport.world_to_screen(
+                            (
+                                structure.position[0] + x,
+                                structure.position[1] + y,
+                            )
+                        )
+                    )
+                    for x, y in panel.vertices
+                )
+                for panel in getattr(rotor_profile, "armor_panels", ())
+            )
+            rotor_panel_centers = tuple(
+                tuple(
+                    round(value)
+                    for value in viewport.world_to_screen(
+                        (
+                            structure.position[0] + panel.center[0],
+                            structure.position[1] + panel.center[1],
+                        )
+                    )
+                )
+                for panel in getattr(rotor_profile, "armor_panels", ())
+            )
             _draw_rmuc_structure(
                 screen,
                 small_font,
@@ -5058,6 +5026,8 @@ def _draw(
                 debug_geometry=debug_geometry,
                 footprint_size=footprint_size,
                 footprint_points=footprint_points,
+                rotor_panels=rotor_panels,
+                rotor_panel_centers=rotor_panel_centers,
                 impact_remaining=(
                     visual_structure.impact_remaining
                     if visual_structure is not None
@@ -5071,12 +5041,6 @@ def _draw(
                 shield_impact_remaining=(
                     visual_structure.shield_impact_remaining
                     if visual_structure is not None
-                    else 0.0
-                ),
-                rotor_angle=(
-                    visual_state.outpost_rotors[structure.id].angle
-                    if visual_state is not None
-                    and structure.id in visual_state.outpost_rotors
                     else 0.0
                 ),
             )
