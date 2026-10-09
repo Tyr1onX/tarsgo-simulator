@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,38 @@ def test_rmuc_spectator_ai_controls_all_robots_symmetrically() -> None:
     red_team = _robot(match, "tarsgo-hero").team
     blue_team = _robot(match, "opponent-hero").team
     assert match.ai_team_strategy(red_team) != match.ai_team_strategy(blue_team)
+
+
+def test_rmuc_spectator_ai_keeps_mirrored_infantry_moving_past_ramp_side() -> None:
+    match = _match()
+    red = _robot(match, "tarsgo-infantry-1")
+    blue = _robot(match, "opponent-infantry-1")
+    longest_stationary = {red.id: 0.0, blue.id: 0.0}
+    current_stationary = {red.id: 0.0, blue.id: 0.0}
+    dt = 1 / 60
+    starts = {red.id: red.position, blue.id: blue.position}
+
+    for _ in range(60 * 60):
+        previous = {
+            robot_id: _robot(match, robot_id).position
+            for robot_id in current_stationary
+        }
+        match.update(dt)
+        for robot_id in current_stationary:
+            if _robot(match, robot_id).position == previous[robot_id]:
+                current_stationary[robot_id] += dt
+                longest_stationary[robot_id] = max(
+                    longest_stationary[robot_id], current_stationary[robot_id]
+                )
+            else:
+                current_stationary[robot_id] = 0.0
+
+    assert match.elapsed_time == pytest.approx(60.0)
+    assert math.dist(starts[red.id], red.position) > 1_000
+    assert math.dist(starts[blue.id], blue.position) > 1_000
+    assert longest_stationary[red.id] < 35.0
+    assert longest_stationary[blue.id] < 35.0
+    assert match._pathfinding_counters["max_queue_length"] <= 16
 
 
 def test_team_strategy_switches_for_structure_crisis_and_finish_opportunity() -> None:

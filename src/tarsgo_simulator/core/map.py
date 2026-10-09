@@ -438,9 +438,16 @@ class GameMap:
                     region
                     for region, bounds in self._terrain_bounds
                     if region.kind == "ramp"
-                    and bounds.x <= midpoint[0] <= bounds.right
-                    and bounds.y <= midpoint[1] <= bounds.bottom
-                    and region.contains(midpoint)
+                    and any(
+                        bounds.x <= sample[0] <= bounds.right
+                        and bounds.y <= sample[1] <= bounds.bottom
+                        for sample in (previous, midpoint, point)
+                    )
+                    and (
+                        region.contains(midpoint)
+                        or region.contains(previous)
+                        or region.contains(point)
+                    )
                     and region.slope_degrees is not None
                 ]
                 if not ramps:
@@ -449,7 +456,12 @@ class GameMap:
                     math.tan(math.radians(region.slope_degrees or 0.0))
                     for region in ramps
                 )
-                if height_delta > max_grade * step_distance + 1.0:
+                # A robot's modeled footprint can bridge a small height change
+                # at a ramp's side edge. Use at least the footprint diameter as
+                # the grade run, so the same short boundary crossing is judged
+                # consistently by long A* edges and per-frame movement steps.
+                grade_run = max(step_distance, 2 * self.collision_radius)
+                if height_delta > max_grade * grade_run + 1.0:
                     return False
 
             for region, bounds in self._terrain_bounds:

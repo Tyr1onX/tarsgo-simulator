@@ -53,6 +53,81 @@ def test_official_central_ramp_geometry_drives_path_and_live_movement() -> None:
     assert not game_map.can_traverse((9900, 7500), (11000, 7500))
 
 
+def test_ramp_side_path_and_frame_movement_share_traversability_for_both_halves() -> None:
+    game_map = _rmuc_map()
+    red_start = (10120.130680893357, 300.0)
+    red_goal = (17853.57851287976, 300.0)
+    mirrored_start = (
+        game_map.width - red_start[0],
+        game_map.height - red_start[1],
+    )
+    mirrored_goal = (
+        game_map.width - red_goal[0],
+        game_map.height - red_goal[1],
+    )
+
+    for start, goal in (
+        (red_start, red_goal),
+        (mirrored_start, mirrored_goal),
+    ):
+        path = find_path(game_map, start, goal)
+        assert path == [start, goal]
+        assert game_map.can_traverse(start, goal)
+
+        robot = Robot(
+            id="ramp-side-regression",
+            team="red",
+            position=start,
+            hp=100,
+            max_hp=100,
+            speed=1900,
+            attack_range=0,
+            attack_interval=1,
+            damage=0,
+        )
+        robot.set_path(path)
+        next_position, remaining_path = robot.propose_movement(1 / 60, game_map)
+
+        assert next_position != start
+        assert game_map.can_traverse(start, next_position)
+        assert remaining_path == [goal]
+
+
+def test_a_star_seeds_a_reachable_neighbor_when_start_cell_center_is_blocked() -> None:
+    game_map = _rmuc_map()
+    mirrored_routes = (
+        ((17817.7, 578.0), (25076.0, 1268.0), (17900.0, 500.0)),
+        ((10182.3, 14422.0), (2924.0, 13732.0), (10100.0, 14500.0)),
+    )
+
+    for start, goal, blocked_cell_center in mirrored_routes:
+        assert not game_map.can_traverse(start, blocked_cell_center)
+
+        path = find_path(game_map, start, goal)
+
+        assert path is not None
+        assert all(
+            game_map.can_traverse(first, second)
+            for first, second in zip(path, path[1:])
+        )
+        assert path[1] != blocked_cell_center
+
+        robot = Robot(
+            id="terrain-start-seed",
+            team="blue",
+            position=start,
+            hp=100,
+            max_hp=100,
+            speed=1800,
+            attack_range=0,
+            attack_interval=1,
+            damage=0,
+        )
+        robot.set_path(path)
+        next_position, _remaining_path = robot.propose_movement(1 / 60, game_map)
+        assert next_position != start
+
+
 def test_central_highland_blocks_ground_sight_and_projectile_but_not_platform_sight() -> None:
     game_map = _rmuc_map()
     assert not game_map.has_line_of_sight((9000, 7500), (19000, 7500))

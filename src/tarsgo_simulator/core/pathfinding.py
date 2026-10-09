@@ -83,17 +83,51 @@ class IncrementalAStar:
 
         self.open_nodes: list[tuple[float, int, tuple[int, int]]] = []
         self.sequence = count()
-        heappush(
-            self.open_nodes,
-            (
-                _heuristic(self.start_cell, self.goal_cell),
-                next(self.sequence),
-                self.start_cell,
-            ),
-        )
         self.came_from: dict[tuple[int, int], tuple[int, int]] = {}
-        self.costs = {self.start_cell: 0.0}
+        self.costs: dict[tuple[int, int], float] = {}
         self.visited: set[tuple[int, int]] = set()
+        # A continuous start can sit near an obstacle boundary even though its
+        # own cell center is not reachable (or lies on the other side of a
+        # narrow ramp edge). Keep the usual single seed when possible, and
+        # fall back to directly reachable neighboring cells when it is not.
+        seed_offsets = ((0, 0),)
+        start_center = _center(self.start_cell, self.grid_size)
+        if not game_map.can_traverse(
+            start,
+            start_center,
+            agent_height_mm=self.agent_height_mm,
+        ):
+            seed_offsets = (
+                (0, -1),
+                (-1, 0),
+                (1, 0),
+                (0, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+                (1, 1),
+            )
+        for dx, dy in seed_offsets:
+            cell = (self.start_cell[0] + dx, self.start_cell[1] + dy)
+            point = _center(cell, self.grid_size)
+            if not game_map.can_traverse(
+                start,
+                point,
+                agent_height_mm=self.agent_height_mm,
+            ):
+                continue
+            cost = math.dist(start, point) / self.grid_size
+            self.costs[cell] = cost
+            heappush(
+                self.open_nodes,
+                (
+                    cost + _heuristic(cell, self.goal_cell),
+                    next(self.sequence),
+                    cell,
+                ),
+            )
+        if not self.open_nodes:
+            self.done = True
 
     def advance(self, work_budget: int) -> int:
         """Expand at most ``work_budget`` heap entries and return entries used."""
