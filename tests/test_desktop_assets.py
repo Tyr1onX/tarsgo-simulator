@@ -235,12 +235,6 @@ def test_rmuc_static_field_cache_matches_uncached_scene_pixels() -> None:
     reference = pygame.Surface(app.WINDOW_SIZE)
     reference.fill(app.BACKGROUND)
     app._draw_rmuc_battlefield(reference, field_rect)
-    app._draw_rmuc_field_regions(
-        reference,
-        field_rect,
-        viewport,
-        match.map.zones,
-    )
     for obstacle in match.map.obstacles:
         obstacle_rect = app._world_rect_to_screen(
             viewport,
@@ -470,12 +464,19 @@ def test_default_rmuc_view_uses_small_road_cues_and_keeps_debug_symbols(
     player_team = match.config.scenario.player_team
     opponent_team = next(team_id for team_id in teams if team_id != player_team)
     calls: list[bool] = []
+    zone_debug_calls: list[bool] = []
+    original_zone_style = app._rmuc_zone_style
 
     def record_terrain_draw(*_args: object, **kwargs: object) -> tuple[()]:
         calls.append(bool(kwargs.get("debug_geometry")))
         return ()
 
+    def record_zone_style(zone_id: str, *, debug_geometry: bool):
+        zone_debug_calls.append(debug_geometry)
+        return original_zone_style(zone_id, debug_geometry=debug_geometry)
+
     monkeypatch.setattr(app, "_draw_rmuc_terrain", record_terrain_draw)
+    monkeypatch.setattr(app, "_rmuc_zone_style", record_zone_style)
     arguments = (
         pygame.font.Font(None, 25),
         pygame.font.Font(None, 18),
@@ -489,43 +490,12 @@ def test_default_rmuc_view_uses_small_road_cues_and_keeps_debug_symbols(
 
     app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments)
     assert calls == [False]
+    assert zone_debug_calls == []
 
     app._draw(pygame.Surface(app.WINDOW_SIZE), *arguments, debug_geometry=True)
     assert calls == [False, True]
-
-
-def test_default_floor_regions_use_only_configured_nonterrain_polygons() -> None:
-    from tarsgo_simulator.desktop import app
-
-    pygame.font.init()
-    match = Match.from_scenario(RMUC_SCENARIO)
-    zones_before = tuple(
-        (zone.id, zone.vertices, zone.x, zone.y, zone.width, zone.height)
-        for zone in match.map.zones
-    )
-    rendered = app._draw_rmuc_field_regions(
-        pygame.Surface(app.WINDOW_SIZE),
-        pygame.Rect(*app.RMUC_FIELD_VIEW_RECT),
-        app._viewport_for_match(match),
-        match.map.zones,
-    )
-
-    rendered_ids = set(rendered)
-    assert {
-        "red-start",
-        "blue-start",
-        "red-base-buff",
-        "blue-base-buff",
-        "red-resource",
-        "blue-resource",
-        "red-assembly",
-        "blue-assembly",
-    } <= rendered_ids
-    assert not any("terrain-" in zone_id for zone_id in rendered_ids)
-    assert tuple(
-        (zone.id, zone.vertices, zone.x, zone.y, zone.width, zone.height)
-        for zone in match.map.zones
-    ) == zones_before
+    assert zone_debug_calls
+    assert all(zone_debug_calls)
 
 
 def test_packaging_configuration_copies_the_rmuc_asset_directory() -> None:

@@ -2273,89 +2273,6 @@ def _draw_rmuc_battlefield(
         )
 
 
-def _draw_rmuc_field_regions(
-    screen: pygame.Surface,
-    field_rect: pygame.Rect,
-    viewport: Viewport,
-    zones: tuple,
-) -> tuple[str, ...]:
-    """Tint confirmed region polygons as floor treatment, never as debug wireframes."""
-    suffix_styles = {
-        "start": ("start", 38, 12),
-        "resource": ("resource", 24, 10),
-        "assembly": ("assembly", 24, 10),
-        "base-buff": ("base", 20, 32),
-        "outpost-buff": ("outpost", 18, 24),
-    }
-    rendered: list[str] = []
-    for zone in zones:
-        suffix = zone.id.removeprefix("red-").removeprefix("blue-")
-        spec = suffix_styles.get(suffix)
-        if spec is None or len(zone.vertices) < 3:
-            continue
-        family, fill_alpha, edge_alpha = spec
-        team_color = TEAM_RED_COLOR if zone.id.startswith("red-") else TEAM_BLUE_COLOR
-        family_color = {
-            "resource": RESOURCE_COLOR,
-            "assembly": ASSEMBLY_COLOR,
-        }.get(family, team_color)
-        color = _blend_color(family_color, team_color, 0.5)
-        points = tuple(
-            tuple(round(value) for value in viewport.world_to_screen(point))
-            for point in zone.vertices
-        )
-        left = min(point[0] for point in points)
-        top = min(point[1] for point in points)
-        right = max(point[0] for point in points)
-        bottom = max(point[1] for point in points)
-        bounds = pygame.Rect(
-            left,
-            top,
-            max(1, right - left + 1),
-            max(1, bottom - top + 1),
-        )
-        if not bounds.colliderect(field_rect):
-            continue
-        local_points = tuple((x - left, y - top) for x, y in points)
-        layer = pygame.Surface(bounds.size, pygame.SRCALPHA)
-        pygame.draw.polygon(layer, (*color, fill_alpha), local_points)
-
-        if family in {"start", "resource"}:
-            pattern = pygame.Surface(bounds.size, pygame.SRCALPHA)
-            step = 22 if family == "start" else 26
-            for offset in range(-bounds.height, bounds.width + bounds.height, step):
-                pygame.draw.line(
-                    pattern,
-                    (*_blend_color(color, TEXT_COLOR, 0.28), 9),
-                    (offset, bounds.height),
-                    (offset + bounds.height, 0),
-                    width=1,
-                )
-            mask = pygame.mask.from_surface(layer, threshold=0)
-            pattern.blit(
-                mask.to_surface(
-                    setcolor=(255, 255, 255, 255),
-                    unsetcolor=(255, 255, 255, 0),
-                ),
-                (0, 0),
-                special_flags=pygame.BLEND_RGBA_MULT,
-            )
-            layer.blit(pattern, (0, 0))
-        elif family == "assembly":
-            center = (bounds.width // 2, bounds.height // 2)
-            radius = max(4, min(bounds.width, bounds.height) // 4)
-            pygame.draw.circle(layer, (*color, 16), center, radius, width=1)
-
-        if edge_alpha:
-            pygame.draw.polygon(layer, (*color, edge_alpha), local_points, width=1)
-        old_clip = screen.get_clip()
-        screen.set_clip(field_rect)
-        screen.blit(layer, bounds.topleft)
-        screen.set_clip(old_clip)
-        rendered.append(zone.id)
-    return tuple(rendered)
-
-
 def _draw_rmuc_terrain(
     screen: pygame.Surface,
     legend_font: pygame.font.Font,
@@ -2645,8 +2562,6 @@ class RMUCStaticFieldCache:
             source_viewport = Viewport((0.0, 0.0), source_scale, base.world_size)
             floor = pygame.Surface(size, pygame.SRCALPHA, 32)
             _draw_rmuc_battlefield(floor, source_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(floor, source_rect, source_viewport, match.map.zones)
             for obstacle in match.map.obstacles:
                 bounds = _world_rect_to_screen(
                     source_viewport, obstacle.x, obstacle.y, obstacle.width, obstacle.height
@@ -2730,13 +2645,6 @@ class RMUCStaticFieldCache:
                 world_size=viewport.world_size,
             )
             _draw_rmuc_battlefield(surface, local_field_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(
-                    surface,
-                    local_field_rect,
-                    local_viewport,
-                    match.map.zones,
-                )
             for obstacle in match.map.obstacles:
                 obstacle_rect = _world_rect_to_screen(
                     local_viewport,
@@ -5005,13 +4913,6 @@ def _draw(
     if is_rmuc:
         if static_field_cache is None:
             _draw_rmuc_battlefield(screen, field_rect)
-            if not debug_geometry:
-                _draw_rmuc_field_regions(
-                    screen,
-                    field_rect,
-                    viewport,
-                    match.map.zones,
-                )
         else:
             static_field_cache.draw(
                 screen,
@@ -5050,6 +4951,11 @@ def _draw(
         selected_robot_ids,
     )
     for zone in match.map.zones:
+        # RMUC region polygons continue to drive rules and RFID. Ordinary
+        # spectator view keeps the battlefield readable; use Debug to inspect
+        # the underlying zone bounds and labels on demand.
+        if is_rmuc and not debug_geometry:
+            continue
         zone_rect = _world_rect_to_screen(
             viewport,
             zone.x,
