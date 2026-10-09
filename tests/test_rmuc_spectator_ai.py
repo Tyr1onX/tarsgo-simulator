@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.match import Match, _collision_right_of_way
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +41,90 @@ def _zone(match: Match, zone_id: str):
 
 def _center(zone) -> tuple[float, float]:
     return (zone.x + zone.width / 2, zone.y + zone.height / 2)
+
+
+def _head_on_match(
+    *,
+    mirrored: bool = False,
+    ramp_edge: bool = False,
+    dense_robot_position: tuple[float, float] | None = None,
+):
+    match = _match()
+    red = _robot(match, "tarsgo-infantry-1")
+    blue = _robot(match, "opponent-hero")
+
+    if ramp_edge:
+        red_position = (10120.13, 300.0)
+        blue_position = (10499.4, 300.0)
+        red_path = [(14000.0, 300.0), (18000.0, 300.0)]
+        blue_path = [(8500.0, 300.0), (7000.0, 300.0)]
+    else:
+        red_position = (13341.26, 260.92)
+        blue_position = (12989.04, 401.59)
+        red_path = [(3700.0, 1100.0), (3700.0, 7700.0), (2276.0, 12368.0)]
+        blue_path = [(25900.0, 700.0), (25994.0, 1950.0)]
+
+    def transform(point: tuple[float, float]) -> tuple[float, float]:
+        if not mirrored:
+            return point
+        return (match.map.width - point[0], match.map.height - point[1])
+
+    red.position = transform(red_position)
+    blue.position = transform(blue_position)
+    red.set_path([transform(point) for point in red_path])
+    blue.set_path([transform(point) for point in blue_path])
+    robots = [red, blue]
+    if dense_robot_position is not None:
+        dense = _robot(match, "opponent-infantry-1")
+        dense.position = transform(dense_robot_position)
+        dense.path.clear()
+        robots.append(dense)
+
+    match.robots = robots
+    for robot in robots:
+        power = match.ruleset._chassis_power_by_robot[robot.id]
+        power.power_off_remaining = 0.0
+        power.blocked_this_frame = False
+    return match, red, blue
+
+
+def _run_collision_case(match: Match, seconds: float):
+    dt = 1 / 60
+    minimum_distance = 2 * match.map.collision_radius
+    robots = list(match.robots)
+    longest_collision_stall = {robot.id: 0.0 for robot in robots}
+    current_collision_stall = {robot.id: 0.0 for robot in robots}
+    snapshots = []
+    for _ in range(round(seconds * 60)):
+        before = {robot.id: robot.position for robot in robots}
+        match._move_robots(dt)
+        for robot in robots:
+            assert match.map.can_traverse(
+                before[robot.id],
+                robot.position,
+                agent_height_mm=robot.body_height_mm,
+            )
+            if (
+                robot.alive
+                and match.ruleset.can_move(robot)
+                and robot.path
+                and match._was_blocked[robot.id]
+            ):
+                current_collision_stall[robot.id] += dt
+                longest_collision_stall[robot.id] = max(
+                    longest_collision_stall[robot.id],
+                    current_collision_stall[robot.id],
+                )
+            else:
+                current_collision_stall[robot.id] = 0.0
+        for index, first in enumerate(robots):
+            for second in robots[index + 1 :]:
+                assert math.dist(first.position, second.position) >= (
+                    minimum_distance - 1e-6
+                )
+        snapshots.append(tuple(robot.position for robot in robots))
+        match.elapsed_time += dt
+    return snapshots, longest_collision_stall
 
 
 class _FixedRandom:
@@ -110,6 +194,164 @@ def test_rmuc_spectator_ai_keeps_mirrored_infantry_moving_past_ramp_side() -> No
     assert longest_stationary[red.id] < 35.0
     assert longest_stationary[blue.id] < 35.0
     assert match._pathfinding_counters["max_queue_length"] <= 16
+
+
+def test_edge_head_on_collision_uses_a_safe_local_rejoin_and_is_symmetric() -> None:
+    outcomes = []
+    for mirrored in (False, True):
+        match, red, blue = _head_on_match(mirrored=mirrored)
+        starts = {red.id: red.position, blue.id: blue.position}
+        _snapshots, stalls = _run_collision_case(match, 5.0)
+
+        assert math.dist(starts[red.id], red.position) > 1_000
+        assert math.dist(starts[blue.id], blue.position) > 1_000
+        assert max(stalls.values()) < 1.0
+        assert match.movement_diagnostics["local_replan_searches"] > 0
+        assert match.movement_diagnostics["local_replan_failures"] == 0
+        outcomes.append(
+            (
+                math.dist(starts[red.id], red.position),
+                math.dist(starts[blue.id], blue.position),
+            )
+        )
+
+    assert outcomes[0] == pytest.approx(outcomes[1], abs=1e-6)
+
+
+def test_dense_robot_near_the_rejoin_does_not_cause_overlap_or_deadlock() -> None:
+    match, red, blue = _head_on_match(dense_robot_position=(12700.0, 1500.0))
+    starts = {red.id: red.position, blue.id: blue.position}
+
+    _snapshots, stalls = _run_collision_case(match, 5.0)
+
+    assert math.dist(starts[red.id], red.position) > 1_000
+    assert math.dist(starts[blue.id], blue.position) > 1_000
+    assert max(stalls.values()) < 1.0
+    assert match.movement_diagnostics["local_replan_searches"] > 0
+
+
+def test_ramp_edge_collision_preserves_terrain_rules_on_both_field_halves() -> None:
+    for mirrored in (False, True):
+        match, red, blue = _head_on_match(mirrored=mirrored, ramp_edge=True)
+        starts = {red.id: red.position, blue.id: blue.position}
+
+        _snapshots, stalls = _run_collision_case(match, 5.0)
+
+        assert math.dist(starts[red.id], red.position) > 1_000
+        assert math.dist(starts[blue.id], blue.position) > 1_000
+        assert max(stalls.values()) < 1.0
+
+
+def test_local_replan_finds_a_terrain_legal_route_around_a_dead_robot() -> None:
+    match = _match()
+    sentry = _robot(match, "tarsgo-sentry")
+    blocker = _robot(match, "tarsgo-infantry-2")
+    sentry.position = (17895.637, 13773.98)
+    sentry.set_path([(17900.0, 14500.0), (10100.0, 14500.0), (2600.0, 13732.0)])
+    blocker.position = (18187.4, 14009.7)
+    blocker.alive = False
+    blocker.path.clear()
+    match.robots = [sentry, blocker]
+    match.ruleset._chassis_power_by_robot[sentry.id].power_off_remaining = 0.0
+    match.ruleset._chassis_power_by_robot[sentry.id].blocked_this_frame = False
+
+    start = sentry.position
+    _snapshots, stalls = _run_collision_case(match, 3.0)
+
+    assert math.dist(start, sentry.position) > 1_000
+    assert stalls[sentry.id] < 1.0
+    assert match.movement_diagnostics["local_replan_searches"] > 0
+
+
+def test_collision_right_of_way_alternates_fairly_and_deterministically() -> None:
+    match, red, blue = _head_on_match()
+
+    first_turn = _collision_right_of_way(red, blue, True, True, 0.0)
+    repeated_first_turn = _collision_right_of_way(red, blue, True, True, 0.0)
+    second_turn = _collision_right_of_way(red, blue, True, True, 1.0)
+
+    assert first_turn == repeated_first_turn
+    assert second_turn == (first_turn[1], first_turn[0])
+    assert _collision_right_of_way(red, blue, False, True, 0.0) == (red, blue)
+
+
+def test_repeated_head_on_recovery_replays_the_same_collision_free_trace() -> None:
+    first_match, _first_red, _first_blue = _head_on_match()
+    second_match, _second_red, _second_blue = _head_on_match()
+
+    first_trace, _first_stalls = _run_collision_case(first_match, 5.0)
+    second_trace, _second_stalls = _run_collision_case(second_match, 5.0)
+
+    assert first_trace == second_trace
+    assert first_match.movement_diagnostics == second_match.movement_diagnostics
+
+
+def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() -> None:
+    match = _match()
+    dt = 1.0 / 60.0
+    collision_stall = {robot.id: 0.0 for robot in match.robots}
+    longest_collision_stall = {robot.id: 0.0 for robot in match.robots}
+    stationary_classes: dict[str, int] = {}
+    maximum_path_queue = 0
+
+    for tick in range(420 * 60):
+        before = {robot.id: robot.position for robot in match.robots}
+        match.update(dt)
+        maximum_path_queue = max(
+            maximum_path_queue,
+            len(match._path_work_queue),
+        )
+        for index, first in enumerate(match.robots):
+            if first.aerial:
+                continue
+            for second in match.robots[index + 1 :]:
+                if not second.aerial:
+                    assert math.dist(first.position, second.position) >= (
+                        2 * match.map.collision_radius - 1e-6
+                    )
+        for robot in match.robots:
+            allowed = robot.alive and match.ruleset.can_move(robot)
+            moved = math.dist(before[robot.id], robot.position) > 1e-8
+            if not moved:
+                if not robot.alive:
+                    status = "dead_or_respawning"
+                elif not allowed:
+                    status = "power_or_rule_lock"
+                elif not robot.path:
+                    status = "legal_wait"
+                elif match._was_blocked[robot.id]:
+                    status = "collision_yield"
+                else:
+                    status = "path_without_motion"
+                stationary_classes[status] = stationary_classes.get(status, 0) + 1
+
+            if (
+                not moved
+                and robot.alive
+                and allowed
+                and robot.path
+                and match._was_blocked[robot.id]
+            ):
+                collision_stall[robot.id] += dt
+                longest_collision_stall[robot.id] = max(
+                    longest_collision_stall[robot.id],
+                    collision_stall[robot.id],
+                )
+            else:
+                collision_stall[robot.id] = 0.0
+        if match.finished:
+            assert tick == 420 * 60 - 1
+            break
+
+    assert match.finished
+    assert match.elapsed_time == match.time_limit == 420.0
+    assert match.winner is not None
+    assert maximum_path_queue <= 16
+    assert max(longest_collision_stall.values()) < 3.0
+    assert stationary_classes["legal_wait"] > 0
+    assert stationary_classes["dead_or_respawning"] > 0
+    assert stationary_classes["collision_yield"] > 0
+    assert stationary_classes.get("path_without_motion", 0) == 0
 
 
 def test_team_strategy_switches_for_structure_crisis_and_finish_opportunity() -> None:
