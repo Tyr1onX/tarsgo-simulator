@@ -860,6 +860,47 @@ def _structure_contact(
 ) -> _StructureContact | None:
     width, height = structure.footprint or (0.0, 0.0)
     module_contacts: list[tuple[float, int, str, tuple[float, float], bool]] = []
+    if profile is not None and structure.type == "outpost" and profile.armor_panels:
+        # The rulebook does not give the middle armor's full 2D footprint or
+        # height. Its shared projected panel polygons are an explicit 2.5D
+        # approximation and are allowed to sit above the circular body.
+        for panel_index, panel in enumerate(profile.armor_panels):
+            vertices = tuple(
+                (
+                    structure.position[0] + x,
+                    structure.position[1] + y,
+                )
+                for x, y in panel.vertices
+            )
+            panel_hit = _polygon_contact(start, end, vertices, radius)
+            if panel_hit is None:
+                continue
+            fraction, normal = panel_hit
+            path_position = (
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            )
+            impact_position = (
+                path_position[0] - radius * normal[0],
+                path_position[1] - radius * normal[1],
+            )
+            center_x = structure.position[0] + panel.center[0]
+            center_y = structure.position[1] + panel.center[1]
+            offset_x = impact_position[0] - center_x
+            offset_y = impact_position[1] - center_y
+            along = (
+                offset_x * panel.long_axis[0]
+                + offset_y * panel.long_axis[1]
+            )
+            # The official 10×10 mm center is on the vertical armor face.
+            # This plan projection has no vertical axis, so only its mapped
+            # horizontal face axis is tested; projectile radius expands it.
+            center_hit = (
+                abs(along) <= profile.center_area_size_mm / 2 + radius + 1e-9
+            )
+            module_contacts.append(
+                (fraction, panel_index, panel.module_id, normal, center_hit)
+            )
     if profile is not None and structure.footprint_shape == "polygon":
         vertices = structure.footprint_vertices
         if len(vertices) >= 3:
@@ -978,14 +1019,26 @@ def _structure_contact(
 
     if not module_contacts:
         if profile is not None and body_contact is not None:
+            # Preserve the pre-existing generic outpost-body damage path when
+            # a projectile contacts the structure without touching a rotating
+            # armor panel. Base-body contacts remain non-damaging below.
             return _StructureContact(
                 body_contact.fraction,
                 body_contact.normal,
+                module_id=(
+                    "outpost-body"
+                    if structure.type == "outpost" and profile.armor_panels
+                    else None
+                ),
                 modeled_armor=True,
             )
         return body_contact
     panel_contact = min(module_contacts, key=lambda item: (item[0], item[1]))
-    if body_contact is None or panel_contact[0] <= body_contact.fraction + 1e-9:
+    if (
+        body_contact is None
+        or panel_contact[0] <= body_contact.fraction + 1e-9
+        or (structure.type == "outpost" and profile is not None and profile.armor_panels)
+    ):
         return _StructureContact(
             fraction=panel_contact[0],
             normal=panel_contact[3],
@@ -997,6 +1050,11 @@ def _structure_contact(
         return _StructureContact(
             body_contact.fraction,
             body_contact.normal,
+            module_id=(
+                "outpost-body"
+                if structure.type == "outpost" and profile.armor_panels
+                else None
+            ),
             modeled_armor=True,
         )
     return body_contact

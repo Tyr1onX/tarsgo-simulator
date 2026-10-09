@@ -580,13 +580,38 @@ def test_robot_team_leds_follow_life_state_and_dead_muzzle_flash_is_suppressed(
 
 def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> None:
     app = _app()
+    match = _match()
     pygame = importlib.import_module("pygame")
     screen_a, _font, small_font = _surface_and_fonts()
     screen_b = pygame.Surface(screen_a.get_size(), pygame.SRCALPHA)
     screen_b.fill((0, 0, 0, 0))
     screen_a.fill((0, 0, 0, 0))
+    outpost = next(item for item in match.structures if item.type == "outpost")
+    profiles = [match.ruleset.structure_projectile_hitbox_profile(outpost)]
+    match.elapsed_time = 2.5
+    match.ruleset.update(match, 0.0)
+    profiles.append(match.ruleset.structure_projectile_hitbox_profile(outpost))
+    scale = 28 / outpost.footprint[0]
 
-    for screen, angle in ((screen_a, 0.0), (screen_b, math.pi / 3)):
+    for screen, armor_profile in zip((screen_a, screen_b), profiles):
+        assert armor_profile is not None
+        panels = tuple(
+            tuple(
+                (
+                    round(180 + x * scale),
+                    round(180 + y * scale),
+                )
+                for x, y in panel.vertices
+            )
+            for panel in armor_profile.armor_panels
+        )
+        panel_centers = tuple(
+            (
+                round(180 + panel.center[0] * scale),
+                round(180 + panel.center[1] * scale),
+            )
+            for panel in armor_profile.armor_panels
+        )
         app._draw_rmuc_structure(
             screen,
             small_font,
@@ -599,7 +624,8 @@ def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> N
             status="",
             animation_time=0.0,
             debug_geometry=False,
-            rotor_angle=angle,
+            rotor_panels=panels,
+            rotor_panel_centers=panel_centers,
         )
 
     assert pygame.image.tostring(screen_a, "RGBA") != pygame.image.tostring(screen_b, "RGBA")

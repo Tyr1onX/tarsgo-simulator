@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import math
+import random
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
@@ -9,9 +10,12 @@ from tarsgo_simulator.core.events import MatchEventType, ZoneEventType
 from tarsgo_simulator.core.map import Zone
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import (
+    OUTPOST_ARMOR_STOP_SECONDS,
+    OutpostArmorRotationState,
     Structure,
     StructureProjectileHitContext,
     StructureProjectileHitboxProfile,
+    outpost_armor_panel_projections,
 )
 from tarsgo_simulator.rules.protocol import (
     AimMotionParameters,
@@ -143,6 +147,7 @@ class _TeamStructureState:
     base_armor_deployed: bool = False
     tech_core_defense: float = 0.0
     base_virtual_shield: int = 0
+    outpost_rotation: OutpostArmorRotationState | None = None
 
 
 @dataclass
@@ -2632,6 +2637,7 @@ class RMUC2026RegionalRules:
         self._dart_detector_closed_until: dict[str, float] = {}
         self._field_buff_disabled_until_by_zone: dict[str, float] = {}
         self._current_time = 0.0
+        self._outpost_rotation_generation = 0
         self._small_energy_mechanism_activation_times_by_team: dict[
             str, list[float]
         ] = {}
@@ -3018,15 +3024,33 @@ class RMUC2026RegionalRules:
         self,
         structure: Structure,
     ) -> StructureProjectileHitboxProfile | None:
-        """Project the single authoritative Base armor state onto its six faces."""
+        """Return one authoritative structure armor pose for hits and rendering."""
+        state = self._team_states.get(structure.team)
+        if state is None:
+            return None
+        if structure.type == "outpost":
+            if structure.footprint_shape != "circle" or structure.footprint is None:
+                return None
+            rotation = state.outpost_rotation
+            if rotation is None:
+                return None
+            angle = rotation.angle_at(self._current_time)
+            return StructureProjectileHitboxProfile(
+                module_width_mm=0.0,
+                deployed_offset_mm=0.0,
+                center_area_size_mm=self._base_armor_center_area_size_mm,
+                deployed=False,
+                upper_front_edge_index=-1,
+                armor_panels=outpost_armor_panel_projections(
+                    structure.footprint[0],
+                    angle,
+                ),
+            )
         if (
             structure.type != "base"
             or structure.footprint_shape != "polygon"
             or len(structure.footprint_vertices) != 6
         ):
-            return None
-        state = self._team_states.get(structure.team)
-        if state is None:
             return None
         upper_front_edge_index = self._upper_front_base_edge_index(structure)
         if upper_front_edge_index is None:
@@ -3038,6 +3062,39 @@ class RMUC2026RegionalRules:
             deployed=state.base_armor_deployed,
             upper_front_edge_index=upper_front_edge_index,
         )
+
+    def outpost_armor_rotation_angle(self, structure: Structure) -> float:
+        """Expose the same current armor pose used by projectile collision."""
+        state = self._team_states.get(structure.team)
+        rotation = state.outpost_rotation if state is not None else None
+        return rotation.angle_at(self._current_time) if rotation is not None else 0.0
+
+    def _stop_outpost_armor_rotation(
+        self,
+        team_id: str,
+        time: float,
+        *,
+        destroyed: bool = False,
+    ) -> None:
+        state = self._team_states.get(team_id)
+        if state is not None and state.outpost_rotation is not None:
+            state.outpost_rotation.stop(time, destroyed=destroyed)
+
+    def _deploy_base_armor(self, team_id: str, time: float) -> None:
+        state = self._team_states.get(team_id)
+        if state is None:
+            return
+        state.base_armor_deployed = True
+        for opponent_team_id in self._team_states:
+            if opponent_team_id != team_id:
+                self._stop_outpost_armor_rotation(opponent_team_id, time)
+
+    def _advance_outpost_armor_rotation(self, match: "Match") -> None:
+        if match.elapsed_time + 1e-9 < OUTPOST_ARMOR_STOP_SECONDS:
+            return
+        for state in self._team_states.values():
+            if state.outpost_rotation is not None:
+                state.outpost_rotation.stop(OUTPOST_ARMOR_STOP_SECONDS)
 
     def _upper_front_base_edge_index(self, structure: Structure) -> int | None:
         """Resolve the forward-and-upper panel from the canonical field projection."""
@@ -3072,8 +3129,16 @@ class RMUC2026RegionalRules:
         amount: int,
         hit: StructureProjectileHitContext,
     ) -> tuple[int, float]:
-        """Return the V1.4.0 Base module raw damage and Attack multiplier."""
-        if target.type != "base" or hit.module_id is None:
+        """Return the V1.4.0 structure-module damage and center Attack gain."""
+        if hit.module_id is None:
+            return amount, 1.0
+        if target.type == "outpost" and hit.module_id.startswith("outpost-armor-"):
+            if hit.caliber == "17mm":
+                amount = 20
+            elif hit.caliber == "42mm":
+                amount = 200
+            return amount, 1.5 if hit.center_hit else 1.0
+        if target.type != "base":
             return amount, 1.0
         if hit.caliber == "42mm":
             raw_damage = 200
@@ -3588,11 +3653,11 @@ class RMUC2026RegionalRules:
                     )
 
             if moving or state.fixed_base_hits >= _DART_MAX_PER_MATCH:
-                self._team_states[target.team].base_armor_deployed = True
+                self._deploy_base_armor(target.team, match.elapsed_time)
             if target_mode in {"fixed", "random-fixed"}:
                 state.fixed_base_hits += 1
                 if state.fixed_base_hits >= _DART_MAX_PER_MATCH:
-                    self._team_states[target.team].base_armor_deployed = True
+                    self._deploy_base_armor(target.team, match.elapsed_time)
 
         field_zone = (
             self._field_base_zone_by_team.get(target.team)
@@ -4985,7 +5050,7 @@ class RMUC2026RegionalRules:
                     state.occupation_elapsed = 0.0
 
         for team_id in teams_to_deploy:
-            self._team_states[team_id].base_armor_deployed = True
+            self._deploy_base_armor(team_id, match.elapsed_time)
 
         self._enemy_fortress_death_retention_started.clear()
         self._outposts_destroyed_this_frame.clear()
@@ -5707,8 +5772,15 @@ class RMUC2026RegionalRules:
             for robot in match.robots
             if robot.type == "drone"
         }
+        rotation_direction = random.Random(
+            f"RMUC-2026-outpost-rotation:{self._outpost_rotation_generation}"
+        ).choice((-1, 1))
+        self._outpost_rotation_generation += 1
         self._team_states = {
-            team_id: _TeamStructureState() for team_id in team_by_side.values()
+            team_id: _TeamStructureState(
+                outpost_rotation=OutpostArmorRotationState(rotation_direction)
+            )
+            for team_id in team_by_side.values()
         }
         self._robot_types_by_id = {robot.id: robot.type for robot in match.robots}
         self._robots_by_id = {robot.id: robot for robot in match.robots}
@@ -6060,6 +6132,7 @@ class RMUC2026RegionalRules:
     def update(self, match: "Match", dt: float) -> None:
         self._current_time = match.elapsed_time
         newly_destroyed = self._consume_events(match)
+        self._advance_outpost_armor_rotation(match)
         frame_start = match.elapsed_time - dt
         active_dt = max(
             0.0, min(dt, self._time_limit - frame_start)
@@ -6876,7 +6949,7 @@ class RMUC2026RegionalRules:
                 if crossed > 0:
                     state.outpost_rebuild_opportunities += crossed
                 if structure.hp <= 2000:
-                    state.base_armor_deployed = True
+                    self._deploy_base_armor(structure.team, event.time)
                 continue
 
             if event.type == MatchEventType.STRUCTURE_DESTROYED:
@@ -6885,6 +6958,11 @@ class RMUC2026RegionalRules:
                     continue
                 state = self._team_states[structure.team]
                 state.outpost_ever_destroyed = True
+                self._stop_outpost_armor_rotation(
+                    structure.team,
+                    event.time,
+                    destroyed=True,
+                )
                 state.rebuild_progress_by_robot.clear()
                 self._outposts_destroyed_this_frame.add(structure.team)
 
