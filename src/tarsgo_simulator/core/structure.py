@@ -7,6 +7,7 @@ OUTPOST_ARMOR_MAX_SPEED = 0.8 * math.pi
 OUTPOST_ARMOR_RAMP_SECONDS = 5.0
 OUTPOST_ARMOR_STOP_SECONDS = 180.0
 OUTPOST_ARMOR_RETURN_SECONDS = 10.0
+OUTPOST_ARMOR_SYMMETRY_PERIOD = math.tau / 3.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +50,10 @@ class OutpostArmorRotationState:
     """Authoritative per-match Outpost middle-armor rotation state.
 
     V1.4.0 defines the timing and stop triggers, but does not dimension the
-    panel projection or its return curve. Those geometric and easing details
-    are Rules Lab approximations shared by collision and rendering.
+    panel projection or its return curve. Geometry and easing are Rules Lab
+    approximations shared by collision and rendering. Return motion starts
+    from the visible stopped pose and takes the shortest 120-degree-symmetric
+    path to the initial three-panel pose.
     """
 
     direction: int
@@ -69,17 +72,23 @@ class OutpostArmorRotationState:
 
     def angle_at(self, time: float) -> float:
         now = max(0.0, time)
-        if self.stop_time is None:
+        if self.stop_time is None or now <= self.stop_time:
             return _wrap_angle(self.direction * _outpost_active_angle(now))
-        stopped_angle = self.direction * _outpost_active_angle(self.stop_time)
+        stopped_angle = _wrap_angle(
+            self.direction * _outpost_active_angle(self.stop_time)
+        )
         if self.destroyed_at_stop:
-            return _wrap_angle(stopped_angle)
+            return stopped_angle
         progress = min(
             1.0,
             max(0.0, (now - self.stop_time) / OUTPOST_ARMOR_RETURN_SECONDS),
         )
         smooth_return = progress * progress * (3.0 - 2.0 * progress)
-        return _wrap_angle(stopped_angle * (1.0 - smooth_return))
+        return_delta = _wrap_to_period(
+            -stopped_angle,
+            OUTPOST_ARMOR_SYMMETRY_PERIOD,
+        )
+        return _wrap_angle(stopped_angle + return_delta * smooth_return)
 
 
 def outpost_armor_panel_projections(
@@ -153,6 +162,10 @@ def _outpost_active_angle(elapsed_time: float) -> float:
 
 def _wrap_angle(angle: float) -> float:
     return (angle + math.pi) % math.tau - math.pi
+
+
+def _wrap_to_period(angle: float, period: float) -> float:
+    return (angle + period / 2.0) % period - period / 2.0
 
 
 @dataclass

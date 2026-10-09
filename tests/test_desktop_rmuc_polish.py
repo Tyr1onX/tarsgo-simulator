@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.projectiles import Projectile
 from tarsgo_simulator.desktop.polish import (
     BadgeSpec,
     contextual_controls,
@@ -629,6 +630,121 @@ def test_outpost_middle_armor_rotates_without_rotating_its_outer_platform() -> N
         )
 
     assert pygame.image.tostring(screen_a, "RGBA") != pygame.image.tostring(screen_b, "RGBA")
+
+
+def test_returning_pose_matches_real_projectile_hit_and_desktop_projection(
+    monkeypatch,
+) -> None:
+    app = _app()
+    match = _match()
+    pygame = importlib.import_module("pygame")
+    outpost = next(
+        item
+        for item in match.structures
+        if item.type == "outpost" and item.team != match.config.scenario.player_team
+    )
+    for index, robot in enumerate(match.robots):
+        robot.position = (12_000.0 + index * 80.0, 13_000.0)
+        robot.speed = 0.0
+        robot.velocity = (0.0, 0.0)
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+
+    rotation = match.ruleset._team_states[outpost.team].outpost_rotation
+    assert rotation is not None
+    rotation.stop(32.0)
+    match.elapsed_time = 37.0
+    match.ruleset.update(match, 0.0)
+    profile = match.ruleset.structure_projectile_hitbox_profile(outpost)
+    assert profile is not None and profile.armor_panels
+    panel = profile.armor_panels[0]
+
+    viewport = app._viewport_for_match(match)
+    outpost_screen_center = tuple(
+        round(value) for value in viewport.world_to_screen(outpost.position)
+    )
+    expected_panels = tuple(
+        tuple(
+            tuple(
+                round(value)
+                for value in viewport.world_to_screen(
+                    (outpost.position[0] + x, outpost.position[1] + y)
+                )
+            )
+            for x, y in armor_panel.vertices
+        )
+        for armor_panel in profile.armor_panels
+    )
+    rendered_panels = []
+    original_draw_structure = app._draw_rmuc_structure
+
+    def capture_panels(screen, *args, **kwargs):
+        if (
+            kwargs["structure_type"] == "outpost"
+            and kwargs["center"] == outpost_screen_center
+        ):
+            rendered_panels.append(kwargs["rotor_panels"])
+        return original_draw_structure(screen, *args, **kwargs)
+
+    monkeypatch.setattr(app, "_draw_rmuc_structure", capture_panels)
+    player_team = match.config.scenario.player_team
+    opponent_team = next(
+        team.team_id
+        for team in match.config.scenario.teams.values()
+        if team.team_id != player_team
+    )
+    screen, font, small_font = _surface_and_fonts()
+    visual_state = CombatVisualState()
+    visual_state.reset(match)
+    app._draw(
+        screen,
+        font,
+        small_font,
+        match,
+        player_team,
+        opponent_team,
+        set(),
+        None,
+        viewport,
+        visual_state=visual_state,
+        static_field_cache=app.RMUCStaticFieldCache(),
+    )
+    assert expected_panels in rendered_panels
+
+    shooter = next(
+        robot
+        for robot in match.robots
+        if robot.team != outpost.team and robot.type == "infantry"
+    )
+    target = (
+        outpost.position[0] + panel.center[0],
+        outpost.position[1] + panel.center[1],
+    )
+    axis = panel.short_axis
+    start = (target[0] + axis[0] * 500.0, target[1] + axis[1] * 500.0)
+    match.projectile_system.projectiles.append(
+        Projectile(
+            id=1,
+            shooter_id=shooter.id,
+            shooter_team_id=shooter.team,
+            caliber="17mm",
+            damage=shooter.damage,
+            radius=8.4,
+            speed=20_000.0,
+            effective_range=1000.0,
+            position=start,
+            previous_position=start,
+            velocity=(-axis[0] * 20_000.0, -axis[1] * 20_000.0),
+        )
+    )
+    match.update(0.05)
+
+    impact = next(
+        item for item in match.projectile_impacts if item.target_id == outpost.id
+    )
+    assert impact.structure_hit is not None
+    assert impact.structure_hit.module_id == panel.module_id
+    assert impact.outcome == "damage"
 
 
 def test_badge_rendering_helper_stays_inside_width() -> None:

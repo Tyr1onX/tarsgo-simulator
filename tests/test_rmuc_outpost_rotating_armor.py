@@ -5,7 +5,10 @@ import pytest
 
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.projectiles import Projectile
-from tarsgo_simulator.core.structure import OUTPOST_ARMOR_MAX_SPEED
+from tarsgo_simulator.core.structure import (
+    OUTPOST_ARMOR_MAX_SPEED,
+    OUTPOST_ARMOR_SYMMETRY_PERIOD,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,11 +133,71 @@ def test_three_minute_stop_boundary_returns_to_start_and_never_restarts() -> Non
     _sync_rule_time(match, 180.0)
     assert rotation.stop_time == pytest.approx(180.0)
     stopped_angle = rotation.angle_at(180.0)
-    assert rotation.angle_at(185.0) != pytest.approx(stopped_angle)
-    assert rotation.angle_at(190.0) == pytest.approx(0.0, abs=1e-9)
+    one_frame_angle = rotation.angle_at(180.0 + 1 / 60)
+    assert stopped_angle == pytest.approx(0.0, abs=1e-9)
+    assert one_frame_angle == pytest.approx(stopped_angle, abs=1e-9)
+    assert rotation.angle_at(185.0) == pytest.approx(stopped_angle, abs=1e-9)
+    assert rotation.angle_at(190.0) == pytest.approx(stopped_angle, abs=1e-9)
+    assert max(
+        abs(
+            math.remainder(
+                rotation.angle_at(180.0 + (index + 1) / 60)
+                - rotation.angle_at(180.0 + index / 60),
+                math.tau,
+            )
+        )
+        for index in range(600)
+    ) <= math.pi / 20 / 60 + 1e-9
     _sync_rule_time(match, 200.0)
     assert rotation.stop_time == pytest.approx(180.0)
-    assert match.ruleset.outpost_armor_rotation_angle(outpost) == pytest.approx(0.0)
+    assert match.ruleset.outpost_armor_rotation_angle(outpost) == pytest.approx(
+        stopped_angle
+    )
+
+
+def test_early_multirevolution_stop_returns_along_bounded_symmetric_path() -> None:
+    match = _match()
+    outpost = _structure(match, BLUE, "outpost")
+    rotation = match.ruleset._team_states[BLUE].outpost_rotation
+    assert rotation is not None
+    rotation.stop(32.0)
+
+    before_stop = rotation.angle_at(32.0 - 1 / 60)
+    stopped_angle = rotation.angle_at(32.0)
+    one_frame_angle = rotation.angle_at(32.0 + 1 / 60)
+    midpoint_angle = rotation.angle_at(37.0)
+    returned_angle = rotation.angle_at(42.0)
+    expected_return = math.remainder(
+        -stopped_angle,
+        OUTPOST_ARMOR_SYMMETRY_PERIOD,
+    )
+
+    assert abs(math.remainder(stopped_angle - before_stop, math.tau)) < 0.05
+    assert abs(math.remainder(one_frame_angle - stopped_angle, math.tau)) < 1e-4
+    assert abs(expected_return) <= OUTPOST_ARMOR_SYMMETRY_PERIOD / 2 + 1e-9
+    assert midpoint_angle == pytest.approx(
+        (stopped_angle + expected_return / 2 + math.pi) % math.tau - math.pi,
+        abs=1e-9,
+    )
+    assert math.remainder(
+        returned_angle,
+        OUTPOST_ARMOR_SYMMETRY_PERIOD,
+    ) == pytest.approx(0.0, abs=1e-9)
+    assert max(
+        abs(
+            math.remainder(
+                rotation.angle_at(32.0 + (index + 1) / 60)
+                - rotation.angle_at(32.0 + index / 60),
+                math.tau,
+            )
+        )
+        for index in range(600)
+    ) <= math.pi / 20 / 60 + 1e-9
+
+    _sync_rule_time(match, 42.0)
+    assert match.ruleset.outpost_armor_rotation_angle(outpost) == pytest.approx(
+        returned_angle
+    )
 
 
 def test_destroyed_outpost_freezes_armor_pose_even_after_rebuild() -> None:
@@ -174,8 +237,12 @@ def test_opponent_base_armor_deployment_stops_and_returns_outpost_armor() -> Non
     assert match.ruleset._team_states[BLUE].base_armor_deployed
     assert rotation.stop_time == pytest.approx(31.0)
     assert not rotation.destroyed_at_stop
-    assert rotation.angle_at(41.0) == pytest.approx(0.0, abs=1e-9)
-    assert rotation.angle_at(45.0) == pytest.approx(0.0, abs=1e-9)
+    assert math.remainder(
+        rotation.angle_at(41.0), OUTPOST_ARMOR_SYMMETRY_PERIOD
+    ) == pytest.approx(0.0, abs=1e-9)
+    assert math.remainder(
+        rotation.angle_at(45.0), OUTPOST_ARMOR_SYMMETRY_PERIOD
+    ) == pytest.approx(0.0, abs=1e-9)
 
 
 @pytest.mark.parametrize(("target_team", "attacker_team"), [(BLUE, RED), (RED, BLUE)])
