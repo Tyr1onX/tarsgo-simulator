@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tarsgo_simulator.core.config import load_match_config
 from tarsgo_simulator.core.map import GameMap, TerrainRegion
 from tarsgo_simulator.core.match import Match
@@ -20,11 +22,11 @@ def _rmuc_map():
 
 def test_official_central_ramp_geometry_drives_path_and_live_movement() -> None:
     game_map = _rmuc_map()
-    assert len(game_map.terrain_regions) == 3
-    assert game_map.terrain_height_at((14000, 203.7)) == 0
-    assert game_map.terrain_height_at((14000, 2090)) == 350
-    assert abs(game_map.terrain_height_at((14000, 1146.85)) - 175) < 0.1
-    assert game_map.terrain_height_at((14000, 7500)) == 350
+    assert len(game_map.terrain_regions) == 5
+    assert abs(game_map.terrain_height_at((14000, 203.7)) - 3.55) < 0.1
+    assert abs(game_map.terrain_height_at((14000, 2090)) - 386.5) < 0.1
+    assert abs(game_map.terrain_height_at((14000, 1146.85)) - 195.0) < 0.1
+    assert abs(game_map.terrain_height_at((14000, 7500)) - 480.9) < 0.1
 
     start = (14000.0, 500.0)
     goal = (14000.0, 7500.0)
@@ -47,10 +49,105 @@ def test_official_central_ramp_geometry_drives_path_and_live_movement() -> None:
     proposal = robot.propose_movement(1.0, game_map)
     robot.commit_movement(proposal)
     assert 3000 < robot.position[1] < 4000
-    assert game_map.terrain_height_at(robot.position) == 350
+    assert abs(game_map.terrain_height_at(robot.position) - 411.1) < 0.1
 
     # The highland's vertical side is not a legal ground-to-platform route.
     assert not game_map.can_traverse((9900, 7500), (11000, 7500))
+
+
+def test_official_field_cross_slope_drives_height_movement_sight_and_projectiles() -> None:
+    game_map = _rmuc_map()
+    slopes = {
+        region.id: region
+        for region in game_map.terrain_regions
+        if region.kind == "ground_slope"
+    }
+    assert set(slopes) == {"field-cross-slope-north", "field-cross-slope-south"}
+    assert all(region.slope_degrees == 1.0 for region in slopes.values())
+    assert all("1°–2°" in region.approximation for region in slopes.values())
+
+    for x in (500.0, 6000.0, 14000.0, 27000.0):
+        assert game_map.terrain_height_at((x, 0)) == 0
+        field_center_ground = max(
+            region.height_at((x, 7500)) or 0.0 for region in slopes.values()
+        )
+        assert abs(field_center_ground - 130.9) < 0.1
+        assert game_map.terrain_height_at((x, 15000)) == 0
+    for point in ((500.0, 1000.0), (6000.0, 3000.0), (27000.0, 7000.0)):
+        mirrored = (28000.0 - point[0], 15000.0 - point[1])
+        height = max(region.height_at(point) or 0.0 for region in slopes.values())
+        mirrored_height = max(
+            region.height_at(mirrored) or 0.0 for region in slopes.values()
+        )
+        assert mirrored_height == pytest.approx(height, abs=0.1)
+    assert abs(game_map.terrain_height_at((14000, 7500)) - 480.9) < 0.1
+
+    start, goal = (6000.0, 1000.0), (6000.0, 14000.0)
+    path = find_path(game_map, start, goal)
+    assert path == [start, goal]
+    assert game_map.can_traverse(start, goal)
+    assert not game_map.has_line_of_sight(start, goal)
+    assert game_map.has_line_of_sight(
+        start,
+        goal,
+        start_height_mm=200,
+        end_height_mm=200,
+    )
+
+    robot = Robot(
+        id="cross-slope-movement",
+        team="red",
+        position=start,
+        hp=100,
+        max_hp=100,
+        speed=3000,
+        attack_range=0,
+        attack_interval=1,
+        damage=0,
+    )
+    robot.set_path(path)
+    moved, remaining = robot.propose_movement(1.0, game_map)
+    assert moved[1] > start[1]
+    assert game_map.terrain_height_at(moved) > game_map.terrain_height_at(start)
+    assert remaining == [goal]
+
+    shooter = Robot(
+        id="cross-slope-projectile",
+        team="red",
+        position=start,
+        hp=100,
+        max_hp=100,
+        speed=0,
+        attack_range=0,
+        attack_interval=1,
+        damage=0,
+    )
+    projectiles = ProjectileSystem()
+    projectiles.projectiles.append(
+        Projectile(
+            id=1,
+            shooter_id=shooter.id,
+            shooter_team_id=shooter.team,
+            caliber="17mm",
+            damage=10,
+            radius=5,
+            speed=10000,
+            effective_range=10000,
+            position=start,
+            previous_position=start,
+            velocity=(0, 10000),
+        )
+    )
+    projectiles.advance(
+        1.0,
+        [shooter],
+        [],
+        game_map,
+        apply_damage=lambda _target, _damage, _shooter: 0,
+    )
+    assert len(projectiles.impacts) == 1
+    assert projectiles.impacts[0].surface == "obstacle"
+    assert projectiles.impacts[0].position[1] < 14000
 
 
 def test_ramp_side_path_and_frame_movement_share_traversability_for_both_halves() -> None:

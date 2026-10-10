@@ -2425,6 +2425,7 @@ def _draw_rmuc_terrain_regions(
     colors = {
         "platform": (151, 178, 143),
         "ramp": (196, 157, 105),
+        "ground_slope": (105, 147, 136),
         "tunnel": (117, 145, 164),
     }
     rendered: list[str] = []
@@ -2438,9 +2439,34 @@ def _draw_rmuc_terrain_regions(
         if not points:
             continue
         color = colors.get(region.kind, (145, 156, 160))
-        pygame.draw.polygon(screen, (*color, 44), points)
-        edge_color = color if debug_geometry else _blend_color(color, TEXT_COLOR, 0.25)
-        pygame.draw.polygon(screen, edge_color, points, width=2 if debug_geometry else 1)
+        if region.kind == "ground_slope":
+            # Show the documented shallow field grade without washing out the
+            # spectator view like a raised platform overlay would.
+            pygame.draw.polygon(
+                screen,
+                (*color, 38 if debug_geometry else 13),
+                points,
+            )
+            if region.axis_start and region.axis_end:
+                for fraction in (0.25, 0.5, 0.75):
+                    y = region.axis_start[1] + (
+                        region.axis_end[1] - region.axis_start[1]
+                    ) * fraction
+                    start = viewport.world_to_screen((region.bounds.x, y))
+                    end = viewport.world_to_screen((region.bounds.right, y))
+                    pygame.draw.line(
+                        screen,
+                        (*color, 95 if debug_geometry else 36),
+                        tuple(round(value) for value in start),
+                        tuple(round(value) for value in end),
+                        width=1,
+                    )
+            if debug_geometry:
+                pygame.draw.polygon(screen, color, points, width=1)
+        else:
+            pygame.draw.polygon(screen, (*color, 44), points)
+            edge_color = color if debug_geometry else _blend_color(color, TEXT_COLOR, 0.25)
+            pygame.draw.polygon(screen, edge_color, points, width=2 if debug_geometry else 1)
         if region.kind == "ramp" and region.axis_start and region.axis_end:
             axis_start = viewport.world_to_screen(region.axis_start)
             axis_end = viewport.world_to_screen(region.axis_end)
@@ -2475,6 +2501,29 @@ def _draw_rmuc_terrain_regions(
                 background = pygame.Surface(label_rect.inflate(12, 8).size, pygame.SRCALPHA, 32)
                 pygame.draw.rect(background, (20, 31, 34, 188), background.get_rect(), border_radius=5)
                 screen.blit(background, label_rect.inflate(12, 8).topleft)
+                screen.blit(surface, label_rect)
+        if region.kind == "ground_slope" and region.id == "field-cross-slope-north":
+            label = "场地横坡 1°–2° · 仿真取1°下界"
+            surface = legend_font.render(label, True, (229, 237, 231))
+            label_rect = surface.get_rect(
+                topleft=tuple(
+                    round(value)
+                    for value in viewport.world_to_screen((500.0, 500.0))
+                )
+            )
+            if field_rect.contains(label_rect):
+                background = pygame.Surface(
+                    label_rect.inflate(10, 6).size,
+                    pygame.SRCALPHA,
+                    32,
+                )
+                pygame.draw.rect(
+                    background,
+                    (20, 31, 34, 178),
+                    background.get_rect(),
+                    border_radius=4,
+                )
+                screen.blit(background, label_rect.inflate(10, 6).topleft)
                 screen.blit(surface, label_rect)
         rendered.append(region.id)
     screen.set_clip(old_clip)

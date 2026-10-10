@@ -313,6 +313,12 @@ class ProjectileSystem:
                 shooter.position[0] + direction[0] * muzzle_offset,
                 shooter.position[1] + direction[1] * muzzle_offset,
             )
+            muzzle_height = game_map.terrain_height_at(position)
+            target_height = game_map.terrain_height_at(intended_target.position)
+            muzzle_to_target = max(
+                math.dist(position, intended_target.position),
+                1.0,
+            )
             projectile_id = self._next_id
             self._next_id += 1
             self.projectiles.append(
@@ -331,12 +337,11 @@ class ProjectileSystem:
                         direction[0] * parameters.speed,
                         direction[1] * parameters.speed,
                     ),
-                    height_mm=game_map.terrain_height_at(shooter.position),
+                    height_mm=muzzle_height,
                     vertical_velocity_mm_s=(
-                        game_map.terrain_height_at(intended_target.position)
-                        - game_map.terrain_height_at(shooter.position)
+                        target_height - muzzle_height
                     )
-                    / max(math.dist(shooter.position, intended_target.position), 1.0)
+                    / muzzle_to_target
                     * parameters.speed,
                     target_id=intended_target.id,
                 )

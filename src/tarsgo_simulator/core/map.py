@@ -84,8 +84,8 @@ class TerrainConnection:
 class TerrainRegion:
     """A 2.5D surface or passage with source-backed plan geometry.
 
-    ``platform`` has one constant top height. ``ramp`` interpolates between
-    two heights along its axis. ``tunnel`` describes an open floor corridor
+    ``platform`` has one constant top height. ``ramp`` and ``ground_slope``
+    interpolate between two heights along their axis. ``tunnel`` describes an open floor corridor
     with a ceiling clearance. Approximate field placement is recorded in
     ``approximation`` instead of being presented as surveyed geometry.
     """
@@ -115,7 +115,7 @@ class TerrainRegion:
     def height_at(self, point: tuple[float, float]) -> float | None:
         if not self.contains(point):
             return None
-        if self.kind != "ramp":
+        if self.kind not in {"ramp", "ground_slope"}:
             return self.height_mm
         assert self.axis_start is not None and self.axis_end is not None
         assert self.height_start_mm is not None and self.height_end_mm is not None
@@ -269,7 +269,8 @@ class GameMap:
 
     def terrain_height_at(self, point: tuple[float, float]) -> float:
         """Return the top surface height above the field ground in millimetres."""
-        height = 0.0
+        ground_height = 0.0
+        raised_surface = 0.0
         x, y = point
         for region, bounds in self._terrain_bounds:
             if not (
@@ -279,8 +280,15 @@ class GameMap:
                 continue
             candidate = region.height_at(point)
             if candidate is not None:
-                height = max(height, candidate)
-        return height
+                if region.kind == "ground_slope":
+                    ground_height = max(ground_height, candidate)
+                elif region.kind in {"platform", "ramp"}:
+                    # Elevated features are modeled relative to the local
+                    # field floor, so the documented cross-slope composes
+                    # beneath the existing P2c surface instead of flattening
+                    # it against a global zero plane.
+                    raised_surface = max(raised_surface, candidate)
+        return ground_height + raised_surface
 
     def terrain_region_at(self, point: tuple[float, float]) -> TerrainRegion | None:
         """Return the highest modeled surface at a point, if any."""
@@ -434,28 +442,89 @@ class GameMap:
                     (previous[0] + point[0]) / 2,
                     (previous[1] + point[1]) / 2,
                 )
-                ramps = [
+                ground_slopes = [
                     region
                     for region, bounds in self._terrain_bounds
-                    if region.kind == "ramp"
+                    if region.kind == "ground_slope"
                     and any(
                         bounds.x <= sample[0] <= bounds.right
                         and bounds.y <= sample[1] <= bounds.bottom
+                        and region.contains(sample)
                         for sample in (previous, midpoint, point)
                     )
-                    and (
-                        region.contains(midpoint)
-                        or region.contains(previous)
-                        or region.contains(point)
-                    )
-                    and region.slope_degrees is not None
                 ]
-                if not ramps:
-                    return False
-                max_grade = max(
-                    math.tan(math.radians(region.slope_degrees or 0.0))
-                    for region in ramps
+                ground_start = max(
+                    (
+                        value
+                        for region in ground_slopes
+                        if (value := region.height_at(previous)) is not None
+                    ),
+                    default=0.0,
                 )
+                ground_end = max(
+                    (
+                        value
+                        for region in ground_slopes
+                        if (value := region.height_at(point)) is not None
+                    ),
+                    default=0.0,
+                )
+                ground_delta = abs(ground_end - ground_start)
+                if ground_slopes and math.isclose(
+                    height_delta,
+                    ground_delta,
+                    abs_tol=1e-6,
+                ):
+                    # A field-wide grade must not make a nearby platform edge
+                    # behave like a ramp. Accept it only when the observed
+                    # height change is exactly the ground-slope contribution.
+                    max_grade = max(
+                        math.tan(math.radians(region.slope_degrees or 0.0))
+                        for region in ground_slopes
+                    )
+                else:
+                    ramps = [
+                        region
+                        for region, bounds in self._terrain_bounds
+                        if region.kind == "ramp"
+                        and any(
+                            bounds.x <= sample[0] <= bounds.right
+                            and bounds.y <= sample[1] <= bounds.bottom
+                            for sample in (previous, midpoint, point)
+                        )
+                        and (
+                            region.contains(midpoint)
+                            or region.contains(previous)
+                            or region.contains(point)
+                        )
+                        and region.slope_degrees is not None
+                    ]
+                    if not ramps:
+                        return False
+                    segment_in_ramp = [
+                        region
+                        for region in ramps
+                        if all(
+                            region.contains(sample)
+                            for sample in (previous, midpoint, point)
+                        )
+                    ]
+                    ground_grade = max(
+                        (
+                            region.slope_degrees or 0.0
+                            for region in ground_slopes
+                        ),
+                        default=0.0,
+                    )
+                    max_grade = max(
+                        math.tan(
+                            math.radians(
+                                (region.slope_degrees or 0.0)
+                                + (ground_grade if region in segment_in_ramp else 0.0)
+                            )
+                        )
+                        for region in ramps
+                    )
                 # A robot's modeled footprint can bridge a small height change
                 # at a ramp's side edge. Use at least the footprint diameter as
                 # the grade run, so the same short boundary crossing is judged

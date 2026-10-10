@@ -243,13 +243,165 @@ def test_ramp_edge_collision_preserves_terrain_rules_on_both_field_halves() -> N
         assert max(stalls.values()) < 1.0
 
 
-def test_local_replan_finds_a_terrain_legal_route_around_a_dead_robot() -> None:
+def test_local_replan_skips_rejoin_inside_a_second_robot_clearance() -> None:
+    match = _match()
+    yielding = _robot(match, "opponent-infantry-2")
+    blocker = _robot(match, "tarsgo-infantry-1")
+    second_blocker = _robot(match, "tarsgo-infantry-2")
+    yielding.position = (18211.745750595936, 459.2564137313835)
+    yielding.set_path(
+        [(3700.0, 500.0), (3758.751591970252, 12955.137501802665)]
+    )
+    blocker.position = (17831.442313854754, 517.6102864993238)
+    second_blocker.position = (17452.73636908707, 500.0)
+    match.robots = [yielding, blocker, second_blocker]
+    for robot in match.robots:
+        power = match.ruleset._chassis_power_by_robot[robot.id]
+        power.power_off_remaining = 0.0
+        power.blocked_this_frame = False
+
+    minimum_distance = 2 * match.map.collision_radius
+    proposal = yielding.propose_movement(1 / 60, match.map)
+    candidates = match._local_avoidance_proposals(
+        yielding,
+        blocker,
+        proposal,
+        None,
+        None,
+        1 / 60,
+        minimum_distance,
+    )
+
+    assert candidates
+    detour, _rejoin, _side = candidates[0]
+    assert math.dist(detour[0], blocker.position) >= minimum_distance
+    assert math.dist(detour[0], second_blocker.position) >= minimum_distance
+    assert match.map.can_traverse(
+        yielding.position,
+        detour[0],
+        agent_height_mm=yielding.body_height_mm,
+    )
+    assert all(
+        match.map.can_traverse(
+            start,
+            end,
+            agent_height_mm=yielding.body_height_mm,
+        )
+        for start, end in zip(
+            [yielding.position, *detour[1]],
+            detour[1],
+        )
+    )
+
+
+def test_local_avoidance_uses_lateral_route_when_terrain_blocks_retreat() -> None:
+    match = _match()
+    infantry = _robot(match, "tarsgo-infantry-2")
+    engineer = _robot(match, "tarsgo-engineer")
+    infantry.position = (9588.518037556607, 12607.933173460051)
+    infantry.set_path([(2924.0, 13732.0)])
+    engineer.position = (9232.0, 12550.0)
+    engineer.path.clear()
+    match.robots = [infantry, engineer]
+    for robot in match.robots:
+        power = match.ruleset._chassis_power_by_robot[robot.id]
+        power.power_off_remaining = 0.0
+        power.blocked_this_frame = False
+
+    minimum_distance = 2 * match.map.collision_radius
+    candidates = match._local_avoidance_proposals(
+        infantry,
+        engineer,
+        infantry.propose_movement(1 / 60, match.map),
+        None,
+        None,
+        1 / 60,
+        minimum_distance,
+    )
+
+    assert candidates
+    detour, _rejoin, _side = candidates[0]
+    assert math.dist(detour[0], engineer.position) >= minimum_distance
+    assert match.map.can_traverse(
+        infantry.position,
+        detour[0],
+        agent_height_mm=infantry.body_height_mm,
+    )
+    assert all(
+        match.map.can_traverse(
+            start,
+            end,
+            agent_height_mm=infantry.body_height_mm,
+        )
+        for start, end in zip(
+            [infantry.position, *detour[1]],
+            detour[1],
+        )
+    )
+
+
+def test_local_yield_step_is_terrain_safe_and_symmetric_at_ramp_edge() -> None:
+    outcomes = []
+    for mirrored in (False, True):
+        match = _match()
+        infantry = _robot(match, "opponent-infantry-2")
+        sentry = _robot(match, "opponent-sentry")
+
+        def transform(point: tuple[float, float]) -> tuple[float, float]:
+            if not mirrored:
+                return point
+            return (match.map.width - point[0], match.map.height - point[1])
+
+        infantry.position = transform((17827.619964770933, 570.4723430791659))
+        infantry.set_path(
+            [transform((17100.0, 900.0)), transform((17188.0, 8960.0))]
+        )
+        sentry.position = transform((17621.5128510842, 274.4290844863708))
+        sentry.set_path([transform((25075.0, 2836.0))])
+        match.robots = [infantry, sentry]
+        for robot in match.robots:
+            power = match.ruleset._chassis_power_by_robot[robot.id]
+            power.power_off_remaining = 0.0
+            power.blocked_this_frame = False
+
+        minimum_distance = 2 * match.map.collision_radius
+        candidates = match._local_avoidance_proposals(
+            infantry,
+            sentry,
+            infantry.propose_movement(1 / 60, match.map),
+            None,
+            None,
+            1 / 60,
+            minimum_distance,
+        )
+
+        assert candidates
+        proposal, _yield_goal, _side = candidates[0]
+        assert len(proposal[1]) == 1
+        assert math.dist(proposal[0], sentry.position) >= minimum_distance
+        assert match.map.can_traverse(
+            infantry.position,
+            proposal[0],
+            agent_height_mm=infantry.body_height_mm,
+        )
+        outcomes.append(
+            (
+                proposal[0][0] - infantry.position[0],
+                proposal[0][1] - infantry.position[1],
+            )
+        )
+
+    assert outcomes[0][0] == pytest.approx(-outcomes[1][0], abs=1e-6)
+    assert outcomes[0][1] == pytest.approx(-outcomes[1][1], abs=1e-6)
+
+
+def test_local_avoidance_makes_progress_around_a_dead_robot() -> None:
     match = _match()
     sentry = _robot(match, "tarsgo-sentry")
     blocker = _robot(match, "tarsgo-infantry-2")
-    sentry.position = (17895.637, 13773.98)
-    sentry.set_path([(17900.0, 14500.0), (10100.0, 14500.0), (2600.0, 13732.0)])
-    blocker.position = (18187.4, 14009.7)
+    sentry.position = (19300.0, 12700.0)
+    sentry.set_path([(20300.0, 13450.0), (21500.0, 13700.0), (24000.0, 14000.0)])
+    blocker.position = (19580.0, 12980.0)
     blocker.alive = False
     blocker.path.clear()
     match.robots = [sentry, blocker]
@@ -261,7 +413,7 @@ def test_local_replan_finds_a_terrain_legal_route_around_a_dead_robot() -> None:
 
     assert math.dist(start, sentry.position) > 1_000
     assert stalls[sentry.id] < 1.0
-    assert match.movement_diagnostics["local_replan_searches"] > 0
+    assert match.movement_diagnostics["local_avoidance_moves"] > 0
 
 
 def test_collision_right_of_way_alternates_fairly_and_deterministically() -> None:
@@ -292,6 +444,7 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     dt = 1.0 / 60.0
     collision_stall = {robot.id: 0.0 for robot in match.robots}
     longest_collision_stall = {robot.id: 0.0 for robot in match.robots}
+    longest_collision_context: dict[str, dict[str, object]] = {}
     stationary_classes: dict[str, int] = {}
     maximum_path_queue = 0
     small_energy_contacts = []
@@ -353,10 +506,34 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
                 and match._was_blocked[robot.id]
             ):
                 collision_stall[robot.id] += dt
-                longest_collision_stall[robot.id] = max(
-                    longest_collision_stall[robot.id],
-                    collision_stall[robot.id],
-                )
+                if collision_stall[robot.id] > longest_collision_stall[robot.id]:
+                    longest_collision_stall[robot.id] = collision_stall[robot.id]
+                    nearby = sorted(
+                        (
+                            other
+                            for other in match.robots
+                            if other.id != robot.id and not other.aerial
+                        ),
+                        key=lambda other: math.dist(
+                            robot.position,
+                            other.position,
+                        ),
+                    )[:3]
+                    longest_collision_context[robot.id] = {
+                        "time": match.elapsed_time,
+                        "position": robot.position,
+                        "path": tuple(robot.path[:3]),
+                        "target": match._ai_target_keys.get(robot.id),
+                        "nearest": tuple(
+                            (
+                                other.id,
+                                other.alive,
+                                other.position,
+                                round(math.dist(robot.position, other.position), 1),
+                            )
+                            for other in nearby
+                        ),
+                    }
             else:
                 collision_stall[robot.id] = 0.0
         if match.finished:
@@ -367,7 +544,14 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     assert match.elapsed_time == match.time_limit == 420.0
     assert match.winner is not None
     assert maximum_path_queue <= 16
-    assert max(longest_collision_stall.values()) < 3.0
+    longest_stall_robot = max(
+        longest_collision_stall,
+        key=longest_collision_stall.get,
+    )
+    assert longest_collision_stall[longest_stall_robot] < 3.0, (
+        longest_stall_robot,
+        longest_collision_context.get(longest_stall_robot),
+    )
     assert stationary_classes["legal_wait"] > 0
     assert stationary_classes["dead_or_respawning"] > 0
     assert stationary_classes["collision_yield"] > 0
