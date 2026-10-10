@@ -1,6 +1,6 @@
 """Map geometry shared by movement, line of sight and the renderer."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Iterable
 
@@ -102,14 +102,42 @@ class TerrainRegion:
     clearance_mm: float | None = None
     source: str = ""
     approximation: str = ""
+    _bounds: Rectangle = field(init=False, repr=False, compare=False)
+    _axis_aligned_rectangle: bool = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        xs = [point[0] for point in self.vertices]
+        ys = [point[1] for point in self.vertices]
+        bounds = Rectangle(
+            min(xs),
+            min(ys),
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+        )
+        corners = {
+            (bounds.x, bounds.y),
+            (bounds.right, bounds.y),
+            (bounds.right, bounds.bottom),
+            (bounds.x, bounds.bottom),
+        }
+        object.__setattr__(self, "_bounds", bounds)
+        object.__setattr__(
+            self,
+            "_axis_aligned_rectangle",
+            len(self.vertices) == 4 and set(self.vertices) == corners,
+        )
 
     @property
     def bounds(self) -> Rectangle:
-        xs = [point[0] for point in self.vertices]
-        ys = [point[1] for point in self.vertices]
-        return Rectangle(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        return self._bounds
 
     def contains(self, point: tuple[float, float]) -> bool:
+        if self._axis_aligned_rectangle:
+            x, y = point
+            return (
+                self._bounds.x <= x <= self._bounds.right
+                and self._bounds.y <= y <= self._bounds.bottom
+            )
         return _point_in_polygon(point, self.vertices)
 
     def height_at(self, point: tuple[float, float]) -> float | None:
@@ -158,6 +186,16 @@ class GameMap:
         self.terrain_regions = tuple(terrain_regions)
         self._terrain_bounds = tuple(
             (region, region.bounds) for region in self.terrain_regions
+        )
+        self._ground_slope_bounds = tuple(
+            (region, bounds)
+            for region, bounds in self._terrain_bounds
+            if region.kind == "ground_slope"
+        )
+        self._non_ground_terrain_bounds = tuple(
+            (region, bounds)
+            for region, bounds in self._terrain_bounds
+            if region.kind != "ground_slope"
         )
         self.unit_scale = self.path_grid_size / 20.0
         self._structure_bounds_by_id = {
@@ -424,6 +462,9 @@ class GameMap:
         distance = math.dist(start, end)
         if distance <= 1e-9:
             return True
+        direct_ground_grade = self._direct_ground_slope_traversable(start, end)
+        if direct_ground_grade is not None:
+            return direct_ground_grade
         spacing = min(100.0, max(10.0, self.path_grid_size / 2))
         steps = max(1, math.ceil(distance / spacing))
         previous = start
@@ -444,9 +485,8 @@ class GameMap:
                 )
                 ground_slopes = [
                     region
-                    for region, bounds in self._terrain_bounds
-                    if region.kind == "ground_slope"
-                    and any(
+                    for region, bounds in self._ground_slope_bounds
+                    if any(
                         bounds.x <= sample[0] <= bounds.right
                         and bounds.y <= sample[1] <= bounds.bottom
                         and region.contains(sample)
@@ -533,7 +573,7 @@ class GameMap:
                 if height_delta > max_grade * grade_run + 1.0:
                     return False
 
-            for region, bounds in self._terrain_bounds:
+            for region, bounds in self._non_ground_terrain_bounds:
                 if region.kind != "tunnel" or not (
                     bounds.x <= point[0] <= bounds.right
                     and bounds.y <= point[1] <= bounds.bottom
@@ -551,6 +591,86 @@ class GameMap:
             previous = point
             previous_height = height
         return True
+
+    def _direct_ground_slope_traversable(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> bool | None:
+        """Validate a segment analytically when it stays on one planar grade.
+
+        Returning ``None`` means the segment crosses or approaches another
+        terrain feature and must use the sampled full-surface check.
+        """
+        midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+        covered_slopes = [
+            region
+            for region, bounds in self._ground_slope_bounds
+            if region._axis_aligned_rectangle
+            and bounds.x <= start[0] <= bounds.right
+            and bounds.y <= start[1] <= bounds.bottom
+            and bounds.x <= midpoint[0] <= bounds.right
+            and bounds.y <= midpoint[1] <= bounds.bottom
+            and bounds.x <= end[0] <= bounds.right
+            and bounds.y <= end[1] <= bounds.bottom
+        ]
+        if len(covered_slopes) != 1:
+            return None
+
+        min_x = min(start[0], end[0])
+        max_x = max(start[0], end[0])
+        min_y = min(start[1], end[1])
+        max_y = max(start[1], end[1])
+        terrain_surfaces = [
+            (region, bounds)
+            for region, bounds in self._non_ground_terrain_bounds
+            if region.kind in {"platform", "ramp"}
+            and region._axis_aligned_rectangle
+            and bounds.x <= start[0] <= bounds.right
+            and bounds.y <= start[1] <= bounds.bottom
+            and bounds.x <= midpoint[0] <= bounds.right
+            and bounds.y <= midpoint[1] <= bounds.bottom
+            and bounds.x <= end[0] <= bounds.right
+            and bounds.y <= end[1] <= bounds.bottom
+        ]
+        if len(terrain_surfaces) > 1:
+            return None
+        surface = terrain_surfaces[0][0] if terrain_surfaces else None
+        if any(
+            bounds.x <= max_x
+            and bounds.right >= min_x
+            and bounds.y <= max_y
+            and bounds.bottom >= min_y
+            for region, bounds in self._non_ground_terrain_bounds
+            if region is not surface
+        ):
+            return None
+
+        slope = covered_slopes[0]
+        if slope.slope_degrees is None:
+            return None
+        start_height = slope.height_at(start)
+        end_height = slope.height_at(end)
+        if start_height is None or end_height is None:
+            return None
+        allowed_angle = slope.slope_degrees
+        if surface is not None:
+            surface_start = surface.height_at(start)
+            surface_end = surface.height_at(end)
+            if surface_start is None or surface_end is None:
+                return None
+            start_height += surface_start
+            end_height += surface_end
+            if surface.kind == "ramp":
+                if surface.slope_degrees is None:
+                    return None
+                allowed_angle += surface.slope_degrees
+        allowed_grade = math.tan(math.radians(allowed_angle))
+        grade_run = max(
+            math.dist(start, end),
+            2 * self.collision_radius,
+        )
+        return abs(end_height - start_height) <= allowed_grade * grade_run + 1.0
 
     def terrain_collision_fraction(
         self,
@@ -592,8 +712,9 @@ class GameMap:
         *,
         start_height_mm: float | None = None,
         end_height_mm: float | None = None,
+        clearance_mm: float = 0.0,
     ) -> bool:
-        """Return whether the segment avoids walls and non-target structures."""
+        """Return whether a ray with optional terrain clearance is unobstructed."""
         # Use the same closed playing-surface perimeter as movement and
         # projectile collision; an off-field ray cannot bypass that wall.
         if not self.contains(start) or not self.contains(end):
@@ -601,9 +722,15 @@ class GameMap:
 
         if self.terrain_regions:
             if start_height_mm is None:
-                start_height_mm = self.terrain_height_at(start)
+                start_height_mm = self.terrain_height_at(start) + max(
+                    0.0,
+                    clearance_mm,
+                )
             if end_height_mm is None:
-                end_height_mm = self.terrain_height_at(end)
+                end_height_mm = self.terrain_height_at(end) + max(
+                    0.0,
+                    clearance_mm,
+                )
             if self.terrain_collision_fraction(
                 start,
                 end,

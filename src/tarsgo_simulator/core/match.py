@@ -3308,6 +3308,19 @@ class Match:
             target_key=target_key,
         )
 
+    def _has_projectile_line_of_sight(
+        self,
+        shooter: Robot,
+        target: tuple[float, float],
+    ) -> bool:
+        parameters_for = getattr(self.ruleset, "projectile_parameters_for", None)
+        parameters = parameters_for(shooter) if callable(parameters_for) else None
+        return self.map.has_line_of_sight(
+            shooter.position,
+            target,
+            clearance_mm=max(0.0, getattr(parameters, "radius", 0.0)),
+        )
+
     def _rmuc_ai_step(self, robot: Robot, display_state) -> None:
         if robot.type == "drone":
             self._rmuc_drone_ai_step(robot, display_state)
@@ -3402,8 +3415,8 @@ class Match:
                 is_at_firing_position
                 and math.dist(robot.position, energy_target.position)
                 <= robot.attack_range
-                and self.map.has_line_of_sight(
-                    robot.position,
+                and self._has_projectile_line_of_sight(
+                    robot,
                     energy_target.position,
                 )
             ):
@@ -3483,8 +3496,8 @@ class Match:
                 is_at_firing_position
                 and math.dist(robot.position, large_energy_target.position)
                 <= robot.attack_range
-                and self.map.has_line_of_sight(
-                    robot.position,
+                and self._has_projectile_line_of_sight(
+                    robot,
                     large_energy_target.position,
                 )
             ):

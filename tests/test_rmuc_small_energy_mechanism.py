@@ -296,8 +296,9 @@ def test_small_energy_real_projectile_uses_official_detection_circle() -> None:
         )
         displacement = start_radius - end_radius
         dt = displacement / speed
-        start_height = match.map.terrain_height_at(start)
-        end_height = match.map.terrain_height_at(end)
+        projectile_radius = 8.4
+        start_height = match.map.terrain_height_at(start) + projectile_radius
+        end_height = match.map.terrain_height_at(end) + projectile_radius
         match.projectile_system.projectiles.append(
             Projectile(
                 id=projectile_id,
@@ -305,7 +306,7 @@ def test_small_energy_real_projectile_uses_official_detection_circle() -> None:
                 shooter_team_id=RED,
                 caliber="17mm",
                 damage=20,
-                radius=8.4,
+                radius=projectile_radius,
                 speed=speed,
                 effective_range=2400.0,
                 position=start,
@@ -368,10 +369,7 @@ def test_spectator_ai_activates_small_energy_through_real_projectiles() -> None:
     state = rules._small_energy_mechanism_by_team[sentry.team]
     impacts = []
 
-    # The official activation window is 20 seconds. The P6 cross-slope makes
-    # the robot's legal approach around the rotating target take longer than
-    # the former 10-second fixture budget.
-    for _ in range(60 * 20):
+    for _ in range(60 * 10):
         match.update(1.0 / 60.0)
         impacts.extend(
             impact
@@ -387,7 +385,8 @@ def test_spectator_ai_activates_small_energy_through_real_projectiles() -> None:
         if impact.outcome in {"energy_module_activated", "energy_activated"}
     ]
     assert state.status == "activated"
-    assert [impact.outcome for impact in successful_hits[-5:]] == [
+    assert state.failure_count == 0
+    assert [impact.outcome for impact in successful_hits] == [
         "energy_module_activated",
         "energy_module_activated",
         "energy_module_activated",
@@ -395,7 +394,7 @@ def test_spectator_ai_activates_small_energy_through_real_projectiles() -> None:
         "energy_activated",
     ]
     assert sum(impact.outcome == "energy_activated" for impact in successful_hits) == 1
-    assert len({impact.armor_face for impact in successful_hits[-5:]}) == 5
+    assert len({impact.armor_face for impact in successful_hits}) == 5
     assert all(impact.shooter_id == sentry.id for impact in successful_hits)
     assert rules._current_small_energy_mechanism_defense(sentry.team) == pytest.approx(
         0.25
@@ -432,8 +431,9 @@ def test_small_energy_real_unlit_module_contact_resets_only_its_team() -> None:
         entity.center[1] + radial[1] * start_radius,
     )
     speed = 25_000.0
-    start_height = match.map.terrain_height_at(start)
-    target_height = match.map.terrain_height_at(panel.center)
+    projectile_radius = 8.4
+    start_height = match.map.terrain_height_at(start) + projectile_radius
+    target_height = match.map.terrain_height_at(panel.center) + projectile_radius
     target_distance = math.dist(start, panel.center)
     wrong_projectile = Projectile(
         id=9901,
@@ -441,7 +441,7 @@ def test_small_energy_real_unlit_module_contact_resets_only_its_team() -> None:
         shooter_team_id=RED,
         caliber="17mm",
         damage=20,
-        radius=8.4,
+        radius=projectile_radius,
         speed=speed,
         effective_range=2400.0,
         position=start,

@@ -20,6 +20,27 @@ def _rmuc_map():
     return Match(load_match_config(RMUC_SCENARIO)).map
 
 
+def test_terrain_region_rectangle_fast_path_preserves_polygon_boundaries() -> None:
+    rectangle = TerrainRegion(
+        id="rectangle",
+        kind="platform",
+        vertices=((0, 0), (10, 0), (10, 5), (0, 5)),
+        height_mm=20,
+    )
+    triangle = TerrainRegion(
+        id="triangle",
+        kind="platform",
+        vertices=((0, 0), (10, 0), (5, 10)),
+        height_mm=20,
+    )
+
+    assert rectangle.contains((0, 2.5))
+    assert rectangle.contains((10, 5))
+    assert not rectangle.contains((10.1, 5))
+    assert triangle.contains((5, 5))
+    assert not triangle.contains((1, 9))
+
+
 def test_official_central_ramp_geometry_drives_path_and_live_movement() -> None:
     game_map = _rmuc_map()
     assert len(game_map.terrain_regions) == 5
@@ -53,6 +74,27 @@ def test_official_central_ramp_geometry_drives_path_and_live_movement() -> None:
 
     # The highland's vertical side is not a legal ground-to-platform route.
     assert not game_map.can_traverse((9900, 7500), (11000, 7500))
+
+
+def test_direct_grade_check_only_covers_single_planar_surface_segments() -> None:
+    game_map = _rmuc_map()
+
+    assert game_map._direct_ground_slope_traversable(
+        (6000.0, 1000.0),
+        (6000.0, 7000.0),
+    ) is True
+    assert game_map._direct_ground_slope_traversable(
+        (12000.0, 3000.0),
+        (16000.0, 3000.0),
+    ) is True
+    assert game_map._direct_ground_slope_traversable(
+        (14000.0, 500.0),
+        (14000.0, 1800.0),
+    ) is True
+    assert game_map._direct_ground_slope_traversable(
+        (6000.0, 7000.0),
+        (6000.0, 8000.0),
+    ) is None
 
 
 def test_official_field_cross_slope_drives_height_movement_sight_and_projectiles() -> None:
@@ -148,6 +190,14 @@ def test_official_field_cross_slope_drives_height_movement_sight_and_projectiles
     assert len(projectiles.impacts) == 1
     assert projectiles.impacts[0].surface == "obstacle"
     assert projectiles.impacts[0].position[1] < 14000
+
+
+def test_projectile_clearance_prevents_false_ground_slope_line_of_sight_block() -> None:
+    game_map = _rmuc_map()
+    start, end = (6000.0, 7000.0), (6000.0, 8000.0)
+
+    assert not game_map.has_line_of_sight(start, end)
+    assert game_map.has_line_of_sight(start, end, clearance_mm=8.4)
 
 
 def test_ramp_side_path_and_frame_movement_share_traversability_for_both_halves() -> None:
