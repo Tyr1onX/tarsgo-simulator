@@ -94,6 +94,10 @@ def _fire_structure_projectile(
         impact_target[0] + outward[0] * 500.0,
         impact_target[1] + outward[1] * 500.0,
     )
+    end = (
+        start[0] - outward[0] * speed * 0.05,
+        start[1] - outward[1] * speed * 0.05,
+    )
     match.projectile_system.projectiles.append(
         Projectile(
             id=projectile_id,
@@ -107,6 +111,15 @@ def _fire_structure_projectile(
             position=start,
             previous_position=start,
             velocity=(-outward[0] * speed, -outward[1] * speed),
+            # The test shot follows local field grade at a stated Rules Lab
+            # muzzle-height offset; this is not an official field dimension.
+            height_mm=match.map.terrain_height_at(start) + 100.0,
+            vertical_velocity_mm_s=(
+                match.map.terrain_height_at(end)
+                - match.map.terrain_height_at(start)
+            )
+            / math.dist(start, end)
+            * speed,
         )
     )
     match.update(0.05)
