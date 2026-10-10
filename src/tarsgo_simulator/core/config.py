@@ -734,7 +734,7 @@ def _terrain_regions(
         raise ConfigError(f"{path}: `terrain.regions` 必须是列表")
     result: list[TerrainRegion] = []
     seen_ids: set[str] = set()
-    allowed_kinds = {"platform", "ramp", "tunnel"}
+    allowed_kinds = {"platform", "ramp", "ground_slope", "tunnel"}
     for index, item in enumerate(raw_regions):
         label = f"terrain.regions[{index}]"
         if not isinstance(item, dict):
@@ -789,7 +789,7 @@ def _terrain_regions(
                 raise ConfigError(f"{path}: `{label}.{axis_name}` 超出场地")
         if kind == "platform" and height is None:
             raise ConfigError(f"{path}: `{label}.height_mm` 是高地必填项")
-        if kind == "ramp":
+        if kind in {"ramp", "ground_slope"}:
             if (
                 height_start is None
                 or height_end is None
@@ -798,11 +798,11 @@ def _terrain_regions(
                 or slope is None
             ):
                 raise ConfigError(
-                    f"{path}: `{label}` 坡道必须提供起终高度、轴线和坡度"
+                    f"{path}: `{label}` 坡面必须提供起终高度、轴线和坡度"
                 )
             axis_length = math.dist(axis_start, axis_end)
             if axis_length <= 0 or not 0 < slope < 90:
-                raise ConfigError(f"{path}: `{label}` 坡道轴线或坡度无效")
+                raise ConfigError(f"{path}: `{label}` 坡面轴线或坡度无效")
             measured_slope = math.degrees(
                 math.atan(abs(height_end - height_start) / axis_length)
             )

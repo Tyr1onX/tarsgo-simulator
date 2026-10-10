@@ -16,7 +16,7 @@ source:
     - "Figure 5-23 is explicitly a distribution diagram and does not dimension RFID-card edges. Region projections are traced from that official diagram; exact card boundaries remain deferred."
     - "The map is a 2D plan projection with one explicitly approximate central-highland 2.5D closure. Exact elevations, full ramp portals, tunnel placement, steps, overhangs and robot-specific height envelopes remain deferred where the manual lacks a complete model."
     - "Section 4.1 states a black steel perimeter barrier with its upper edge 2.4 m above the field floor and notes possible ~50 mm openings where some wooden field structures meet the floor. The 2D collision model treats the field perimeter as closed; opening locations and vertical projectile/robot geometry remain deferred."
-    - "Figure 4-5 states that long-edge field slopes are 1°–2° from the centerline; elevation and slope physics are deferred."
+    - "Figure 4-5 states that long-edge field slopes are 1°–2° from the centerline. The shared terrain model uses the 1° lower bound; the exact as-built grade, local non-planarity and ballistic/material roll remain deferred or approximate."
     - "The drawing gives the Outpost body diameter but not a fully dimensioned platform plan. The body circle is modeled; the supporting platform footprint remains deferred."
 size_mm:
   length: 28000
@@ -94,10 +94,9 @@ zones:
 obstacles: []
 
 # Terrain features and connections retain the rulebook's semantic topology.
-# The `regions` below are the subset with enough source data for a shared
-# 2.5D closure; the central-highland plan envelope, height and ramp portals
-# are explicitly marked approximations. Other source diagrams still lack the
-# globally placed geometry needed for live collision and path constraints.
+# The V1.4.0 field-wide cross-slope range is represented at its documented
+# lower bound. The central-highland envelope, representative height and ramp
+# portals remain explicit approximations.
 terrain:
   features:
     - {id: field-ground, kind: ground, source: "§4.1, p.31"}
@@ -132,6 +131,31 @@ terrain:
     - {from: road-tunnel-west-entry, to: road-tunnel-west-exit, via: road-tunnel-west-passage}
     - {from: road-tunnel-east-entry, to: road-tunnel-east-exit, via: road-tunnel-east-passage}
   regions:
+    # §4.1/Figures 4-5 and 4-6 state that the field centerline is high and the
+    # surface falls 1°–2° toward both long edges. The exact as-built grade is
+    # not supplied, so this deterministic model uses the official 1° lower
+    # bound. Across each 7500 mm half-width this gives a derived 130.9 mm
+    # height change; that value is a Rules Lab approximation, not survey data.
+    - id: field-cross-slope-north
+      kind: ground_slope
+      points: [[0, 0], [28000, 0], [28000, 7500], [0, 7500]]
+      axis_start: [14000, 0]
+      axis_end: [14000, 7500]
+      height_start_mm: 0
+      height_end_mm: 130.9
+      slope_degrees: 1.0
+      source: "§4.1, Figures 4-5 and 4-6, pp.35-36"
+      approximation: "The manual gives a 1°–2° range; the model uses 1° at the documented centerline and long edges."
+    - id: field-cross-slope-south
+      kind: ground_slope
+      points: [[0, 7500], [28000, 7500], [28000, 15000], [0, 15000]]
+      axis_start: [14000, 7500]
+      axis_end: [14000, 15000]
+      height_start_mm: 130.9
+      height_end_mm: 0
+      slope_degrees: 1.0
+      source: "§4.1, Figures 4-5 and 4-6, pp.35-36; centerline symmetry"
+      approximation: "The manual gives a 1°–2° range; the model uses 1° at the documented centerline and long edges."
     # Figure 4-27 supplies the central highland's 7700 x 10820 mm envelope
     # and 10.5-degree end slopes, but not a global polygon or portal survey.
     # This centered rectangle and constant 350 mm top are Rules Lab

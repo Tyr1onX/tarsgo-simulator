@@ -290,8 +290,15 @@ def test_small_energy_real_projectile_uses_official_detection_circle() -> None:
             entity.center[0] + radial[0] * start_radius,
             entity.center[1] + radial[1] * start_radius,
         )
+        end = (
+            entity.center[0] + radial[0] * end_radius,
+            entity.center[1] + radial[1] * end_radius,
+        )
         displacement = start_radius - end_radius
         dt = displacement / speed
+        projectile_radius = 8.4
+        start_height = match.map.terrain_height_at(start) + projectile_radius
+        end_height = match.map.terrain_height_at(end) + projectile_radius
         match.projectile_system.projectiles.append(
             Projectile(
                 id=projectile_id,
@@ -299,13 +306,14 @@ def test_small_energy_real_projectile_uses_official_detection_circle() -> None:
                 shooter_team_id=RED,
                 caliber="17mm",
                 damage=20,
-                radius=8.4,
+                radius=projectile_radius,
                 speed=speed,
                 effective_range=2400.0,
                 position=start,
                 previous_position=start,
                 velocity=(-radial[0] * speed, -radial[1] * speed),
-                height_mm=match.map.terrain_height_at(start),
+                height_mm=start_height,
+                vertical_velocity_mm_s=(end_height - start_height) / dt,
                 target_id=f"circle-test:{projectile_id}",
             )
         )
@@ -385,6 +393,7 @@ def test_spectator_ai_activates_small_energy_through_real_projectiles() -> None:
         "energy_module_activated",
         "energy_activated",
     ]
+    assert sum(impact.outcome == "energy_activated" for impact in successful_hits) == 1
     assert len({impact.armor_face for impact in successful_hits}) == 5
     assert all(impact.shooter_id == sentry.id for impact in successful_hits)
     assert rules._current_small_energy_mechanism_defense(sentry.team) == pytest.approx(
@@ -422,19 +431,26 @@ def test_small_energy_real_unlit_module_contact_resets_only_its_team() -> None:
         entity.center[1] + radial[1] * start_radius,
     )
     speed = 25_000.0
+    projectile_radius = 8.4
+    start_height = match.map.terrain_height_at(start) + projectile_radius
+    target_height = match.map.terrain_height_at(panel.center) + projectile_radius
+    target_distance = math.dist(start, panel.center)
     wrong_projectile = Projectile(
         id=9901,
         shooter_id=red_sentry.id,
         shooter_team_id=RED,
         caliber="17mm",
         damage=20,
-        radius=8.4,
+        radius=projectile_radius,
         speed=speed,
         effective_range=2400.0,
         position=start,
         previous_position=start,
         velocity=(-radial[0] * speed, -radial[1] * speed),
-        height_mm=match.map.terrain_height_at(start),
+        height_mm=start_height,
+        vertical_velocity_mm_s=(target_height - start_height)
+        / target_distance
+        * speed,
         target_id=f"manual-test:{wrong_index}",
     )
     match.projectile_system.projectiles.append(wrong_projectile)

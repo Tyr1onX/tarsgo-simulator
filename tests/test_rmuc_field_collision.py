@@ -265,8 +265,11 @@ def test_rmuc_combat_blocks_occluded_shots_and_allows_clear_structure_hits() -> 
 
     assert (red.hp, blue.hp) == old_hp
 
+    # Keep the clear-shot fixture on one monotonic face of the official
+    # center-to-edge cross-slope; a ground-level ray across the crest is
+    # correctly occluded by the modeled field surface.
     red.position = (4000.0, 6000.0)
-    blue.position = (4000.0, 8000.0)
+    blue.position = (4000.0, 7000.0)
     update_combat(
         [red, blue],
         match.map,

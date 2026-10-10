@@ -141,7 +141,11 @@ class ProjectileSystem:
             special_is_visible = bool(
                 special is not None
                 and math.dist(shooter.position, special.position) <= maximum_range
-                and game_map.has_line_of_sight(shooter.position, special.position)
+                and game_map.has_line_of_sight(
+                    shooter.position,
+                    special.position,
+                    clearance_mm=parameters.radius,
+                )
             )
             target = (
                 special
@@ -153,6 +157,7 @@ class ProjectileSystem:
                     game_map,
                     can_target,
                     maximum_range,
+                    clearance_mm=parameters.radius,
                 )
             )
             if target is None:
@@ -255,6 +260,7 @@ class ProjectileSystem:
                     shooter.position,
                     target.position,
                     target_structure_id,
+                    clearance_mm=parameters.radius,
                 ):
                     continue
                 candidates.append((distance, target.id, target))
@@ -263,7 +269,11 @@ class ProjectileSystem:
                 special is not None
                 and math.dist(shooter.position, special.position)
                 <= min(shooter.attack_range, parameters.effective_range)
-                and game_map.has_line_of_sight(shooter.position, special.position)
+                and game_map.has_line_of_sight(
+                    shooter.position,
+                    special.position,
+                    clearance_mm=parameters.radius,
+                )
             ):
                 candidates.append(
                     (math.dist(shooter.position, special.position), special.id, special)
@@ -313,6 +323,17 @@ class ProjectileSystem:
                 shooter.position[0] + direction[0] * muzzle_offset,
                 shooter.position[1] + direction[1] * muzzle_offset,
             )
+            # Projectile heights describe the projectile center, so start and
+            # target at one existing projectile radius above the floor.
+            muzzle_height = game_map.terrain_height_at(position) + parameters.radius
+            target_height = (
+                game_map.terrain_height_at(intended_target.position)
+                + parameters.radius
+            )
+            muzzle_to_target = max(
+                math.dist(position, intended_target.position),
+                1.0,
+            )
             projectile_id = self._next_id
             self._next_id += 1
             self.projectiles.append(
@@ -331,12 +352,11 @@ class ProjectileSystem:
                         direction[0] * parameters.speed,
                         direction[1] * parameters.speed,
                     ),
-                    height_mm=game_map.terrain_height_at(shooter.position),
+                    height_mm=muzzle_height,
                     vertical_velocity_mm_s=(
-                        game_map.terrain_height_at(intended_target.position)
-                        - game_map.terrain_height_at(shooter.position)
+                        target_height - muzzle_height
                     )
-                    / max(math.dist(shooter.position, intended_target.position), 1.0)
+                    / muzzle_to_target
                     * parameters.speed,
                     target_id=intended_target.id,
                 )
@@ -404,7 +424,9 @@ class ProjectileSystem:
                 start[1] + projectile.velocity[1] / projectile.speed * distance,
             )
             start_height = (
-                game_map.terrain_height_at(start)
+                # A projectile without an explicit trajectory still starts
+                # with its center one radius above the local field surface.
+                game_map.terrain_height_at(start) + projectile.radius
                 if projectile.height_mm is None
                 else projectile.height_mm
             )
@@ -625,6 +647,8 @@ def _nearest_visible_target(
     game_map: GameMap,
     can_target: Callable[[DamageableTarget], bool],
     maximum_range: float,
+    *,
+    clearance_mm: float = 0.0,
 ) -> Robot | Structure | None:
     candidates: list[tuple[float, str, Robot | Structure]] = []
     for target in [*robots, *structures]:
@@ -638,6 +662,7 @@ def _nearest_visible_target(
             shooter.position,
             target.position,
             structure_id,
+            clearance_mm=clearance_mm,
         ):
             continue
         candidates.append((distance, target.id, target))

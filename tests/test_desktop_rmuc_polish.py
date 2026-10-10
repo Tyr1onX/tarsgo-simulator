@@ -245,8 +245,10 @@ def test_approximate_central_terrain_is_visible_in_pygame_field_layer() -> None:
     assert rendered == tuple(region.id for region in match.map.terrain_regions)
     platform_point = tuple(round(value) for value in viewport.world_to_screen((11000, 3000)))
     ramp_point = tuple(round(value) for value in viewport.world_to_screen((14000, 1147)))
+    cross_slope_point = tuple(round(value) for value in viewport.world_to_screen((6000, 3000)))
     assert screen.get_at(platform_point).a > 0
     assert screen.get_at(ramp_point).a > 0
+    assert screen.get_at(cross_slope_point).a > 0
 
 
 @pytest.mark.parametrize(
@@ -806,6 +808,7 @@ def test_returning_pose_matches_real_projectile_hit_and_desktop_projection(
             position=start,
             previous_position=start,
             velocity=(-axis[0] * 20_000.0, -axis[1] * 20_000.0),
+            height_mm=500.0,
         )
     )
     match.update(0.05)
