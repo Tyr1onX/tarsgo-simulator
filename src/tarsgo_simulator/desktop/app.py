@@ -285,9 +285,9 @@ def main(scenario_path: str | Path | None = None) -> None:
                         and _is_rmuc_rules_lab(match)
                         and event.key == pygame.K_b
                     ):
-                        match.order_activate_small_energy_mechanism(
-                            next(iter(selected_robot_ids))
-                        )
+                        robot_id = next(iter(selected_robot_ids))
+                        if not match.order_activate_small_energy_mechanism(robot_id):
+                            match.order_activate_large_energy_mechanism(robot_id)
                     elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
@@ -4772,6 +4772,127 @@ def _draw_selected_paths(
             screen.blit(label_surface, label_rect)
 
 
+def _draw_rmuc_large_energy_mechanism(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    hud_font: pygame.font.Font,
+    viewport: Viewport,
+    match: Match,
+    visual_state,
+) -> None:
+    """Draw official 300 mm targets, ring bands, active lamps, and group facts."""
+    center_world = (match.map.width / 2.0, match.map.height / 2.0)
+    center = tuple(round(value) for value in viewport.world_to_screen(center_world))
+    active_lights: dict[int, list[tuple[int, int, int]]] = {}
+    first_hits: dict[int, list[tuple[int, int, int]]] = {}
+    for team_state in visual_state.teams:
+        team_color = _rmuc_team_color(match, team_state.team_id)
+        if team_state.status in {"activating", "failed"}:
+            for module_index in team_state.lit_module_indices:
+                active_lights.setdefault(module_index, []).append(team_color)
+        if team_state.first_hit_module_index is not None:
+            first_hits.setdefault(
+                team_state.first_hit_module_index,
+                [],
+            ).append(team_color)
+
+    for panel in visual_state.panels:
+        points = tuple(
+            tuple(round(value) for value in viewport.world_to_screen(vertex))
+            for vertex in panel.vertices
+        )
+        if len(points) < 3:
+            continue
+        pygame.draw.polygon(screen, (17, 23, 29), points)
+        pygame.draw.polygon(screen, (131, 143, 150), points, width=2)
+        panel_center = tuple(
+            round(value) for value in viewport.world_to_screen(panel.center)
+        )
+        radius = max(
+            2,
+            round(viewport.world_length_to_screen(panel.detection_radius_mm)),
+        )
+        pygame.draw.circle(screen, (37, 47, 54), panel_center, radius)
+        for ring in range(1, 11):
+            ring_radius = max(1, round(radius * ring / 10.0))
+            color = (235, 114, 62) if ring % 2 else (183, 193, 198)
+            pygame.draw.circle(screen, color, panel_center, ring_radius, width=1)
+        for offset, color in enumerate(first_hits.get(panel.module_index, ())[:2]):
+            pygame.draw.circle(
+                screen,
+                color,
+                (panel_center[0] - 3 + offset * 6, panel_center[1]),
+                max(2, round(radius * 0.16)),
+            )
+        for offset, color in enumerate(active_lights.get(panel.module_index, ())[:2]):
+            pygame.draw.circle(
+                screen,
+                color,
+                (panel_center[0] - 3 + offset * 6, panel_center[1]),
+                max(2, round(radius * 0.24)),
+                width=1,
+            )
+
+    center_radius = max(4, round(viewport.world_length_to_screen(105.0)))
+    pygame.draw.circle(screen, (17, 24, 30), center, center_radius)
+    pygame.draw.circle(screen, (183, 193, 198), center, center_radius, width=2)
+    label = font.render("大能量机关", True, (239, 225, 206))
+    label_rect = label.get_rect(center=(center[0], center[1] - center_radius - 14))
+    pygame.draw.rect(screen, (14, 19, 24), label_rect.inflate(10, 4), border_radius=4)
+    screen.blit(label, label_rect)
+
+    cards = []
+    for team_state in visual_state.teams:
+        side_name = "红方" if team_state.team_id == match.config.scenario.teams["red"].team_id else "蓝方"
+        if team_state.status == "activating":
+            state_text = (
+                f"{side_name}  {team_state.completed_groups}/5 组"
+                f"   灯臂 {team_state.activated_lamp_count}"
+            )
+            if team_state.average_ring_score is not None:
+                state_text += f"   均环 {team_state.average_ring_score:.1f}"
+            state_text += f"   {team_state.activation_remaining:04.1f}s"
+        elif team_state.status == "activated":
+            state_text = (
+                f"{side_name}  已激活  均环 "
+                f"{(team_state.average_ring_score or 0.0):.1f}"
+                f"   灯臂 {team_state.activated_lamp_count}"
+                f"   增益 {team_state.effect_remaining:04.1f}s"
+            )
+        elif team_state.status == "failed":
+            state_text = f"{side_name}  激活失败 · 重新点亮"
+        else:
+            state_text = (
+                f"{side_name}  未激活  可用机会 "
+                f"{team_state.opportunities_remaining}"
+            )
+        cards.append(
+            hud_font.render(
+                state_text,
+                True,
+                _rmuc_team_color(match, team_state.team_id),
+            )
+        )
+    panel_extent = max(
+        (
+            abs(round(viewport.world_to_screen(vertex)[1]) - center[1])
+            for panel in visual_state.panels
+            for vertex in panel.vertices
+        ),
+        default=center_radius,
+    )
+    first_y = center[1] + panel_extent + 8
+    for index, card in enumerate(cards):
+        card_rect = card.get_rect(center=(center[0], first_y + index * 17))
+        pygame.draw.rect(
+            screen,
+            (14, 19, 24),
+            card_rect.inflate(10, 4),
+            border_radius=4,
+        )
+        screen.blit(card, card_rect)
+
+
 def _draw(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -5046,14 +5167,24 @@ def _draw(
         if visual_state is not None:
             _draw_rmuc_dart_launchers(screen, viewport, match, visual_state)
 
-        if display_state is not None and display_state.small_energy_mechanism is not None:
-            _draw_rmuc_small_energy_mechanism(
-                screen,
-                small_font,
-                viewport,
-                match,
-                display_state.small_energy_mechanism,
-            )
+        if display_state is not None:
+            if display_state.large_energy_mechanism is not None:
+                _draw_rmuc_large_energy_mechanism(
+                    screen,
+                    small_font,
+                    hud_font,
+                    viewport,
+                    match,
+                    display_state.large_energy_mechanism,
+                )
+            elif display_state.small_energy_mechanism is not None:
+                _draw_rmuc_small_energy_mechanism(
+                    screen,
+                    small_font,
+                    viewport,
+                    match,
+                    display_state.small_energy_mechanism,
+                )
 
     structure_statuses = (
         {
