@@ -59,6 +59,10 @@ def _ticks(match: Match, count: int) -> None:
 def test_17mm_continuous_fire_keeps_multiple_independent_projectiles_in_flight() -> None:
     match = _match()
     shooter, target = _prepare_duel(match)
+    # Keep the firing lane clear of the now-physical energy-mechanism target
+    # at field center; this test measures independent projectile lifetimes.
+    shooter.position = (12000.0, 3000.0)
+    target.position = (14000.0, 3000.0)
     target_hp = target.hp
 
     match.update(TICK)
@@ -96,6 +100,10 @@ def test_swept_collision_catches_a_projectile_crossing_a_robot_in_one_large_step
 def test_projectile_aims_at_current_target_position_and_can_miss_a_moving_robot() -> None:
     match = _match()
     shooter, target = _prepare_duel(match, distance=2200.0)
+    # Keep this miss case out of the new physical center energy-mechanism
+    # collision volume; that field entity legitimately consumes crossing shots.
+    shooter.position = (11000.0, 3000.0)
+    target.position = (13200.0, 3000.0)
     target_hp = target.hp
 
     match.update(TICK)  # Commit one shot.

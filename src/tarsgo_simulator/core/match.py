@@ -541,6 +541,27 @@ class Match:
             return False
         return self.ruleset.exchange_projectiles(self, robot)
 
+    def order_activate_small_energy_mechanism(self, robot_id: str) -> bool:
+        """Send the eligible selected robot's legal small-mechanism command."""
+        if self.finished:
+            return False
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if (
+            robot is None
+            or robot.team != self.config.scenario.player_team
+            or (
+                not self.is_player_controlled(robot_id)
+                and robot.type != "sentry"
+            )
+        ):
+            return False
+        action = getattr(
+            self.ruleset,
+            "request_small_energy_mechanism_activation",
+            None,
+        )
+        return bool(callable(action) and action(self, robot))
+
     def apply_damage(
         self,
         target: DamageableTarget,
@@ -1131,6 +1152,21 @@ class Match:
                 existing_projectile_ids = tuple(
                     projectile.id for projectile in self.projectiles
                 )
+                small_energy_aim_targets = getattr(
+                    self.ruleset,
+                    "small_energy_mechanism_aim_targets",
+                    lambda: {},
+                )()
+                small_energy_hitboxes = getattr(
+                    self.ruleset,
+                    "small_energy_mechanism_projectile_hitboxes",
+                    lambda _time: (),
+                )(self.elapsed_time + dt)
+                small_energy_hit = getattr(
+                    self.ruleset,
+                    "on_small_energy_mechanism_projectile_hit",
+                    None,
+                )
                 parameters_for = getattr(self.ruleset, "projectile_parameters_for")
                 aim_parameters_for = getattr(
                     self.ruleset,
@@ -1144,6 +1180,7 @@ class Match:
                     can_target=self.ruleset.can_target,
                     parameters_for=parameters_for,
                     aim_parameters_for=aim_parameters_for,
+                    special_aim_targets=small_energy_aim_targets,
                 )
                 self.projectile_system.launch_ready_shots(
                     self.robots,
@@ -1153,6 +1190,7 @@ class Match:
                     can_target=self.ruleset.can_target,
                     parameters_for=parameters_for,
                     on_attack_committed=self.ruleset.on_attack_committed,
+                    special_aim_targets=small_energy_aim_targets,
                 )
                 self.projectile_system.advance(
                     dt,
@@ -1181,6 +1219,9 @@ class Match:
                         source_robot=attacker,
                         structure_hit=hit,
                     ),
+                    special_hitboxes=small_energy_hitboxes,
+                    on_special_hit=small_energy_hit,
+                    simulation_start_time=self.elapsed_time,
                 )
             else:
                 update_combat(
@@ -3040,6 +3081,87 @@ class Match:
             )
             return
 
+        start_small_energy = getattr(
+            self.ruleset,
+            "request_small_energy_mechanism_activation",
+            None,
+        )
+        activation_available = getattr(
+            self.ruleset,
+            "small_energy_mechanism_activation_available",
+            None,
+        )
+        if (
+            robot.type == "sentry"
+            and callable(start_small_energy)
+            and callable(activation_available)
+            and activation_available(robot.team)
+        ):
+            activation_position_for = getattr(
+                self.ruleset,
+                "small_energy_mechanism_activation_position",
+                None,
+            )
+            activation_position = (
+                activation_position_for(robot.team)
+                if callable(activation_position_for)
+                else None
+            )
+            if (
+                activation_position is not None
+                and math.dist(robot.position, activation_position) <= 400.0
+            ):
+                start_small_energy(self, robot)
+        energy_target_for = getattr(
+            self.ruleset,
+            "small_energy_mechanism_aim_targets",
+            None,
+        )
+        energy_target = (
+            energy_target_for().get(robot.id)
+            if callable(energy_target_for)
+            else None
+        )
+        if energy_target is not None:
+            target_key = energy_target.id
+            approach_goal = energy_target.approach_position
+            is_at_firing_position = (
+                approach_goal is None
+                or math.dist(robot.position, approach_goal)
+                <= energy_target.approach_tolerance_mm
+            )
+            if (
+                is_at_firing_position
+                and math.dist(robot.position, energy_target.position)
+                <= robot.attack_range
+                and self.map.has_line_of_sight(
+                    robot.position,
+                    energy_target.position,
+                )
+            ):
+                self._clear_ai_path(robot)
+                self._ai_intents[robot.id] = "击打小能量机关"
+                self._remember_ai_decision(robot, target_key)
+                return
+            if (
+                approach_goal is not None
+                and math.dist(robot.position, approach_goal) <= 3_000.0
+            ):
+                # The small-energy task is opportunistic for spectator AI.
+                # Starting from a distant staging area displaced the sentry
+                # from its normal tactical route and caused collision queues.
+                # Only take a short approach when the robot is already near
+                # the legal radial firing lane; the distance is a Rules Lab
+                # AI policy approximation, not an official movement rule.
+                self._set_ai_goal(
+                    robot,
+                    "前往小能量机关",
+                    approach_goal,
+                    target_key=target_key,
+                    sticky=False,
+                )
+                return
+
         projectiles = {
             robot_id: count
             for robot_id, _projectile, count in display_state.robot_projectiles
@@ -3183,6 +3305,16 @@ class Match:
                 return
             self._refresh_rmuc_team_strategies()
             self._update_rmuc_radar_ai(dt, display_state)
+            small_energy_targets_for = getattr(
+                self.ruleset,
+                "small_energy_mechanism_aim_targets",
+                None,
+            )
+            small_energy_targets = (
+                small_energy_targets_for()
+                if callable(small_energy_targets_for)
+                else {}
+            )
             for robot in sorted(self.robots, key=lambda item: item.id):
                 elapsed = self._ai_replan_elapsed[robot.id] + dt
                 if not robot.alive:
@@ -3191,8 +3323,12 @@ class Match:
                         elapsed % _RMUC_AI_REPLAN_INTERVAL
                     )
                     continue
-                if elapsed >= _RMUC_AI_REPLAN_INTERVAL:
-                    elapsed %= _RMUC_AI_REPLAN_INTERVAL
+                special_target_active = robot.id in small_energy_targets
+                replan_interval = (
+                    0.10 if special_target_active else _RMUC_AI_REPLAN_INTERVAL
+                )
+                if elapsed >= replan_interval:
+                    elapsed %= replan_interval
                     self._rmuc_ai_step(robot, display_state)
                 self._ai_replan_elapsed[robot.id] = elapsed
             return

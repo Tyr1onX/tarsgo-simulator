@@ -280,6 +280,14 @@ def main(scenario_path: str | Path | None = None) -> None:
                     elif spectator is not None and event.key == pygame.K_f:
                         if len(selected_robot_ids) == 1:
                             spectator.follow(next(iter(selected_robot_ids)))
+                    elif (
+                        len(selected_robot_ids) == 1
+                        and _is_rmuc_rules_lab(match)
+                        and event.key == pygame.K_b
+                    ):
+                        match.order_activate_small_energy_mechanism(
+                            next(iter(selected_robot_ids))
+                        )
                     elif len(selected_robot_ids) == 1 and not _is_rmuc_rules_lab(match):
                         robot_id = next(iter(selected_robot_ids))
                         robot = next(
@@ -897,6 +905,12 @@ def _selected_unit_lines(
         lines.append(f"能量单元  {engineer_units[robot.id]}")
     if robot.id in reserves:
         lines.append(f"堡垒储备  {reserves[robot.id]}")
+    if (
+        robot.type in {"infantry", "sentry"}
+        and _is_rmuc_rules_lab(match)
+        and match.is_player_controlled(robot.id)
+    ):
+        lines.append("小能量机关 选中后按 B 发起激活")
 
     raw_status = statuses.get(robot.id, "")
     defense = _defense_from_status(raw_status)
@@ -2450,7 +2464,7 @@ def _draw_rmuc_terrain_regions(
         if region.kind == "platform":
             center = (
                 sum(point[0] for point in region.vertices) / len(region.vertices),
-                sum(point[1] for point in region.vertices) / len(region.vertices),
+                min(point[1] for point in region.vertices) + 300.0,
             )
             label = f"中央高地 约 {int(round(region.height_mm))} mm"
             if region.approximation:
@@ -3345,6 +3359,112 @@ def _draw_outpost_rotor(
         pygame.draw.circle(screen, team_color, panel_center, max(1, round(size * 0.075)))
     pygame.draw.circle(screen, (14, 19, 23), center, max(2, round(size * 0.12)))
     pygame.draw.circle(screen, (191, 199, 204), center, max(1, round(size * 0.055)))
+
+
+def _draw_rmuc_small_energy_mechanism(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    viewport: Viewport,
+    match: Match,
+    visual_state,
+) -> None:
+    """Draw the same rotating module projection consumed by projectile hits."""
+    center_world = (
+        match.map.width / 2.0,
+        match.map.height / 2.0,
+    )
+    center = tuple(round(value) for value in viewport.world_to_screen(center_world))
+    center_radius = max(3, round(viewport.world_length_to_screen(105.0)))
+    active_lights: dict[int, list[tuple[int, int, int]]] = {}
+    completed_lights: dict[int, list[tuple[int, int, int]]] = {}
+    failure_colors = []
+    for state in visual_state.teams:
+        color = _rmuc_team_color(match, state.team_id)
+        if state.status == "failed":
+            failure_colors.append(color)
+        if (
+            state.status in {"activating", "failed"}
+            and state.lit_module_index is not None
+        ):
+            active_lights.setdefault(state.lit_module_index, []).append(color)
+        for module_index in state.completed_module_indices:
+            completed_lights.setdefault(module_index, []).append(color)
+
+    for panel in visual_state.panels:
+        points = tuple(
+            tuple(round(value) for value in viewport.world_to_screen(vertex))
+            for vertex in panel.vertices
+        )
+        if len(points) < 3:
+            continue
+        pygame.draw.polygon(screen, (16, 23, 29), points)
+        pygame.draw.polygon(screen, (124, 137, 145), points, width=2)
+        panel_center = tuple(
+            round(value) for value in viewport.world_to_screen(panel.center)
+        )
+        target_radius = max(
+            1,
+            round(viewport.world_length_to_screen(panel.detection_radius_mm)),
+        )
+        pygame.draw.circle(
+            screen,
+            (156, 169, 177),
+            panel_center,
+            target_radius,
+            width=1,
+        )
+        completed = completed_lights.get(panel.module_index, ())
+        if completed:
+            pygame.draw.circle(
+                screen,
+                (236, 190, 72),
+                panel_center,
+                max(3, round(viewport.world_length_to_screen(55.0))),
+            )
+            for offset, color in enumerate(completed[:2]):
+                pygame.draw.circle(
+                    screen,
+                    color,
+                    (panel_center[0] - 4 + offset * 8, panel_center[1]),
+                    max(2, round(viewport.world_length_to_screen(30.0))),
+                )
+        for offset, color in enumerate(active_lights.get(panel.module_index, ())[:2]):
+            pygame.draw.circle(
+                screen,
+                color,
+                (panel_center[0] - 4 + offset * 8, panel_center[1]),
+                max(3, round(viewport.world_length_to_screen(42.0))),
+            )
+
+    pygame.draw.circle(screen, (18, 25, 31), center, center_radius)
+    pygame.draw.circle(screen, (171, 184, 191), center, center_radius, width=2)
+    for color in failure_colors[:2]:
+        pygame.draw.circle(
+            screen,
+            color,
+            center,
+            max(4, round(viewport.world_length_to_screen(128.0))),
+            width=2,
+        )
+    label = font.render("小能量机关", True, (219, 226, 229))
+    panel_extent = max(
+        (
+            abs(round(viewport.world_to_screen(vertex)[1]) - center[1])
+            for panel in visual_state.panels
+            for vertex in panel.vertices
+        ),
+        default=center_radius,
+    )
+    label_rect = label.get_rect(
+        center=(center[0], center[1] + panel_extent + label.get_height() // 2 + 8)
+    )
+    pygame.draw.rect(
+        screen,
+        (14, 19, 24),
+        label_rect.inflate(10, 4),
+        border_radius=4,
+    )
+    screen.blit(label, label_rect)
 
 
 def _rotate_point(
@@ -4925,6 +5045,15 @@ def _draw(
 
         if visual_state is not None:
             _draw_rmuc_dart_launchers(screen, viewport, match, visual_state)
+
+        if display_state is not None and display_state.small_energy_mechanism is not None:
+            _draw_rmuc_small_energy_mechanism(
+                screen,
+                small_font,
+                viewport,
+                match,
+                display_state.small_energy_mechanism,
+            )
 
     structure_statuses = (
         {
