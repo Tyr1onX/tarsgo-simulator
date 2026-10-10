@@ -98,6 +98,29 @@ class EnergyMechanismDisplayState:
     teams: tuple[EnergyMechanismTeamDisplayState, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class LargeEnergyMechanismTeamDisplayState:
+    team_id: str
+    status: str
+    lit_module_indices: tuple[int, ...]
+    first_hit_module_index: int | None
+    completed_groups: int
+    activated_lamp_count: int
+    ring_scores: tuple[int, ...]
+    average_ring_score: float | None
+    hit_remaining: float
+    activation_remaining: float
+    opportunities_remaining: int
+    effect_remaining: float
+
+
+@dataclass(frozen=True, slots=True)
+class LargeEnergyMechanismDisplayState:
+    rotation_angle: float
+    panels: tuple[EnergyMechanismPanelDisplayState, ...]
+    teams: tuple[LargeEnergyMechanismTeamDisplayState, ...]
+
+
 @dataclass(frozen=True)
 class StructureParameters:
     max_hp: int
@@ -135,6 +158,7 @@ class RuleSetDisplayState:
     ] = ()
     energy_mechanism_effect_timers: tuple[tuple[str, str, float], ...] = ()
     small_energy_mechanism: EnergyMechanismDisplayState | None = None
+    large_energy_mechanism: LargeEnergyMechanismDisplayState | None = None
     dart_system_statuses: tuple[
         tuple[str, int, int, str, float, str, str], ...
     ] = ()

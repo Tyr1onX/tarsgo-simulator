@@ -24,3 +24,4 @@ class ProjectileSpecialHitbox:
     module_id: str
     center: tuple[float, float]
     radius: float
+    score_on_trajectory: bool = False

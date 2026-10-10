@@ -224,17 +224,21 @@ class ProjectileSystem:
                 continue
             if (
                 shooter.aim_target_id is not None
-                and shooter.aim_target_id.startswith("small-energy:")
+                and shooter.aim_target_id.startswith(
+                    ("small-energy:", "large-energy:")
+                )
                 and any(
                     projectile.shooter_id == shooter.id
                     and projectile.target_id is not None
-                    and projectile.target_id.startswith("small-energy:")
+                    and projectile.target_id.startswith(
+                        ("small-energy:", "large-energy:")
+                    )
                     for projectile in self.projectiles
                 )
             ):
-                # A new lamp is selected only after the previous real shot is
-                # resolved. Otherwise a queued second shot could hit the now
-                # unlit module and legally reset the team's sequence.
+                # A new special target is selected only after the previous
+                # real shot resolves. A queued shot could hit a newly unlit
+                # module and incorrectly reset the team's sequence.
                 continue
 
             candidates: list[
@@ -458,13 +462,19 @@ class ProjectileSystem:
                     )
                 applied = 0
                 outcome = "obstacle" if target is None else "friendly_contact"
-                if target_kind == "energy_mechanism":
+                if target_kind in {"energy_mechanism", "large_energy_mechanism"}:
                     special = target
                     if isinstance(special, ProjectileSpecialHitbox) and on_special_hit:
-                        surface_point = (
-                            point[0] - projectile.radius * normal[0],
-                            point[1] - projectile.radius * normal[1],
-                        )
+                        if special.score_on_trajectory:
+                            surface_point = _closest_point_on_projectile_trajectory(
+                                projectile,
+                                special.center,
+                            )
+                        else:
+                            surface_point = (
+                                point[0] - projectile.radius * normal[0],
+                                point[1] - projectile.radius * normal[1],
+                            )
                         outcome = on_special_hit(
                             projectile,
                             special,
@@ -493,7 +503,7 @@ class ProjectileSystem:
                         {"shots_fired": 0, "armor_hits": 0, "applied_damage": 0},
                     )
                 if (
-                    target_kind != "energy_mechanism"
+                    target_kind not in {"energy_mechanism", "large_energy_mechanism"}
                     and target is not None
                     and target.team != projectile.shooter_team_id
                 ):
@@ -795,7 +805,7 @@ def _first_collision(
                 f"{special.id}:{special.module_id}",
                 special,
                 normal,
-                "energy_module",
+                special.target_kind,
                 special.module_id,
                 None,
                 False,
@@ -1303,6 +1313,36 @@ def _moving_circle_contact(
     if not 0.0 <= fraction <= 1.0:
         return None
     return fraction, (start[0] + dx * fraction, start[1] + dy * fraction)
+
+
+def _closest_point_on_projectile_trajectory(
+    projectile: Projectile,
+    target: tuple[float, float],
+) -> tuple[float, float]:
+    velocity_length = math.hypot(*projectile.velocity)
+    if velocity_length <= 1e-9:
+        return projectile.position
+
+    direction = (
+        projectile.velocity[0] / velocity_length,
+        projectile.velocity[1] / velocity_length,
+    )
+    origin = (
+        projectile.position[0] - direction[0] * projectile.traveled,
+        projectile.position[1] - direction[1] * projectile.traveled,
+    )
+    projection = max(
+        0.0,
+        min(
+            max(0.0, projectile.effective_range),
+            (target[0] - origin[0]) * direction[0]
+            + (target[1] - origin[1]) * direction[1],
+        ),
+    )
+    return (
+        origin[0] + direction[0] * projection,
+        origin[1] + direction[1] * projection,
+    )
 
 
 def _boundary_contact(

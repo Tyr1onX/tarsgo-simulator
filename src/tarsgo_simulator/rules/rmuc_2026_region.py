@@ -6,8 +6,9 @@ import random
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
-from tarsgo_simulator.core.events import MatchEventType, ZoneEventType
+from tarsgo_simulator.core.events import MatchEvent, MatchEventType, ZoneEventType
 from tarsgo_simulator.core.energy_mechanism import (
+    LargeEnergyMechanism,
     SmallEnergyMechanism,
 )
 from tarsgo_simulator.core.map import Zone
@@ -31,6 +32,8 @@ from tarsgo_simulator.rules.protocol import (
     EnergyMechanismDisplayState,
     EnergyMechanismPanelDisplayState,
     EnergyMechanismTeamDisplayState,
+    LargeEnergyMechanismDisplayState,
+    LargeEnergyMechanismTeamDisplayState,
     MatchResult,
     ProjectileParameters,
     ProjectileRobotHitboxParameters,
@@ -58,6 +61,11 @@ _SMALL_ENERGY_EXPERIENCE_BONUS_CAP = 1200.0
 # the failure lamp remains visible. This short presentation interval is a
 # Rules Lab approximation and does not delay the next legal activation.
 _SMALL_ENERGY_FAILURE_DISPLAY_SECONDS = 0.75
+_LARGE_ENERGY_OPPORTUNITY_TIMES = (180.0, 255.0, 330.0)
+_LARGE_ENERGY_ACTIVATION_WINDOW = 20.0
+_LARGE_ENERGY_LIT_HIT_WINDOW = 2.5
+_LARGE_ENERGY_BONUS_HIT_WINDOW = 1.0
+_LARGE_ENERGY_FAILURE_DISPLAY_SECONDS = 0.75
 _DART_OPPORTUNITY_TIMES = (30.0, 240.0)
 _DART_GATE_OPENING_SECONDS = 7.0
 _DART_FIRING_WINDOW_SECONDS = 30.0
@@ -252,6 +260,22 @@ class _SmallEnergyMechanismTeamState:
     lit_module_deadline: float | None = None
     lit_approach_position: tuple[float, float] | None = None
     completed_modules: set[int] = field(default_factory=set)
+    last_failure_at: float | None = None
+    failure_count: int = 0
+
+
+@dataclass
+class _LargeEnergyMechanismTeamState:
+    opportunities_used: int = 0
+    status: str = "inactive"
+    attempt_started_at: float | None = None
+    attempt_deadline: float | None = None
+    initiator_robot_id: str | None = None
+    lit_module_indices: tuple[int, ...] = ()
+    first_hit_module_index: int | None = None
+    hit_deadline: float | None = None
+    completed_groups: int = 0
+    ring_scores: list[int] = field(default_factory=list)
     last_failure_at: float | None = None
     failure_count: int = 0
 
@@ -2673,11 +2697,23 @@ class RMUC2026RegionalRules:
         self._outpost_rotation_generation = 0
         self._small_energy_mechanism_generation = 0
         self._small_energy_mechanism_entity: SmallEnergyMechanism | None = None
+        self._large_energy_mechanism_entity: LargeEnergyMechanism | None = None
+        self._large_energy_mechanism_generation = 0
         self._small_energy_mechanism_by_team: dict[
             str, _SmallEnergyMechanismTeamState
         ] = {}
+        self._large_energy_mechanism_by_team: dict[
+            str, _LargeEnergyMechanismTeamState
+        ] = {}
         self._small_energy_rng_by_team: dict[str, random.Random] = {}
+        self._large_energy_rng_by_team: dict[str, random.Random] = {}
+        self._large_energy_speed_parameters_by_opportunity: dict[
+            float, tuple[float, float]
+        ] = {}
         self._small_energy_mechanism_activation_times_by_team: dict[
+            str, list[float]
+        ] = {}
+        self._large_energy_mechanism_activation_times_by_team: dict[
             str, list[float]
         ] = {}
         self._radar_vulnerability_by_robot: dict[str, _RadarVulnerabilityState] = {}
@@ -3006,6 +3042,7 @@ class RMUC2026RegionalRules:
                 if buff.remaining > 0
             ),
             small_energy_mechanism=self._small_energy_display_state(),
+            large_energy_mechanism=self._large_energy_display_state(),
             dart_system_statuses=tuple(
                 self._dart_display_status(team_id, state)
                 for team_id, state in sorted(self._dart_system_by_team.items())
@@ -4630,7 +4667,7 @@ class RMUC2026RegionalRules:
         self,
     ) -> dict[str, ProjectileAimTarget]:
         entity = self._small_energy_mechanism_entity
-        if entity is None:
+        if entity is None or self._current_time >= _SMALL_ENERGY_PHASE_END - 1e-9:
             return {}
         panels = {
             panel.module_index: panel
@@ -4664,7 +4701,7 @@ class RMUC2026RegionalRules:
         elapsed_time: float,
     ) -> tuple[ProjectileSpecialHitbox, ...]:
         entity = self._small_energy_mechanism_entity
-        if entity is None:
+        if entity is None or elapsed_time >= _SMALL_ENERGY_PHASE_END - 1e-9:
             return ()
         return tuple(
             ProjectileSpecialHitbox(
@@ -4960,6 +4997,588 @@ class RMUC2026RegionalRules:
                 for panel in panels
             ),
             teams=tuple(team_display),
+        )
+
+    def _large_energy_opportunities_earned(self, elapsed_time: float) -> int:
+        return sum(
+            elapsed_time + 1e-9 >= opportunity_time
+            for opportunity_time in _LARGE_ENERGY_OPPORTUNITY_TIMES
+        )
+
+    def _large_energy_opportunities_remaining(
+        self,
+        team_id: str,
+        elapsed_time: float,
+    ) -> int:
+        state = self._large_energy_mechanism_by_team.get(team_id)
+        if state is None:
+            return 0
+        return max(
+            0,
+            self._large_energy_opportunities_earned(elapsed_time)
+            - state.opportunities_used,
+        )
+
+    def _large_energy_buff_remaining(self, team_id: str) -> float:
+        return max(
+            (
+                buff.remaining
+                for buff in self._energy_mechanism_buffs_by_team.get(team_id, ())
+                if buff.mechanism == "large" and buff.remaining > 0
+            ),
+            default=0.0,
+        )
+
+    def large_energy_mechanism_activation_available(self, team_id: str) -> bool:
+        state = self._large_energy_mechanism_by_team.get(team_id)
+        return bool(
+            self._match is not None
+            and not self._match.finished
+            and state is not None
+            and state.status == "inactive"
+            and self._current_time < self._time_limit - 1e-9
+            and self._large_energy_buff_remaining(team_id) <= 1e-9
+            and self._large_energy_opportunities_remaining(
+                team_id,
+                self._current_time,
+            ) > 0
+        )
+
+    def request_large_energy_mechanism_activation(
+        self,
+        match: "Match",
+        initiator: Robot,
+    ) -> bool:
+        """Start a legal Infantry/Sentry large-mechanism activation attempt."""
+        state = self._large_energy_mechanism_by_team.get(initiator.team)
+        elapsed = match.elapsed_time
+        rotor_was_active = self._large_energy_any_team_activating()
+        if (
+            match.finished
+            or self._match is not match
+            or state is None
+            or self._robots_by_id.get(initiator.id) is not initiator
+            or initiator.type not in {"infantry", "sentry"}
+            or not initiator.alive
+            or elapsed >= self._time_limit - 1e-9
+            or state.status != "inactive"
+            or self._large_energy_buff_remaining(initiator.team) > 0
+            or self._large_energy_opportunities_remaining(
+                initiator.team,
+                elapsed,
+            ) <= 0
+        ):
+            return False
+
+        # V1.4.0 does not say whether a failed attempt refunds its opportunity.
+        # As with the P4 state machine, Rules Lab consumes it at command time.
+        state.opportunities_used += 1
+        state.status = "activating"
+        state.attempt_started_at = elapsed
+        state.attempt_deadline = elapsed + _LARGE_ENERGY_ACTIVATION_WINDOW
+        state.initiator_robot_id = initiator.id
+        state.completed_groups = 0
+        state.ring_scores.clear()
+        state.first_hit_module_index = None
+        state.last_failure_at = None
+
+        opportunity_time = max(
+            opportunity_time
+            for opportunity_time in _LARGE_ENERGY_OPPORTUNITY_TIMES
+            if opportunity_time <= elapsed + 1e-9
+        )
+        speed_a, speed_omega = self._large_energy_speed_parameters_by_opportunity[
+            opportunity_time
+        ]
+        entity = self._large_energy_mechanism_entity
+        if entity is not None and not rotor_was_active:
+            entity.start_activation(
+                elapsed,
+                speed_a=speed_a,
+                speed_omega=speed_omega,
+                speed_time_origin=opportunity_time,
+            )
+        self._light_next_large_energy_group(initiator.team, state, elapsed)
+        return True
+
+    def _large_energy_any_team_activating(self) -> bool:
+        return any(
+            state.status == "activating"
+            for state in self._large_energy_mechanism_by_team.values()
+        )
+
+    def _large_energy_approach_position(
+        self,
+        module_index: int | None,
+        *,
+        team_id: str | None = None,
+        at_time: float | None = None,
+    ) -> tuple[float, float] | None:
+        entity = self._large_energy_mechanism_entity
+        if entity is None:
+            return None
+        if module_index is None:
+            if self._match is None or team_id is None:
+                return None
+            side = next(
+                (
+                    side
+                    for side, team in self._match.config.scenario.teams.items()
+                    if team.team_id == team_id
+                ),
+                None,
+            )
+            if side is None:
+                return None
+            dx, dy = (-1.0, 0.0) if side == "red" else (1.0, 0.0)
+        else:
+            panel = next(
+                (
+                    panel
+                    for panel in entity.panels_at(
+                        self._current_time if at_time is None else at_time
+                    )
+                    if panel.module_index == module_index
+                ),
+                None,
+            )
+            if panel is None:
+                return None
+            dx = panel.center[0] - entity.center[0]
+            dy = panel.center[1] - entity.center[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        # The arm reach and 700 mm shot clearance are Rules Lab geometry.
+        approach_distance = entity.panel_outer_radius_mm + 700.0
+        return (
+            entity.center[0] + dx / length * approach_distance,
+            entity.center[1] + dy / length * approach_distance,
+        )
+
+    def large_energy_mechanism_activation_position(
+        self,
+        team_id: str,
+    ) -> tuple[float, float] | None:
+        return self._large_energy_approach_position(None, team_id=team_id)
+
+    def large_energy_mechanism_aim_targets(
+        self,
+    ) -> dict[str, ProjectileAimTarget]:
+        entity = self._large_energy_mechanism_entity
+        if (
+            entity is None
+            or self._current_time < _LARGE_ENERGY_OPPORTUNITY_TIMES[0] - 1e-9
+        ):
+            return {}
+        panels = {
+            panel.module_index: panel
+            for panel in entity.panels_at(self._current_time)
+        }
+        targets: dict[str, ProjectileAimTarget] = {}
+        for team_id, state in self._large_energy_mechanism_by_team.items():
+            initiator_id = state.initiator_robot_id
+            robot = self._robots_by_id.get(initiator_id) if initiator_id else None
+            if (
+                state.status != "activating"
+                or robot is None
+                or not robot.alive
+                or not state.lit_module_indices
+            ):
+                continue
+            if state.first_hit_module_index is None:
+                module_index = state.lit_module_indices[0]
+            else:
+                module_index = next(
+                    (
+                        index
+                        for index in state.lit_module_indices
+                        if index != state.first_hit_module_index
+                    ),
+                    state.first_hit_module_index,
+                )
+            panel = panels.get(module_index)
+            if panel is None:
+                continue
+            targets[robot.id] = ProjectileAimTarget(
+                id=f"large-energy:{team_id}:{module_index}",
+                position=panel.center,
+                robot_id=robot.id,
+                alignment_tolerance_rad=0.025,
+                approach_position=self._large_energy_approach_position(
+                    module_index,
+                    at_time=self._current_time,
+                ),
+            )
+        return targets
+
+    def large_energy_mechanism_projectile_hitboxes(
+        self,
+        elapsed_time: float,
+    ) -> tuple[ProjectileSpecialHitbox, ...]:
+        entity = self._large_energy_mechanism_entity
+        if (
+            entity is None
+            or elapsed_time < _LARGE_ENERGY_OPPORTUNITY_TIMES[0] - 1e-9
+        ):
+            return ()
+        return tuple(
+            ProjectileSpecialHitbox(
+                id=entity.id,
+                target_kind="large_energy_mechanism",
+                module_id=str(panel.module_index),
+                center=panel.center,
+                radius=panel.detection_radius_mm,
+                score_on_trajectory=True,
+            )
+            for panel in entity.panels_at(elapsed_time)
+        )
+
+    @staticmethod
+    def _large_energy_ring_score(
+        impact_position: tuple[float, float],
+        center: tuple[float, float],
+    ) -> int | None:
+        radial_distance = math.dist(impact_position, center)
+        if radial_distance > 150.0 + 1.0 + 1e-9:
+            return None
+        # Fig. 5-17 labels ten concentric bands at 15 mm radial intervals.
+        # At an exact boundary, the lower-value outer ring wins deterministically.
+        return max(1, 10 - int(math.floor(min(radial_distance, 150.0) / 15.0)))
+
+    def on_large_energy_mechanism_projectile_hit(
+        self,
+        projectile: "Projectile",
+        hitbox: ProjectileSpecialHitbox,
+        impact_position: tuple[float, float],
+        impact_speed: float,
+        impact_time: float,
+    ) -> str:
+        if projectile.caliber != "17mm":
+            return "large_energy_illegal_projectile"
+        if impact_speed <= 12_000.0 + 1e-9:
+            return "large_energy_ineffective"
+        state = self._large_energy_mechanism_by_team.get(
+            projectile.shooter_team_id
+        )
+        shooter = self._robots_by_id.get(projectile.shooter_id)
+        entity = self._large_energy_mechanism_entity
+        if (
+            state is None
+            or state.status != "activating"
+            or entity is None
+            or hitbox.id != entity.id
+            or shooter is None
+            or not shooter.alive
+            or shooter.team != projectile.shooter_team_id
+        ):
+            return "large_energy_inactive"
+        try:
+            module_index = int(hitbox.module_id)
+        except ValueError:
+            return "large_energy_ignored"
+        if module_index not in range(5):
+            return "large_energy_ignored"
+        ring_score = self._large_energy_ring_score(
+            impact_position,
+            hitbox.center,
+        )
+        if ring_score is None:
+            return "large_energy_outside_detection_area"
+
+        if (
+            state.attempt_deadline is None
+            or impact_time > state.attempt_deadline + 1e-9
+            or impact_time >= self._time_limit - 1e-9
+        ):
+            self._fail_large_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                min(state.attempt_deadline or self._time_limit, self._time_limit),
+            )
+            return "large_energy_activation_failed"
+        if state.hit_deadline is None or impact_time > state.hit_deadline + 1e-9:
+            self._fail_large_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                state.hit_deadline or impact_time,
+            )
+            return "large_energy_activation_failed"
+
+        if state.first_hit_module_index is None:
+            if module_index not in state.lit_module_indices:
+                self._fail_large_energy_activation(
+                    projectile.shooter_team_id,
+                    state,
+                    impact_time,
+                )
+                return "large_energy_activation_failed"
+            state.first_hit_module_index = module_index
+            state.completed_groups += 1
+            state.ring_scores.append(ring_score)
+            state.hit_deadline = min(
+                state.attempt_deadline,
+                impact_time + _LARGE_ENERGY_BONUS_HIT_WINDOW,
+            )
+            if state.completed_groups >= 5:
+                return "large_energy_final_group"
+            return "large_energy_group_activated"
+
+        other_lit_module = next(
+            (
+                index
+                for index in state.lit_module_indices
+                if index != state.first_hit_module_index
+            ),
+            None,
+        )
+        if module_index != other_lit_module:
+            self._fail_large_energy_activation(
+                projectile.shooter_team_id,
+                state,
+                impact_time,
+            )
+            return "large_energy_activation_failed"
+
+        state.ring_scores.append(ring_score)
+        self._finish_large_energy_group(
+            projectile.shooter_team_id,
+            state,
+            impact_time,
+        )
+        return "large_energy_bonus_lamp"
+
+    def _light_next_large_energy_group(
+        self,
+        team_id: str,
+        state: _LargeEnergyMechanismTeamState,
+        at_time: float,
+    ) -> None:
+        state.lit_module_indices = tuple(
+            sorted(self._large_energy_rng_by_team[team_id].sample(range(5), 2))
+        )
+        state.first_hit_module_index = None
+        state.hit_deadline = min(
+            state.attempt_deadline or at_time,
+            at_time + _LARGE_ENERGY_LIT_HIT_WINDOW,
+        )
+
+    def _fail_large_energy_activation(
+        self,
+        team_id: str,
+        state: _LargeEnergyMechanismTeamState,
+        at_time: float,
+    ) -> None:
+        state.completed_groups = 0
+        state.ring_scores.clear()
+        state.last_failure_at = at_time
+        state.failure_count += 1
+        activation_deadline = min(
+            state.attempt_deadline or at_time,
+            self._time_limit,
+        )
+        if at_time < activation_deadline - 1e-9:
+            # V1.4.0 says a failed sequence resets the activating state. The
+            # simulation keeps the original 20-second command window; only its
+            # deadline returns the team to inactive, as in the P4 precedent.
+            self._light_next_large_energy_group(team_id, state, at_time)
+            return
+        self._reset_large_energy_team_state(state)
+        self._stop_large_energy_rotor_if_idle(at_time)
+
+    @staticmethod
+    def _reset_large_energy_team_state(
+        state: _LargeEnergyMechanismTeamState,
+    ) -> None:
+        state.status = "inactive"
+        state.attempt_started_at = None
+        state.attempt_deadline = None
+        state.initiator_robot_id = None
+        state.lit_module_indices = ()
+        state.first_hit_module_index = None
+        state.hit_deadline = None
+        state.completed_groups = 0
+        state.ring_scores.clear()
+
+    def _finish_large_energy_group(
+        self,
+        team_id: str,
+        state: _LargeEnergyMechanismTeamState,
+        at_time: float,
+    ) -> None:
+        if state.completed_groups >= 5:
+            if not self._complete_large_energy_activation(team_id, state, at_time):
+                self._fail_large_energy_activation(team_id, state, at_time)
+            return
+        self._light_next_large_energy_group(team_id, state, at_time)
+
+    def _complete_large_energy_activation(
+        self,
+        team_id: str,
+        state: _LargeEnergyMechanismTeamState,
+        at_time: float,
+    ) -> bool:
+        if (
+            self._match is None
+            or state.attempt_started_at is None
+            or state.completed_groups < 5
+            or not state.ring_scores
+            or self._match.elapsed_time >= self._time_limit - 1e-9
+        ):
+            return False
+        initiator_robot_id = state.initiator_robot_id
+        average_ring_score = sum(state.ring_scores) / len(state.ring_scores)
+        lamp_count = len(state.ring_scores)
+        if not self.activate_large_energy_mechanism_buff(
+            team_id,
+            average_ring_score,
+            lamp_count,
+        ):
+            self._fail_large_energy_activation(team_id, state, at_time)
+            return False
+        self._large_energy_mechanism_activation_times_by_team[team_id].append(
+            state.attempt_started_at
+        )
+        self._match.current_events.append(
+            MatchEvent(
+                type=MatchEventType.ENERGY_MECHANISM_ACTIVATED,
+                time=at_time,
+                robot_id=initiator_robot_id,
+                team_id=team_id,
+                award_experience=False,
+                mechanism_id="large_energy",
+            )
+        )
+        state.status = "activated"
+        state.attempt_started_at = None
+        state.attempt_deadline = None
+        state.initiator_robot_id = None
+        state.lit_module_indices = ()
+        state.first_hit_module_index = None
+        state.hit_deadline = None
+        self._stop_large_energy_rotor_if_idle(at_time)
+        return True
+
+    def _stop_large_energy_rotor_if_idle(self, at_time: float) -> None:
+        if not self._large_energy_any_team_activating():
+            entity = self._large_energy_mechanism_entity
+            if entity is not None:
+                entity.stop_activation(at_time)
+
+    def _advance_large_energy_mechanisms(self, match: "Match") -> None:
+        now = min(match.elapsed_time, self._time_limit)
+        for team_id, state in self._large_energy_mechanism_by_team.items():
+            if state.status == "activating":
+                activation_deadline = min(
+                    state.attempt_deadline or now,
+                    self._time_limit,
+                )
+                if now + 1e-9 >= activation_deadline:
+                    if state.completed_groups >= 5 and state.first_hit_module_index is not None:
+                        # The fifth first-panel hit completes the required fifth
+                        # group. A final optional panel may be collected until
+                        # this total window expires.
+                        completed = self._complete_large_energy_activation(
+                            team_id,
+                            state,
+                            activation_deadline,
+                        )
+                        if not completed and state.status == "activating":
+                            self._fail_large_energy_activation(
+                                team_id,
+                                state,
+                                activation_deadline,
+                            )
+                    else:
+                        self._fail_large_energy_activation(
+                            team_id,
+                            state,
+                            activation_deadline,
+                        )
+                elif state.hit_deadline is not None and now + 1e-9 >= state.hit_deadline:
+                    if state.first_hit_module_index is None:
+                        self._fail_large_energy_activation(
+                            team_id,
+                            state,
+                            state.hit_deadline,
+                        )
+                    else:
+                        self._finish_large_energy_group(
+                            team_id,
+                            state,
+                            state.hit_deadline,
+                        )
+            elif (
+                state.status == "activated"
+                and self._large_energy_buff_remaining(team_id) <= 1e-9
+            ):
+                state.status = "inactive"
+                state.completed_groups = 0
+                state.ring_scores.clear()
+
+    def _large_energy_display_state(
+        self,
+    ) -> LargeEnergyMechanismDisplayState | None:
+        entity = self._large_energy_mechanism_entity
+        if entity is None or self._current_time < _LARGE_ENERGY_OPPORTUNITY_TIMES[0]:
+            return None
+        panels = entity.panels_at(self._current_time)
+        teams = []
+        for team_id, state in sorted(self._large_energy_mechanism_by_team.items()):
+            effect_remaining = self._large_energy_buff_remaining(team_id)
+            status = state.status
+            if effect_remaining > 0:
+                status = "activated"
+            elif state.status == "activated":
+                status = "inactive"
+            elif (
+                state.last_failure_at is not None
+                and self._current_time - state.last_failure_at
+                < _LARGE_ENERGY_FAILURE_DISPLAY_SECONDS
+            ):
+                status = "failed"
+            scores = tuple(state.ring_scores)
+            teams.append(
+                LargeEnergyMechanismTeamDisplayState(
+                    team_id=team_id,
+                    status=status,
+                    lit_module_indices=state.lit_module_indices,
+                    first_hit_module_index=state.first_hit_module_index,
+                    completed_groups=state.completed_groups,
+                    activated_lamp_count=len(scores),
+                    ring_scores=scores,
+                    average_ring_score=(
+                        sum(scores) / len(scores) if scores else None
+                    ),
+                    hit_remaining=max(
+                        0.0,
+                        (state.hit_deadline or self._current_time)
+                        - self._current_time,
+                    ),
+                    activation_remaining=max(
+                        0.0,
+                        (state.attempt_deadline or self._current_time)
+                        - self._current_time,
+                    ),
+                    opportunities_remaining=self._large_energy_opportunities_remaining(
+                        team_id,
+                        self._current_time,
+                    ),
+                    effect_remaining=effect_remaining,
+                )
+            )
+        return LargeEnergyMechanismDisplayState(
+            rotation_angle=entity.angle_at(self._current_time),
+            panels=tuple(
+                EnergyMechanismPanelDisplayState(
+                    module_index=panel.module_index,
+                    center=panel.center,
+                    vertices=panel.vertices,
+                    detection_radius_mm=panel.detection_radius_mm,
+                )
+                for panel in panels
+            ),
+            teams=tuple(teams),
         )
 
     def _grant_large_energy_mechanism_experience(self, team_id: str) -> None:
@@ -6248,8 +6867,15 @@ class RMUC2026RegionalRules:
         self._small_energy_mechanism_activation_times_by_team = {
             team_id: [] for team_id in team_by_side.values()
         }
+        self._large_energy_mechanism_activation_times_by_team = {
+            team_id: [] for team_id in team_by_side.values()
+        }
         self._small_energy_mechanism_by_team = {
             team_id: _SmallEnergyMechanismTeamState()
+            for team_id in team_by_side.values()
+        }
+        self._large_energy_mechanism_by_team = {
+            team_id: _LargeEnergyMechanismTeamState()
             for team_id in team_by_side.values()
         }
         self._small_energy_mechanism_generation += 1
@@ -6260,11 +6886,33 @@ class RMUC2026RegionalRules:
             center=(match.map.width / 2.0, match.map.height / 2.0),
             rotation_direction=rotation_direction,
         )
+        self._large_energy_mechanism_generation += 1
+        self._large_energy_mechanism_entity = LargeEnergyMechanism(
+            center=(match.map.width / 2.0, match.map.height / 2.0),
+            rotation_direction=rotation_direction,
+            initial_angle=self._small_energy_mechanism_entity.initial_angle,
+        )
         self._small_energy_rng_by_team = {
             team_id: random.Random(
                 f"RMUC-2026-small-energy-sequence:{self._small_energy_mechanism_generation}:{team_id}"
             )
             for team_id in team_by_side.values()
+        }
+        self._large_energy_rng_by_team = {
+            team_id: random.Random(
+                f"RMUC-2026-large-energy-sequence:{self._large_energy_mechanism_generation}:{team_id}"
+            )
+            for team_id in team_by_side.values()
+        }
+        energy_speed_rng = random.Random(
+            f"RMUC-2026-large-energy-speed:{self._large_energy_mechanism_generation}"
+        )
+        self._large_energy_speed_parameters_by_opportunity = {
+            opportunity_time: (
+                energy_speed_rng.uniform(0.780, 1.045),
+                energy_speed_rng.uniform(1.884, 2.000),
+            )
+            for opportunity_time in _LARGE_ENERGY_OPPORTUNITY_TIMES
         }
         self._radar_vulnerability_by_robot = {}
         self._radar_double_vulnerability_by_team = {
@@ -6637,6 +7285,7 @@ class RMUC2026RegionalRules:
         self._current_time = match.elapsed_time
         newly_destroyed = self._consume_events(match)
         self._advance_small_energy_mechanisms(match)
+        self._advance_large_energy_mechanisms(match)
         self._advance_outpost_armor_rotation(match)
         frame_start = match.elapsed_time - dt
         active_dt = max(

@@ -562,6 +562,27 @@ class Match:
         )
         return bool(callable(action) and action(self, robot))
 
+    def order_activate_large_energy_mechanism(self, robot_id: str) -> bool:
+        """Send the eligible selected robot's legal large-mechanism command."""
+        if self.finished:
+            return False
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if (
+            robot is None
+            or robot.team != self.config.scenario.player_team
+            or (
+                not self.is_player_controlled(robot_id)
+                and robot.type != "sentry"
+            )
+        ):
+            return False
+        action = getattr(
+            self.ruleset,
+            "request_large_energy_mechanism_activation",
+            None,
+        )
+        return bool(callable(action) and action(self, robot))
+
     def apply_damage(
         self,
         target: DamageableTarget,
@@ -1167,6 +1188,51 @@ class Match:
                     "on_small_energy_mechanism_projectile_hit",
                     None,
                 )
+                large_energy_aim_targets = getattr(
+                    self.ruleset,
+                    "large_energy_mechanism_aim_targets",
+                    lambda: {},
+                )()
+                large_energy_hitboxes = getattr(
+                    self.ruleset,
+                    "large_energy_mechanism_projectile_hitboxes",
+                    lambda _time: (),
+                )(self.elapsed_time + dt)
+                large_energy_hit = getattr(
+                    self.ruleset,
+                    "on_large_energy_mechanism_projectile_hit",
+                    None,
+                )
+                energy_aim_targets = {
+                    **small_energy_aim_targets,
+                    **large_energy_aim_targets,
+                }
+                energy_hitboxes = (
+                    *small_energy_hitboxes,
+                    *large_energy_hitboxes,
+                )
+
+                def on_energy_mechanism_hit(
+                    projectile,
+                    hitbox,
+                    impact_position,
+                    impact_speed,
+                    impact_time,
+                ):
+                    callback = (
+                        large_energy_hit
+                        if hitbox.target_kind == "large_energy_mechanism"
+                        else small_energy_hit
+                    )
+                    if callback is None:
+                        return "energy_mechanism_contact"
+                    return callback(
+                        projectile,
+                        hitbox,
+                        impact_position,
+                        impact_speed,
+                        impact_time,
+                    )
                 parameters_for = getattr(self.ruleset, "projectile_parameters_for")
                 aim_parameters_for = getattr(
                     self.ruleset,
@@ -1180,7 +1246,7 @@ class Match:
                     can_target=self.ruleset.can_target,
                     parameters_for=parameters_for,
                     aim_parameters_for=aim_parameters_for,
-                    special_aim_targets=small_energy_aim_targets,
+                    special_aim_targets=energy_aim_targets,
                 )
                 self.projectile_system.launch_ready_shots(
                     self.robots,
@@ -1190,7 +1256,7 @@ class Match:
                     can_target=self.ruleset.can_target,
                     parameters_for=parameters_for,
                     on_attack_committed=self.ruleset.on_attack_committed,
-                    special_aim_targets=small_energy_aim_targets,
+                    special_aim_targets=energy_aim_targets,
                 )
                 self.projectile_system.advance(
                     dt,
@@ -1219,8 +1285,8 @@ class Match:
                         source_robot=attacker,
                         structure_hit=hit,
                     ),
-                    special_hitboxes=small_energy_hitboxes,
-                    on_special_hit=small_energy_hit,
+                    special_hitboxes=energy_hitboxes,
+                    on_special_hit=on_energy_mechanism_hit,
                     simulation_start_time=self.elapsed_time,
                 )
             else:
@@ -3162,6 +3228,81 @@ class Match:
                 )
                 return
 
+        start_large_energy = getattr(
+            self.ruleset,
+            "request_large_energy_mechanism_activation",
+            None,
+        )
+        large_activation_available = getattr(
+            self.ruleset,
+            "large_energy_mechanism_activation_available",
+            None,
+        )
+        if (
+            robot.type == "sentry"
+            and callable(start_large_energy)
+            and callable(large_activation_available)
+            and large_activation_available(robot.team)
+        ):
+            activation_position_for = getattr(
+                self.ruleset,
+                "large_energy_mechanism_activation_position",
+                None,
+            )
+            activation_position = (
+                activation_position_for(robot.team)
+                if callable(activation_position_for)
+                else None
+            )
+            if (
+                activation_position is not None
+                and math.dist(robot.position, activation_position) <= 400.0
+            ):
+                start_large_energy(self, robot)
+        large_energy_targets_for = getattr(
+            self.ruleset,
+            "large_energy_mechanism_aim_targets",
+            None,
+        )
+        large_energy_target = (
+            large_energy_targets_for().get(robot.id)
+            if callable(large_energy_targets_for)
+            else None
+        )
+        if large_energy_target is not None:
+            target_key = large_energy_target.id
+            approach_goal = large_energy_target.approach_position
+            is_at_firing_position = (
+                approach_goal is None
+                or math.dist(robot.position, approach_goal)
+                <= large_energy_target.approach_tolerance_mm
+            )
+            if (
+                is_at_firing_position
+                and math.dist(robot.position, large_energy_target.position)
+                <= robot.attack_range
+                and self.map.has_line_of_sight(
+                    robot.position,
+                    large_energy_target.position,
+                )
+            ):
+                self._clear_ai_path(robot)
+                self._ai_intents[robot.id] = "击打大能量机关"
+                self._remember_ai_decision(robot, target_key)
+                return
+            if (
+                approach_goal is not None
+                and math.dist(robot.position, approach_goal) <= 3_000.0
+            ):
+                self._set_ai_goal(
+                    robot,
+                    "前往大能量机关",
+                    approach_goal,
+                    target_key=target_key,
+                    sticky=False,
+                )
+                return
+
         projectiles = {
             robot_id: count
             for robot_id, _projectile, count in display_state.robot_projectiles
@@ -3315,6 +3456,20 @@ class Match:
                 if callable(small_energy_targets_for)
                 else {}
             )
+            large_energy_targets_for = getattr(
+                self.ruleset,
+                "large_energy_mechanism_aim_targets",
+                None,
+            )
+            large_energy_targets = (
+                large_energy_targets_for()
+                if callable(large_energy_targets_for)
+                else {}
+            )
+            special_energy_targets = {
+                **small_energy_targets,
+                **large_energy_targets,
+            }
             for robot in sorted(self.robots, key=lambda item: item.id):
                 elapsed = self._ai_replan_elapsed[robot.id] + dt
                 if not robot.alive:
@@ -3323,7 +3478,7 @@ class Match:
                         elapsed % _RMUC_AI_REPLAN_INTERVAL
                     )
                     continue
-                special_target_active = robot.id in small_energy_targets
+                special_target_active = robot.id in special_energy_targets
                 replan_interval = (
                     0.10 if special_target_active else _RMUC_AI_REPLAN_INTERVAL
                 )

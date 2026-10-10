@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tarsgo_simulator.core.events import MatchEventType
 from tarsgo_simulator.core.match import Match, _collision_right_of_way
 
 
@@ -294,6 +295,8 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     stationary_classes: dict[str, int] = {}
     maximum_path_queue = 0
     small_energy_contacts = []
+    large_energy_contacts = []
+    large_energy_success_events = []
 
     for tick in range(420 * 60):
         before = {robot.id: robot.position for robot in match.robots}
@@ -302,6 +305,17 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
             impact
             for impact in match.projectile_system.impacts
             if impact.target_kind == "energy_mechanism"
+        )
+        large_energy_contacts.extend(
+            impact
+            for impact in match.projectile_system.impacts
+            if impact.target_kind == "large_energy_mechanism"
+        )
+        large_energy_success_events.extend(
+            event
+            for event in match.current_events
+            if event.type == MatchEventType.ENERGY_MECHANISM_ACTIVATED
+            and event.mechanism_id == "large_energy"
         )
         maximum_path_queue = max(
             maximum_path_queue,
@@ -381,6 +395,35 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
         impact.caliber == "17mm"
         and impact.shooter_id in eligible_ai_ids
         for impact in small_energy_contacts
+    )
+
+    # The canonical success fact is a Ruleset-emitted match event. A physical
+    # contact may only advance a group; it is not itself a successful result.
+    large_activation_times = (
+        match.ruleset._large_energy_mechanism_activation_times_by_team
+    )
+    for team_id, state in match.ruleset._large_energy_mechanism_by_team.items():
+        completions = [
+            event
+            for event in large_energy_success_events
+            if event.team_id == team_id
+        ]
+        assert len(completions) == len(large_activation_times[team_id])
+        assert all(
+            event.mechanism_id == "large_energy"
+            for event in completions
+        )
+        assert state.opportunities_used <= 3
+        # Standard-match AI has no full-field large-mechanism approach yet.
+        # Keep the observed partial coverage explicit until that strategy lands.
+        assert state.opportunities_used == 0
+        assert large_activation_times[team_id] == []
+    assert large_energy_contacts == []
+    assert all(
+        impact.shooter_id in {robot.id for robot in match.robots}
+        and impact.shooter_team_id
+        == next(robot.team for robot in match.robots if robot.id == impact.shooter_id)
+        for impact in large_energy_contacts
     )
 
 
