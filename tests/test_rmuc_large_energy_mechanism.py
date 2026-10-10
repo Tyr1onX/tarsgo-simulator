@@ -439,4 +439,3 @@ def test_large_energy_pose_and_actual_pygame_frame_share_ruleset_state(monkeypat
     assert len(calls) == 1
     assert len(visual_state.robots) == len(match.robots)
     assert screen.get_bounding_rect().width == app.WINDOW_SIZE[0]
-
