@@ -9,6 +9,7 @@ class MatchEventType(StrEnum):
     ROBOT_DESTROYED = "robot_destroyed"
     STRUCTURE_DAMAGED = "structure_damaged"
     STRUCTURE_DESTROYED = "structure_destroyed"
+    ENERGY_MECHANISM_ACTIVATED = "energy_mechanism_activated"
 
 
 class ZoneEventType(StrEnum):
@@ -57,3 +58,4 @@ class MatchEvent:
     damage: int = 0
     virtual_shield_absorbed: int = 0
     award_experience: bool = True
+    mechanism_id: str | None = None

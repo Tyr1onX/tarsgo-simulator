@@ -5,6 +5,7 @@ import random
 import pytest
 
 from tarsgo_simulator.core.energy_mechanism import LargeEnergyMechanism
+from tarsgo_simulator.core.events import MatchEventType
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.projectiles import Projectile
 from tarsgo_simulator.core.robot import Robot
@@ -57,6 +58,8 @@ def _fire_at_panel(
     caliber: str = "17mm",
     speed: float = 25_000.0,
     dt: float = 1.0 / 120.0,
+    start_distance_mm: float = 100.0,
+    step_until_resolved: bool = False,
 ):
     rules = match.ruleset
     entity = rules._large_energy_mechanism_entity
@@ -66,7 +69,10 @@ def _fire_at_panel(
         for panel in entity.panels_at(match.elapsed_time + dt)
         if panel.module_index == module_index
     )
-    start = (panel.center[0] - 100.0, panel.center[1] + radial_offset_mm)
+    start = (
+        panel.center[0] - start_distance_mm,
+        panel.center[1] + radial_offset_mm,
+    )
     projectile = Projectile(
         id=90_000 + len(match.projectile_system.projectiles),
         shooter_id=shooter.id,
@@ -83,12 +89,21 @@ def _fire_at_panel(
         target_id=f"large-energy:{shooter.team}:{module_index}",
     )
     match.projectile_system.projectiles.append(projectile)
-    match.update(dt)
-    return next(
-        impact
-        for impact in match.projectile_system.impacts
-        if impact.projectile_id == projectile.id
-    )
+    for _ in range(100 if step_until_resolved else 1):
+        match.update(dt)
+        impact = next(
+            (
+                impact
+                for impact in match.projectile_system.impacts
+                if impact.projectile_id == projectile.id
+            ),
+            None,
+        )
+        if impact is not None:
+            return impact
+        if projectile not in match.projectile_system.projectiles:
+            return None
+    return None
 
 
 def test_large_mechanism_rotation_integrates_official_speed_and_resumes_base_speed():
@@ -245,6 +260,159 @@ def test_real_projectile_sequence_scores_rings_optional_lamps_and_existing_rewar
     )
     assert red_experience == pytest.approx(750.0)
     assert rules._large_energy_mechanism_activation_times_by_team[RED] == [180.0]
+
+
+@pytest.mark.parametrize(
+    ("radial_offset_mm", "expected_ring"),
+    [(0.0, 10), (30.0, 8)],
+)
+@pytest.mark.parametrize("dt", [1.0 / 60.0, 0.006, 0.003])
+def test_real_projectile_ring_score_is_independent_of_physics_step(
+    radial_offset_mm: float,
+    expected_ring: int,
+    dt: float,
+):
+    match = _match()
+    sentry = _start_large(match)
+    rules = match.ruleset
+    state = rules._large_energy_mechanism_by_team[RED]
+    entity = rules._large_energy_mechanism_entity
+    assert entity is not None
+    # Hold a single physical target pose so this regression isolates projectile
+    # path sampling from the separate moving-target timestep approximation.
+    entity.rotation_direction = 0
+
+    impact = _fire_at_panel(
+        match,
+        sentry,
+        state.lit_module_indices[0],
+        radial_offset_mm=radial_offset_mm,
+        dt=dt,
+        start_distance_mm=300.0,
+        step_until_resolved=True,
+    )
+
+    assert impact is not None
+    assert impact.target_kind == "large_energy_mechanism"
+    assert impact.outcome == "large_energy_group_activated"
+    assert state.ring_scores == [expected_ring]
+
+
+@pytest.mark.parametrize("dt", [1.0 / 60.0, 0.006, 0.003])
+def test_real_projectile_miss_outside_large_mechanism_does_not_score(dt: float):
+    match = _match()
+    sentry = _start_large(match)
+    rules = match.ruleset
+    state = rules._large_energy_mechanism_by_team[RED]
+    entity = rules._large_energy_mechanism_entity
+    assert entity is not None
+    entity.rotation_direction = 0
+
+    impact = _fire_at_panel(
+        match,
+        sentry,
+        state.lit_module_indices[0],
+        radial_offset_mm=160.0,
+        dt=dt,
+        start_distance_mm=300.0,
+        step_until_resolved=True,
+    )
+
+    assert impact is None
+    assert match.projectile_system.misses == 1
+    assert state.completed_groups == 0
+    assert state.ring_scores == []
+
+
+@pytest.mark.parametrize("final_bonus_hit", [False, True])
+def test_five_real_projectile_groups_emit_one_success_and_one_reward(
+    final_bonus_hit: bool,
+):
+    match = _match()
+    sentry = _start_large(match)
+    rules = match.ruleset
+    state = rules._large_energy_mechanism_by_team[RED]
+    entity = rules._large_energy_mechanism_entity
+    assert entity is not None
+    entity.rotation_direction = 0
+    observed_successes = []
+
+    def capture_successes() -> None:
+        observed_successes.extend(
+            event
+            for event in match.current_events
+            if event.type == MatchEventType.ENERGY_MECHANISM_ACTIVATED
+            and event.mechanism_id == "large_energy"
+        )
+
+    for group_index in range(5):
+        first = _fire_at_panel(
+            match,
+            sentry,
+            state.lit_module_indices[0],
+            start_distance_mm=300.0,
+            step_until_resolved=True,
+        )
+        assert first is not None
+        assert first.outcome in {
+            "large_energy_group_activated",
+            "large_energy_final_group",
+        }
+        capture_successes()
+
+        if group_index < 4:
+            match.update(1.0)
+            capture_successes()
+        elif final_bonus_hit:
+            bonus_module = next(
+                index
+                for index in state.lit_module_indices
+                if index != state.first_hit_module_index
+            )
+            bonus = _fire_at_panel(
+                match,
+                sentry,
+                bonus_module,
+                start_distance_mm=300.0,
+                step_until_resolved=True,
+            )
+            assert bonus is not None
+            assert bonus.outcome == "large_energy_bonus_lamp"
+            capture_successes()
+        else:
+            match.update(1.0)
+            capture_successes()
+
+    assert state.status == "activated"
+    assert len(observed_successes) == 1
+    success = observed_successes[0]
+    assert success.type == MatchEventType.ENERGY_MECHANISM_ACTIVATED
+    assert success.mechanism_id == "large_energy"
+    assert success.team_id == RED
+    assert success.robot_id == sentry.id
+    assert 180.0 <= success.time <= match.elapsed_time
+    assert rules._large_energy_mechanism_activation_times_by_team[RED] == [180.0]
+    assert len(rules._energy_mechanism_buffs_by_team[RED]) == 1
+    large_buff = rules._energy_mechanism_buffs_by_team[RED][0]
+    assert large_buff.mechanism == "large"
+    assert large_buff.remaining == pytest.approx(35.0 if final_bonus_hit else 30.0)
+    assert rules._effective_attack_multiplier(RED) == pytest.approx(3.0)
+    experience = sum(
+        progression.experience
+        for robot_id, progression in rules._progression_by_robot.items()
+        if rules._robots_by_id[robot_id].team == RED
+    )
+    assert experience == pytest.approx(750.0)
+
+    match.update(0.25)
+    capture_successes()
+    assert len(observed_successes) == 1
+    assert rules._large_energy_mechanism_activation_times_by_team[RED] == [180.0]
+    assert sum(
+        progression.experience
+        for robot_id, progression in rules._progression_by_robot.items()
+        if rules._robots_by_id[robot_id].team == RED
+    ) == pytest.approx(750.0)
 
 
 def test_unlit_hit_and_first_hit_timeout_reset_sequence_within_one_activation():

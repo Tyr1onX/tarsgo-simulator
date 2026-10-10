@@ -465,10 +465,9 @@ class ProjectileSystem:
                 if target_kind in {"energy_mechanism", "large_energy_mechanism"}:
                     special = target
                     if isinstance(special, ProjectileSpecialHitbox) and on_special_hit:
-                        if special.score_at_closest_point:
-                            surface_point = _closest_point_on_segment(
-                                start,
-                                end,
+                        if special.score_on_trajectory:
+                            surface_point = _closest_point_on_projectile_trajectory(
+                                projectile,
                                 special.center,
                             )
                         else:
@@ -1316,24 +1315,34 @@ def _moving_circle_contact(
     return fraction, (start[0] + dx * fraction, start[1] + dy * fraction)
 
 
-def _closest_point_on_segment(
-    start: tuple[float, float],
-    end: tuple[float, float],
+def _closest_point_on_projectile_trajectory(
+    projectile: Projectile,
     target: tuple[float, float],
 ) -> tuple[float, float]:
-    dx, dy = end[0] - start[0], end[1] - start[1]
-    length_squared = dx * dx + dy * dy
-    if length_squared <= 1e-18:
-        return start
-    fraction = max(
+    velocity_length = math.hypot(*projectile.velocity)
+    if velocity_length <= 1e-9:
+        return projectile.position
+
+    direction = (
+        projectile.velocity[0] / velocity_length,
+        projectile.velocity[1] / velocity_length,
+    )
+    origin = (
+        projectile.position[0] - direction[0] * projectile.traveled,
+        projectile.position[1] - direction[1] * projectile.traveled,
+    )
+    projection = max(
         0.0,
         min(
-            1.0,
-            ((target[0] - start[0]) * dx + (target[1] - start[1]) * dy)
-            / length_squared,
+            max(0.0, projectile.effective_range),
+            (target[0] - origin[0]) * direction[0]
+            + (target[1] - origin[1]) * direction[1],
         ),
     )
-    return (start[0] + dx * fraction, start[1] + dy * fraction)
+    return (
+        origin[0] + direction[0] * projection,
+        origin[1] + direction[1] * projection,
+    )
 
 
 def _boundary_contact(

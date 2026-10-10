@@ -6,7 +6,7 @@ import random
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
-from tarsgo_simulator.core.events import MatchEventType, ZoneEventType
+from tarsgo_simulator.core.events import MatchEvent, MatchEventType, ZoneEventType
 from tarsgo_simulator.core.energy_mechanism import (
     LargeEnergyMechanism,
     SmallEnergyMechanism,
@@ -5229,7 +5229,7 @@ class RMUC2026RegionalRules:
                 module_id=str(panel.module_index),
                 center=panel.center,
                 radius=panel.detection_radius_mm,
-                score_at_closest_point=True,
+                score_on_trajectory=True,
             )
             for panel in entity.panels_at(elapsed_time)
         )
@@ -5426,6 +5426,7 @@ class RMUC2026RegionalRules:
             or self._match.elapsed_time >= self._time_limit - 1e-9
         ):
             return False
+        initiator_robot_id = state.initiator_robot_id
         average_ring_score = sum(state.ring_scores) / len(state.ring_scores)
         lamp_count = len(state.ring_scores)
         if not self.activate_large_energy_mechanism_buff(
@@ -5437,6 +5438,16 @@ class RMUC2026RegionalRules:
             return False
         self._large_energy_mechanism_activation_times_by_team[team_id].append(
             state.attempt_started_at
+        )
+        self._match.current_events.append(
+            MatchEvent(
+                type=MatchEventType.ENERGY_MECHANISM_ACTIVATED,
+                time=at_time,
+                robot_id=initiator_robot_id,
+                team_id=team_id,
+                award_experience=False,
+                mechanism_id="large_energy",
+            )
         )
         state.status = "activated"
         state.attempt_started_at = None
