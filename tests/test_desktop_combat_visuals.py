@@ -541,6 +541,132 @@ def test_dart_visual_miss_fades_only_after_rule_report_and_never_changes_hp() ->
     assert target.hp == starting_hp
 
 
+def test_early_referee_hit_ends_dart_at_target_with_hp_and_impact() -> None:
+    match = _match()
+    for robot in match.robots:
+        robot.speed = 0.0
+        robot.attack_cooldown = 9999.0
+        robot.path.clear()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    starting_hp = target.hp
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM)
+    match.update(7.0)
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    dart = visuals.dart_projectiles[0]
+    assert dart.age == 0.0
+
+    # Referee confirmation is legal before the one-second Rules Lab arrival.
+    visuals.begin_frame(match)
+    assert rules.record_dart_hit(match, RMUC_RED_TEAM, target.id)
+    assert target.hp == starting_hp - 750
+    assert not any(impact.caliber == "dart" for impact in visuals.impacts)
+    visuals.after_match_update(match, 0.0)
+
+    assert dart.resolved and not dart.missed
+    assert dart.progress == 1.0
+    assert dart.position == target.position
+    assert dart not in visuals.dart_projectiles
+    dart_impacts = [impact for impact in visuals.impacts if impact.caliber == "dart"]
+    assert len(dart_impacts) == 1
+    assert dart_impacts[0].position == target.position
+    assert target.hp == starting_hp - 750
+
+
+def test_early_referee_miss_fades_without_false_hit_feedback() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    starting_hp = target.hp
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM)
+    match.update(7.0)
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    dart = visuals.dart_projectiles[0]
+
+    visuals.begin_frame(match)
+    assert rules.record_dart_miss(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 1.0 / 60.0)
+    assert dart.missed and dart.resolved
+    assert dart in visuals.dart_projectiles
+    assert target.hp == starting_hp
+    assert not any(impact.caliber == "dart" for impact in visuals.impacts)
+
+    visuals.begin_frame(match)
+    match.update(0.10)
+    visuals.after_match_update(match, 0.10)
+    assert dart not in visuals.dart_projectiles
+    assert target.hp == starting_hp
+    assert not any(impact.caliber == "dart" for impact in visuals.impacts)
+
+
+def test_same_frame_referee_results_stay_associated_with_each_dart() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    outpost = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    outpost.hp = 0
+    outpost.alive = False
+    rules._team_states[RMUC_BLUE_TEAM].outpost_ever_destroyed = True
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "base"
+    )
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM, "fixed")
+    match.update(7.0)
+    visuals.begin_frame(match)
+    for _ in range(3):
+        assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    launched = tuple(visuals.dart_projectiles)
+    assert len(launched) == 3
+
+    # Three referee results arrive in the launch frame: one hit closes the
+    # detector, so the remaining two attempts are misses in FIFO order.
+    visuals.begin_frame(match)
+    assert rules.record_dart_hit(match, RMUC_RED_TEAM, target.id)
+    assert rules.record_dart_miss(match, RMUC_RED_TEAM)
+    assert rules.record_dart_miss(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+
+    state = rules._dart_system_by_team[RMUC_RED_TEAM]
+    assert [event[2] for event in state.outcome_events] == ["hit", "miss", "miss"]
+    assert target.hp == target.max_hp - 200
+    assert launched[0].resolved and launched[0].progress == 1.0
+    assert launched[0].position == target.position
+    assert launched[0] not in visuals.dart_projectiles
+    assert all(dart.resolved and dart.missed for dart in launched[1:])
+    assert all(dart in visuals.dart_projectiles for dart in launched[1:])
+    assert len([impact for impact in visuals.impacts if impact.caliber == "dart"]) == 1
+
+
 def test_dart_launcher_open_state_and_effect_budget_are_bounded() -> None:
     launcher = DartLauncherVisualState()
     launcher.sync(4, "opening", 3.5, "前哨站", 1.0 / 60.0)

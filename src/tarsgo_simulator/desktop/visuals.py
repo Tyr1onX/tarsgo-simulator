@@ -1075,6 +1075,11 @@ class CombatVisualState:
                 if dart is not None:
                     dart.resolved = True
                 if outcome == "hit":
+                    if dart is not None:
+                        # A referee can confirm a hit before the Rules Lab's
+                        # one-second presentation flight completes. Stop this
+                        # dart at the target on the same frame as HP/impact.
+                        dart.age = max(dart.age, dart.duration)
                     target = structures_by_id.get(target_id)
                     if target is None:
                         continue
