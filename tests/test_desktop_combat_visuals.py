@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.dart_timing import RULES_LAB_DART_FLIGHT_SECONDS
 from tarsgo_simulator.core.projectiles import ProjectileImpact
 from tarsgo_simulator.desktop.visuals import (
     CombatVisualState,
@@ -339,7 +340,7 @@ def test_dart_visuals_follow_rule_launch_and_separate_referee_hit() -> None:
     assert target.hp == starting_hp
     visuals.begin_frame(match)
     assert rules.fire_dart(match, RMUC_RED_TEAM)
-    visuals.after_match_update(match, 1.0 / 60.0)
+    visuals.after_match_update(match, 0.0)
 
     assert len(visuals.dart_projectiles) == 1
     dart_visual = visuals.dart_projectiles[0]
@@ -350,15 +351,116 @@ def test_dart_visuals_follow_rule_launch_and_separate_referee_hit() -> None:
     assert launcher.launch_pulse_remaining > 0
 
     attempt = rules._dart_system_by_team[RMUC_RED_TEAM].pending_projectiles[0]
-    while match.elapsed_time + 1e-9 < attempt.completes_at:
-        flight_dt = min(1.0 / 60.0, attempt.completes_at - match.elapsed_time)
+    assert dart_visual.duration == pytest.approx(
+        attempt.completes_at - attempt.launched_at
+    )
+    assert dart_visual.duration == RULES_LAB_DART_FLIGHT_SECONDS
+    for _ in range(59):
         visuals.begin_frame(match)
-        match.update(flight_dt)
-        visuals.after_match_update(match, flight_dt)
+        match.update(1.0 / 60.0)
+        visuals.after_match_update(match, 1.0 / 60.0)
+        assert target.hp == starting_hp
+        assert not any(impact.caliber == "dart" for impact in visuals.impacts)
+    assert dart_visual.progress < 1.0
+
+    visuals.begin_frame(match)
+    match.update(1.0 / 60.0)
+    visuals.after_match_update(match, 1.0 / 60.0)
     dart_impacts = [impact for impact in visuals.impacts if impact.caliber == "dart"]
     assert len(dart_impacts) == 1
     assert dart_impacts[0].position == target.position
     assert target.hp == starting_hp - 750
+    assert dart_visual.resolved
+    assert dart_visual.progress == 1.0
+    assert dart_visual.position == target.position
+
+
+def test_same_tick_dart_launches_each_get_a_flight_visual_and_outcome() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    outpost = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    outpost.hp = 0
+    outpost.alive = False
+    rules._team_states[RMUC_BLUE_TEAM].outpost_ever_destroyed = True
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "base"
+    )
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM, "fixed")
+    match.update(7.0)
+    visuals.begin_frame(match)
+    for _ in range(3):
+        assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+
+    launched = tuple(visuals.dart_projectiles)
+    assert len(launched) == 3
+    assert all(
+        dart.duration == RULES_LAB_DART_FLIGHT_SECONDS
+        and dart.target_id == target.id
+        for dart in launched
+    )
+    assert target.hp == target.max_hp
+
+    for _ in range(60):
+        visuals.begin_frame(match)
+        match.update(1.0 / 60.0)
+        visuals.after_match_update(match, 1.0 / 60.0)
+    state = rules._dart_system_by_team[RMUC_RED_TEAM]
+    assert [event[2] for event in state.outcome_events] == ["hit", "miss", "miss"]
+    assert target.hp == target.max_hp - 200
+    assert all(dart.resolved for dart in launched)
+    assert not launched[0].missed
+    assert all(dart.missed for dart in launched[1:])
+    assert len([impact for impact in visuals.impacts if impact.caliber == "dart"]) == 1
+
+
+def test_invalidated_dart_target_fades_at_shared_arrival_without_hp_hit() -> None:
+    match = _match()
+    visuals = CombatVisualState()
+    visuals.reset(match)
+    rules = match.ruleset
+    target = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "outpost"
+    )
+    base = next(
+        structure
+        for structure in match.structures
+        if structure.team == RMUC_BLUE_TEAM and structure.type == "base"
+    )
+    base_hp = base.hp
+
+    match.update(30.0)
+    assert rules.open_dart_gate(match, RMUC_RED_TEAM)
+    match.update(7.0)
+    visuals.begin_frame(match)
+    assert rules.fire_dart(match, RMUC_RED_TEAM)
+    visuals.after_match_update(match, 0.0)
+    dart = visuals.dart_projectiles[0]
+    target.hp = 0
+    target.alive = False
+
+    for _ in range(60):
+        visuals.begin_frame(match)
+        match.update(1.0 / 60.0)
+        visuals.after_match_update(match, 1.0 / 60.0)
+
+    state = rules._dart_system_by_team[RMUC_RED_TEAM]
+    assert state.outcome_events == [(1, target.id, "miss")]
+    assert dart.missed and dart.resolved
+    assert base.hp == base_hp
+    assert not any(impact.caliber == "dart" for impact in visuals.impacts)
 
 
 def test_dart_visuals_detect_same_tick_repeated_hit_from_ammo_drop() -> None:

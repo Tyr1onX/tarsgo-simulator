@@ -6,6 +6,7 @@ import random
 from typing import TYPE_CHECKING, Any, Mapping
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
+from tarsgo_simulator.core.dart_timing import RULES_LAB_DART_FLIGHT_SECONDS
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType, ZoneEventType
 from tarsgo_simulator.core.energy_mechanism import (
     LargeEnergyMechanism,
@@ -73,9 +74,6 @@ _DART_DETECTION_WINDOW_SECONDS = 40.0
 _DART_FIRST_CLOSE_COOLDOWN_SECONDS = 15.0
 _DART_DETECTION_REOPEN_SECONDS = 2.0
 _DART_MAX_PER_MATCH = 4
-# Rules Lab approximation: referee settlement follows a fixed one-second
-# simulated flight delay. V1.4.0 does not define Dart flight duration.
-_DART_RULES_LAB_FLIGHT_SECONDS = 1.0
 _DART_TARGET_MODES = {
     "fixed",
     "random-fixed",
@@ -3510,7 +3508,7 @@ class RMUC2026RegionalRules:
                 target_structure_id=target.id,
                 target_mode=state.target_mode,
                 launched_at=now,
-                completes_at=now + _DART_RULES_LAB_FLIGHT_SECONDS,
+                completes_at=now + RULES_LAB_DART_FLIGHT_SECONDS,
                 expires_at=state.detector_window_ends_at,
             )
         )
@@ -3611,8 +3609,8 @@ class RMUC2026RegionalRules:
 
         This is not an official hit-rate model. An attempt hits only when its
         selected target is still legal and its detector is open at completion;
-        otherwise it is recorded as a miss. The one-second completion delay is
-        an explicit simulator approximation, not a V1.4.0 value.
+        otherwise it is recorded as a miss. The shared one-second completion
+        time is an explicit simulator approximation, not a V1.4.0 value.
         """
         if not any(
             state.pending_projectiles

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.dart_timing import RULES_LAB_DART_FLIGHT_SECONDS
 from tarsgo_simulator.core.robot import Robot
 from tarsgo_simulator.core.structure import Structure
 
@@ -173,21 +174,43 @@ def test_rules_lab_dart_attempt_misses_if_target_is_destroyed_in_flight() -> Non
     assert not rules.record_dart_miss(match, RED)
 
 
-def test_rules_lab_dart_attempt_times_out_as_miss_when_detector_window_closes() -> None:
+@pytest.mark.parametrize(
+    ("detector_close_offset", "expected_result"),
+    [(-1e-6, "miss"), (1e-6, "hit")],
+)
+def test_dart_result_uses_flight_arrival_at_detector_window_boundary(
+    detector_close_offset: float,
+    expected_result: str,
+) -> None:
     match = _match()
     rules = match.ruleset
     outpost = _structure(match, BLUE, "outpost")
     starting_hp = outpost.hp
-    _open_and_fire(match, RED)
+    _advance_to(match, 30.0)
+    assert rules.open_dart_gate(match, RED)
     state = rules._dart_system_by_team[RED]
+    _advance_to(match, state.gate_full_open_at)
+    state.detector_window_ends_at = (
+        match.elapsed_time
+        + RULES_LAB_DART_FLIGHT_SECONDS
+        + detector_close_offset
+    )
+    assert rules.fire_dart(match, RED)
     attempt = state.pending_projectiles[0]
+    assert attempt.completes_at - attempt.launched_at == pytest.approx(
+        RULES_LAB_DART_FLIGHT_SECONDS
+    )
 
-    _advance_to(match, attempt.expires_at)
+    step = RULES_LAB_DART_FLIGHT_SECONDS / 60.0
+    for _ in range(60):
+        _advance_to(match, match.elapsed_time + step)
 
-    assert state.last_result == "飞镖未命中"
+    assert state.outcome_events == [
+        (1, outpost.id, expected_result)
+    ]
     assert state.outcome_sequence == 1
     assert state.pending_projectiles == []
-    assert outpost.hp == starting_hp
+    assert outpost.hp == starting_hp - (750 if expected_result == "hit" else 0)
 
 
 def test_darts_with_same_completion_time_each_receive_one_referee_outcome() -> None:
