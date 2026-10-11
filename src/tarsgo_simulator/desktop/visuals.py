@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import math
 from typing import TYPE_CHECKING
 
+from tarsgo_simulator.core.dart_timing import RULES_LAB_DART_FLIGHT_SECONDS
 from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.projectiles import ProjectileImpact
 from tarsgo_simulator.desktop.polish import parse_virtual_shield
@@ -61,7 +62,6 @@ MAX_REBOUND_PROJECTILES = 96
 MAX_ACTIVE_IMPACTS = 24
 MAX_VISIBLE_IMPACT_PARTICLES = 384
 _DART_GATE_OPENING_SECONDS = 7.0
-_DART_FLIGHT_SPEED_MM_PER_SECOND = 34_000.0
 
 
 def robot_visual_profile(robot_type: str) -> RobotVisualProfile:
@@ -1012,7 +1012,10 @@ class CombatVisualState:
             )
             previous = self._before_dart_statuses.get(team_id)
             launcher.sync(ammo, phase, remaining, target_label, dt)
-            if previous is not None and ammo < previous[0]:
+            launch_count = (
+                max(0, previous[0] - ammo) if previous is not None else 0
+            )
+            if launch_count:
                 launcher.launch()
                 target_kind = "base" if target_label == "基地" else "outpost"
                 own_base = next((base for base in bases if base.team == team_id), None)
@@ -1042,22 +1045,16 @@ class CombatVisualState:
                         else match.map.width * 0.975,
                         match.map.height * (0.22 if direction > 0 else 0.78),
                     )
-                    distance = math.hypot(
-                        enemy_target.position[0] - start[0],
-                        enemy_target.position[1] - start[1],
-                    )
-                    self.dart_projectiles.append(
-                        DartVisual(
-                            team_id=team_id,
-                            target_id=enemy_target.id,
-                            start=start,
-                            end=enemy_target.position,
-                            duration=max(
-                                0.34,
-                                min(1.15, distance / _DART_FLIGHT_SPEED_MM_PER_SECOND),
-                            ),
+                    for _ in range(launch_count):
+                        self.dart_projectiles.append(
+                            DartVisual(
+                                team_id=team_id,
+                                target_id=enemy_target.id,
+                                start=start,
+                                end=enemy_target.position,
+                                duration=RULES_LAB_DART_FLIGHT_SECONDS,
+                            )
                         )
-                    )
                     if len(self.dart_projectiles) > MAX_ACTIVE_DART_VISUALS:
                         del self.dart_projectiles[
                             : len(self.dart_projectiles) - MAX_ACTIVE_DART_VISUALS
@@ -1078,6 +1075,11 @@ class CombatVisualState:
                 if dart is not None:
                     dart.resolved = True
                 if outcome == "hit":
+                    if dart is not None:
+                        # A referee can confirm a hit before the Rules Lab's
+                        # one-second presentation flight completes. Stop this
+                        # dart at the target on the same frame as HP/impact.
+                        dart.age = max(dart.age, dart.duration)
                     target = structures_by_id.get(target_id)
                     if target is None:
                         continue
