@@ -6879,14 +6879,22 @@ class RMUC2026RegionalRules:
             for team_id in team_by_side.values()
         }
         self._small_energy_mechanism_generation += 1
+        small_seed = (
+            match.seed if match.seed is not None
+            else self._small_energy_mechanism_generation
+        )
         rotation_direction = random.Random(
-            f"RMUC-2026-small-energy-rotation:{self._small_energy_mechanism_generation}"
+            f"RMUC-2026-small-energy-rotation:{small_seed}"
         ).choice((-1, 1))
         self._small_energy_mechanism_entity = SmallEnergyMechanism(
             center=(match.map.width / 2.0, match.map.height / 2.0),
             rotation_direction=rotation_direction,
         )
         self._large_energy_mechanism_generation += 1
+        large_seed = (
+            match.seed if match.seed is not None
+            else self._large_energy_mechanism_generation
+        )
         self._large_energy_mechanism_entity = LargeEnergyMechanism(
             center=(match.map.width / 2.0, match.map.height / 2.0),
             rotation_direction=rotation_direction,
@@ -6894,18 +6902,18 @@ class RMUC2026RegionalRules:
         )
         self._small_energy_rng_by_team = {
             team_id: random.Random(
-                f"RMUC-2026-small-energy-sequence:{self._small_energy_mechanism_generation}:{team_id}"
+                f"RMUC-2026-small-energy-sequence:{small_seed}:{team_id}"
             )
             for team_id in team_by_side.values()
         }
         self._large_energy_rng_by_team = {
             team_id: random.Random(
-                f"RMUC-2026-large-energy-sequence:{self._large_energy_mechanism_generation}:{team_id}"
+                f"RMUC-2026-large-energy-sequence:{large_seed}:{team_id}"
             )
             for team_id in team_by_side.values()
         }
         energy_speed_rng = random.Random(
-            f"RMUC-2026-large-energy-speed:{self._large_energy_mechanism_generation}"
+            f"RMUC-2026-large-energy-speed:{large_seed}"
         )
         self._large_energy_speed_parameters_by_opportunity = {
             opportunity_time: (
@@ -6924,8 +6932,12 @@ class RMUC2026RegionalRules:
             for robot in match.robots
             if robot.type == "drone"
         }
+        outpost_seed = (
+            match.seed if match.seed is not None
+            else self._outpost_rotation_generation
+        )
         rotation_direction = random.Random(
-            f"RMUC-2026-outpost-rotation:{self._outpost_rotation_generation}"
+            f"RMUC-2026-outpost-rotation:{outpost_seed}"
         ).choice((-1, 1))
         self._outpost_rotation_generation += 1
         self._team_states = {
