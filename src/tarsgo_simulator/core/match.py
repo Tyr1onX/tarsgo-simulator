@@ -246,7 +246,9 @@ class Match:
         config: MatchConfig,
         *,
         rmuc_spectator_ai: bool = False,
+        seed: int | None = None,
     ) -> None:
+        self.seed = seed
         self.config = config
         self.ruleset: RuleSet = create_ruleset(config.rule_document)
         self._rmuc_spectator_ai_requested = rmuc_spectator_ai
@@ -258,10 +260,12 @@ class Match:
         scenario_path: str | Path,
         *,
         rmuc_spectator_ai: bool = False,
+        seed: int | None = None,
     ) -> "Match":
         return cls(
             load_match_config(scenario_path),
             rmuc_spectator_ai=rmuc_spectator_ai,
+            seed=seed,
         )
 
     def reset(self) -> None:
@@ -2263,6 +2267,7 @@ class Match:
         if not self._rmuc_spectator_ai:
             return {}
         result: dict[str, random.Random] = {}
+        base_seed = self.seed if self.seed is not None else _RMUC_AI_SEED
         for team_id in sorted({robot.team for robot in self.robots}):
             for robot_type in ("hero", "engineer", "infantry", "sentry", "drone"):
                 role_robots = sorted(
@@ -2275,10 +2280,10 @@ class Match:
                 )
                 for index, robot in enumerate(role_robots, start=1):
                     result[robot.id] = random.Random(
-                        f"{_RMUC_AI_SEED}:{robot_type}:{index}"
+                        f"{base_seed}:{robot_type}:{index}"
                     )
             result[f"radar:{team_id}"] = random.Random(
-                f"{_RMUC_AI_SEED}:radar"
+                f"{base_seed}:radar"
             )
         return result
 
