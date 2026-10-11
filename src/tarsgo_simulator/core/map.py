@@ -197,6 +197,20 @@ class GameMap:
             for region, bounds in self._terrain_bounds
             if region.kind != "ground_slope"
         )
+        self._raised_terrain_edges = tuple(
+            (first, second, Rectangle(
+                min(first[0], second[0]),
+                min(first[1], second[1]),
+                abs(second[0] - first[0]),
+                abs(second[1] - first[1]),
+            ))
+            for region, _bounds in self._non_ground_terrain_bounds
+            if region.kind in {"platform", "ramp"}
+            for first, second in zip(
+                region.vertices,
+                (*region.vertices[1:], region.vertices[0]),
+            )
+        )
         self.unit_scale = self.path_grid_size / 20.0
         self._structure_bounds_by_id = {
             structure.id: Rectangle(
@@ -467,10 +481,30 @@ class GameMap:
             return direct_ground_grade
         spacing = min(100.0, max(10.0, self.path_grid_size / 2))
         steps = max(1, math.ceil(distance / spacing))
+        sample_fractions = {index / steps for index in range(1, steps + 1)}
+        # The field and ramp geometry contains height changes at raised-surface
+        # edges. Uniform samples can land on different sides of an edge when
+        # the same route is checked from a later movement position, so a long
+        # A* segment may pass while its next short movement step fails. Sample
+        # both sides of every crossed edge to make that decision independent
+        # of how the caller subdivides the route.
+        for first, second, edge_bounds in self._raised_terrain_edges:
+            if not _segment_bounds_overlap(start, end, edge_bounds):
+                continue
+            fraction = _segment_edge_intersection_fraction(
+                start,
+                end,
+                first,
+                second,
+            )
+            if fraction is None:
+                continue
+            offset = min(0.5, 0.01 / distance)
+            sample_fractions.add(max(0.0, fraction - offset))
+            sample_fractions.add(min(1.0, fraction + offset))
         previous = start
         previous_height = self.terrain_height_at(start)
-        for index in range(1, steps + 1):
-            ratio = index / steps
+        for ratio in sorted(sample_fractions):
             point = (
                 start[0] + (end[0] - start[0]) * ratio,
                 start[1] + (end[1] - start[1]) * ratio,
@@ -810,6 +844,42 @@ def _segment_intersects_rectangle(
             return False
 
     return True
+
+
+def _segment_bounds_overlap(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    bounds: Rectangle,
+) -> bool:
+    return not (
+        max(start[0], end[0]) < bounds.x
+        or min(start[0], end[0]) > bounds.right
+        or max(start[1], end[1]) < bounds.y
+        or min(start[1], end[1]) > bounds.bottom
+    )
+
+
+def _segment_edge_intersection_fraction(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    edge_start: tuple[float, float],
+    edge_end: tuple[float, float],
+) -> float | None:
+    """Return where a route segment crosses one terrain boundary edge."""
+    route = (end[0] - start[0], end[1] - start[1])
+    edge = (edge_end[0] - edge_start[0], edge_end[1] - edge_start[1])
+    offset = (edge_start[0] - start[0], edge_start[1] - start[1])
+    denominator = route[0] * edge[1] - route[1] * edge[0]
+    if abs(denominator) <= 1e-12:
+        return None
+    fraction = (offset[0] * edge[1] - offset[1] * edge[0]) / denominator
+    edge_fraction = (offset[0] * route[1] - offset[1] * route[0]) / denominator
+    if (
+        -1e-9 <= fraction <= 1.0 + 1e-9
+        and -1e-9 <= edge_fraction <= 1.0 + 1e-9
+    ):
+        return min(1.0, max(0.0, fraction))
+    return None
 
 
 def _point_in_polygon(

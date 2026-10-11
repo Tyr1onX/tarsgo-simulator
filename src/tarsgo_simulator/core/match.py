@@ -400,8 +400,11 @@ class Match:
         self._movement_counters = {
             "blocked_ticks": 0,
             "blocked_events": 0,
+            "invalid_path_events": 0,
+            "invalid_path_replans": 0,
             "yield_decisions": 0,
             "local_avoidance_attempts": 0,
+            "local_avoidance_fallbacks": 0,
             "local_avoidance_moves": 0,
             "local_replan_searches": 0,
             "local_replan_expansions": 0,
@@ -1345,12 +1348,24 @@ class Match:
             for robot in self.robots
         }
         proposals: dict[str, MovementProposal] = {}
+        invalid_routes: dict[str, list[tuple[float, float]]] = {}
         for robot in self.robots:
-            proposals[robot.id] = (
-                robot.propose_movement(dt, self.map)
-                if movement_allowed[robot.id]
-                else (robot.position, list(robot.path))
-            )
+            if not movement_allowed[robot.id]:
+                proposals[robot.id] = (robot.position, list(robot.path))
+                continue
+            original_path = list(robot.path)
+            proposal = robot.propose_movement(dt, self.map)
+            proposals[robot.id] = proposal
+            if (
+                original_path
+                and not proposal[1]
+                and math.dist(proposal[0], original_path[-1]) > 1e-3
+            ):
+                # Robot.propose_movement clears a route when a terrain or
+                # structure edge invalidates the next movement segment. Keep
+                # its original destination here so the same bounded A* service
+                # can rebuild a legal route after the proposal is committed.
+                invalid_routes[robot.id] = original_path
         intended_to_move = {
             robot.id: (
                 movement_allowed[robot.id]
@@ -1424,41 +1439,59 @@ class Match:
             )
             if candidates:
                 self._movement_counters["local_avoidance_attempts"] += 1
-            for proposal, detour_goal, side in candidates:
-                conflicts = [
-                    other
-                    for other in priority
-                    if other.id != yielding.id
-                    and not other.aerial
-                    and _movement_conflicts(
+            candidate_batches = [candidates]
+            for batch_index, batch in enumerate(candidate_batches):
+                for proposal, detour_goal, side in batch:
+                    conflicts = [
+                        other
+                        for other in priority
+                        if other.id != yielding.id
+                        and not other.aerial
+                        and _movement_conflicts(
+                            yielding.position,
+                            proposal[0],
+                            other.position,
+                            proposals[other.id][0],
+                            minimum_distance,
+                        )
+                    ]
+                    if not conflicts:
+                        proposals[yielding.id] = proposal
+                        active_detours[yielding.id] = detour_goal
+                        avoidance_sides[yielding.id] = side
+                        avoidance_moves.add(yielding.id)
+                        changed = True
+                        break
+                    if conflicts == [winner] and not _movement_conflicts(
                         yielding.position,
                         proposal[0],
-                        other.position,
-                        proposals[other.id][0],
+                        winner.position,
+                        winner.position,
                         minimum_distance,
+                    ):
+                        proposals[yielding.id] = proposal
+                        proposals[winner.id] = (winner.position, list(winner.path))
+                        active_detours[yielding.id] = detour_goal
+                        avoidance_sides[yielding.id] = side
+                        avoidance_moves.add(yielding.id)
+                        changed = True
+                        break
+                if changed:
+                    break
+                if batch_index == 0 and self._rmuc_spectator_ai:
+                    fallback = self._local_avoidance_proposals(
+                        yielding,
+                        winner,
+                        proposals[yielding.id],
+                        active_detours.get(yielding.id),
+                        avoidance_sides.get(yielding.id),
+                        dt,
+                        minimum_distance,
+                        fallback_only=True,
                     )
-                ]
-                if not conflicts:
-                    proposals[yielding.id] = proposal
-                    active_detours[yielding.id] = detour_goal
-                    avoidance_sides[yielding.id] = side
-                    avoidance_moves.add(yielding.id)
-                    changed = True
-                    break
-                if conflicts == [winner] and not _movement_conflicts(
-                    yielding.position,
-                    proposal[0],
-                    winner.position,
-                    winner.position,
-                    minimum_distance,
-                ):
-                    proposals[yielding.id] = proposal
-                    proposals[winner.id] = (winner.position, list(winner.path))
-                    active_detours[yielding.id] = detour_goal
-                    avoidance_sides[yielding.id] = side
-                    avoidance_moves.add(yielding.id)
-                    changed = True
-                    break
+                    if fallback:
+                        self._movement_counters["local_avoidance_fallbacks"] += 1
+                        candidate_batches.append(fallback)
 
             if not changed:
                 # Keep the requested route intact while yielding. A second
@@ -1570,6 +1603,54 @@ class Match:
 
         self._local_detour_by_robot = active_detours
         self._local_avoidance_side_by_robot = avoidance_sides
+
+        for robot_id, old_path in invalid_routes.items():
+            robot = next(
+                (item for item in self.robots if item.id == robot_id),
+                None,
+            )
+            if robot is None or not robot.alive:
+                continue
+            self._movement_counters["invalid_path_events"] += 1
+            target_key = self._ai_target_keys.get(robot_id)
+            pending = self._pending_ai_paths.get(robot_id)
+            if pending is not None and pending.target_key == target_key:
+                continue
+
+            tracked = self._ai_path_targets.get(robot_id)
+            structure_id = None
+            if target_key is not None and target_key.startswith("structure:"):
+                structure_id = target_key.removeprefix("structure:")
+                structure = next(
+                    (item for item in self.structures if item.id == structure_id),
+                    None,
+                )
+                goal = structure.position if structure is not None else old_path[-1]
+            elif target_key is not None and target_key.startswith("robot:"):
+                target_id = target_key.removeprefix("robot:")
+                target = next(
+                    (
+                        item
+                        for item in self.robots
+                        if item.id == target_id and item.alive
+                    ),
+                    None,
+                )
+                goal = target.position if target is not None else old_path[-1]
+            elif tracked is not None and tracked[0] == target_key:
+                goal = tracked[1]
+            else:
+                goal = old_path[-1]
+
+            if math.dist(robot.position, goal) <= 1e-3:
+                continue
+            self._request_ai_path(
+                robot,
+                goal,
+                target_key=target_key,
+                structure_id=structure_id,
+            )
+            self._movement_counters["invalid_path_replans"] += 1
 
     def _conflicts_with_stationary_robot(
         self,
@@ -1847,8 +1928,14 @@ class Match:
         active_side: int | None,
         dt: float,
         minimum_distance: float,
+        *,
+        fallback_only: bool = False,
     ) -> list[tuple[MovementProposal, tuple[float, float], int]]:
-        if active_detour is not None and active_detour in robot.path:
+        if (
+            not fallback_only
+            and active_detour is not None
+            and active_detour in robot.path
+        ):
             if not self._conflicts_with_stationary_robot(
                 robot,
                 current_proposal,
@@ -1891,7 +1978,7 @@ class Match:
         # Keep the established clearance-first candidates. If terrain makes
         # both unavailable, try a more lateral sidestep instead of repeatedly
         # aiming into the same impassable raised edge.
-        direction_blends = (
+        direction_blends = () if fallback_only else (
             (0.82, 0.57),
             (0.5, math.sqrt(0.75)),
         )
@@ -2002,7 +2089,7 @@ class Match:
             result.extend(yield_only)
             if result or local_search_budget <= 0:
                 break
-        if not result and self._rmuc_spectator_ai:
+        if (not result or fallback_only) and self._rmuc_spectator_ai:
             # A robot can be squeezed between several stationary bodies even
             # when each pair has a legal route. Search a deterministic set of
             # terrain-checked one-step directions so it can clear the knot,
@@ -2056,7 +2143,8 @@ class Match:
                 ):
                     result.append((proposal, goal, preferred_side))
         if (
-            not result
+            not fallback_only
+            and not result
             and self._rmuc_spectator_ai
             and self._blocked_seconds_by_robot.get(robot.id, 0.0) + 1e-9
             >= _STUCK_RECOVERY_AFTER_SECONDS

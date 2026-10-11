@@ -439,6 +439,82 @@ def test_repeated_head_on_recovery_replays_the_same_collision_free_trace() -> No
     assert first_match.movement_diagnostics == second_match.movement_diagnostics
 
 
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_power_limited_neighbor_does_not_trap_active_detour_at_terrain_edge(
+    mirrored: bool,
+    monkeypatch,
+) -> None:
+    match = _match()
+    robots = {robot.id: robot for robot in match.robots}
+    moving = robots["tarsgo-infantry-2"]
+    power_limited = robots["tarsgo-hero"]
+    nearby_waiting = robots["opponent-infantry-1"]
+
+    def transform(point: tuple[float, float]) -> tuple[float, float]:
+        if not mirrored:
+            return point
+        return (match.map.width - point[0], match.map.height - point[1])
+
+    detour = transform((16947.180708594322, 13669.177673072074))
+    moving.position = transform((17149.06993831712, 14500.0))
+    moving.set_path(
+        [
+            detour,
+            transform((10100.0, 14500.0)),
+            transform((3195.0, 12164.0)),
+        ]
+    )
+    power_limited.position = transform((17062.993760477468, 14145.776000710921))
+    power_limited.set_path(
+        [transform((10100.0, 14500.0)), transform((2006.0, 13050.0))]
+    )
+    nearby_waiting.position = transform((17713.097865011892, 14500.0))
+    nearby_waiting.path.clear()
+    match.robots = [moving, power_limited, nearby_waiting]
+    match._local_detour_by_robot[moving.id] = detour
+    match._local_avoidance_side_by_robot[moving.id] = 1
+    power_state = match.ruleset._chassis_power_by_robot[power_limited.id]
+    power_state.power_off_remaining = 3.8
+    power_state.blocked_this_frame = False
+    for robot in match.robots:
+        match.ruleset._chassis_power_by_robot[robot.id].blocked_this_frame = False
+
+    # The pre-fix state has legal routes but the active detour points toward a
+    # power-locked robot. Without the moving-trajectory fallback it is rejected
+    # every frame, reproducing the field-edge stall from the full AI match.
+    original_avoidance = Match._local_avoidance_proposals
+
+    def without_fallback(self, *args, **kwargs):
+        if kwargs.get("fallback_only"):
+            return []
+        return original_avoidance(self, *args, **kwargs)
+
+    monkeypatch.setattr(Match, "_local_avoidance_proposals", without_fallback)
+    match._move_robots(1 / 60)
+    assert moving.position == transform((17149.06993831712, 14500.0))
+    assert match._was_blocked[moving.id]
+    monkeypatch.setattr(Match, "_local_avoidance_proposals", original_avoidance)
+
+    before = {robot.id: robot.position for robot in match.robots}
+    match._move_robots(1 / 60)
+
+    assert match.movement_diagnostics["local_avoidance_fallbacks"] == 1
+    assert math.dist(before[moving.id], moving.position) > 0.0
+    assert math.dist(before[moving.id], moving.position) <= moving.speed / 60 + 1e-6
+    assert not match._was_blocked[moving.id]
+    for robot in match.robots:
+        assert match.map.can_traverse(
+            before[robot.id],
+            robot.position,
+            agent_height_mm=robot.body_height_mm,
+        )
+    for index, first in enumerate(match.robots):
+        for second in match.robots[index + 1 :]:
+            assert math.dist(first.position, second.position) >= (
+                2 * match.map.collision_radius - 1e-6
+            )
+
+
 def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() -> None:
     match = _match()
     dt = 1.0 / 60.0
@@ -544,6 +620,7 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     assert match.elapsed_time == match.time_limit == 420.0
     assert match.winner is not None
     assert maximum_path_queue <= 16
+    assert match.movement_diagnostics["local_avoidance_fallbacks"] > 0
     longest_stall_robot = max(
         longest_collision_stall,
         key=longest_collision_stall.get,
@@ -554,6 +631,7 @@ def test_rmuc_ai_completes_full_420_second_match_without_collision_deadlock() ->
     )
     assert stationary_classes["legal_wait"] > 0
     assert stationary_classes["dead_or_respawning"] > 0
+    assert stationary_classes["power_or_rule_lock"] > 0
     assert stationary_classes["collision_yield"] > 0
     assert stationary_classes.get("path_without_motion", 0) == 0
 
