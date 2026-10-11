@@ -97,6 +97,35 @@ def test_direct_grade_check_only_covers_single_planar_surface_segments() -> None
     ) is None
 
 
+def test_raised_edge_traversability_is_stable_when_a_route_is_subdivided() -> None:
+    game_map = _rmuc_map()
+    start = (9029.080897590035, 14045.537440139573)
+    goal = (11157.410893049142, 14743.777171717047)
+    full_route = game_map.can_traverse(start, goal)
+
+    # This cross-slope/ramp-side segment was accepted as a long path, then
+    # rejected after a robot advanced a short distance along that same route.
+    # Exact edge samples now make the decision independent of query length.
+    for pieces in (2, 3, 7, 20):
+        points = [
+            (
+                start[0] + (goal[0] - start[0]) * index / pieces,
+                start[1] + (goal[1] - start[1]) * index / pieces,
+            )
+            for index in range(pieces + 1)
+        ]
+        assert all(
+            game_map.can_traverse(first, second)
+            for first, second in zip(points, points[1:])
+        ) is full_route
+
+    assert full_route is False
+
+    mirrored_start = (game_map.width - start[0], game_map.height - start[1])
+    mirrored_goal = (game_map.width - goal[0], game_map.height - goal[1])
+    assert game_map.can_traverse(mirrored_start, mirrored_goal) is full_route
+
+
 def test_official_field_cross_slope_drives_height_movement_sight_and_projectiles() -> None:
     game_map = _rmuc_map()
     slopes = {
@@ -243,8 +272,8 @@ def test_ramp_side_path_and_frame_movement_share_traversability_for_both_halves(
 def test_a_star_seeds_a_reachable_neighbor_when_start_cell_center_is_blocked() -> None:
     game_map = _rmuc_map()
     mirrored_routes = (
-        ((17817.7, 578.0), (25076.0, 1268.0), (17900.0, 500.0)),
-        ((10182.3, 14422.0), (2924.0, 13732.0), (10100.0, 14500.0)),
+        ((17817.7, 1500.0), (25076.0, 1268.0), (17900.0, 1500.0)),
+        ((10182.3, 13500.0), (2924.0, 13732.0), (10100.0, 13500.0)),
     )
 
     for start, goal, blocked_cell_center in mirrored_routes:

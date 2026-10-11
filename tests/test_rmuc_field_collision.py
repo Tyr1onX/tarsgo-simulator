@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 
 import pytest
 
@@ -229,6 +230,91 @@ def test_astar_routes_around_rmuc_outpost_and_robots_stop_at_it() -> None:
         proposed_position, proposed_path = robot.propose_movement(5.0, match.map)
         assert proposed_position == start
         assert proposed_path == []
+
+
+@pytest.mark.parametrize(
+    ("robot_id", "structure_id", "start"),
+    [
+        ("tarsgo-infantry-1", "blue-outpost", (20500.0, 7500.0)),
+        ("opponent-infantry-1", "red-outpost", (7500.0, 7500.0)),
+        ("tarsgo-infantry-1", "blue-base", (24000.0, 7500.0)),
+        ("opponent-infantry-1", "red-base", (4000.0, 7500.0)),
+    ],
+)
+def test_invalid_structure_route_replans_to_a_legal_approach(
+    robot_id: str,
+    structure_id: str,
+    start: tuple[float, float],
+) -> None:
+    match = _match()
+    robot = _robot(match, robot_id)
+    structure = _structure(match, structure_id)
+    target_key = f"structure:{structure_id}"
+    robot.position = start
+    robot.path = [structure.position]
+    match.robots = [robot]
+    match._ai_target_keys[robot.id] = target_key
+    match._ai_path_targets[robot.id] = (target_key, structure.position)
+    power = match.ruleset._chassis_power_by_robot[robot.id]
+    power.power_off_remaining = 0.0
+    power.blocked_this_frame = False
+
+    assert not match.map.can_traverse(start, structure.position)
+    match._move_robots(1.0 / 60.0)
+
+    assert robot.position == start
+    assert match.movement_diagnostics["invalid_path_events"] == 1
+    assert match.movement_diagnostics["invalid_path_replans"] == 1
+    assert robot.id in match._pending_ai_paths
+    _finish_path_requests(match)
+
+    approaches = match.map.structure_approach_points(structure_id)
+    assert robot.path
+    assert robot.path[-1] in approaches
+    assert all(
+        match.map.can_traverse(first, second)
+        for first, second in zip([robot.position, *robot.path], robot.path)
+    )
+
+
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_invalid_terrain_edge_route_replans_without_teleporting(
+    mirrored: bool,
+) -> None:
+    match = _match()
+    robot = _robot(match, "tarsgo-infantry-1")
+    start = (9818.177287629509, 14340.354903768082)
+    goal = (10500.0, 14500.0)
+    if mirrored:
+        start = (match.map.width - start[0], match.map.height - start[1])
+        goal = (match.map.width - goal[0], match.map.height - goal[1])
+    robot.position = start
+    robot.path = [goal]
+    match.robots = [robot]
+    power = match.ruleset._chassis_power_by_robot[robot.id]
+    power.power_off_remaining = 0.0
+    power.blocked_this_frame = False
+
+    assert not match.map.can_traverse(start, goal)
+    match._move_robots(1.0 / 60.0)
+    assert match.movement_diagnostics["invalid_path_events"] == 1
+    assert match.movement_diagnostics["invalid_path_replans"] == 1
+    assert robot.position == start
+    _finish_path_requests(match)
+
+    assert robot.path and robot.path[-1] == goal
+    assert all(
+        match.map.can_traverse(first, second)
+        for first, second in zip([robot.position, *robot.path], robot.path)
+    )
+    for _ in range(120):
+        before = robot.position
+        match._move_robots(1.0 / 60.0)
+        assert match.map.can_traverse(before, robot.position)
+        assert math.dist(before, robot.position) <= robot.speed / 60.0 + 1e-6
+        if math.dist(robot.position, goal) <= 1e-3:
+            break
+    assert math.dist(robot.position, goal) <= 1e-3
 
 
 def test_rmuc_structure_target_is_exempt_but_other_structure_blocks_sight() -> None:

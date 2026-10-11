@@ -1,0 +1,1392 @@
+{
+  "baseline": "b4edb3f2bec1b67c15f475a8e85f3a8bbc25c3d6",
+  "scenario": "configs/scenarios/rmuc-2026-region-rules-lab.yaml",
+  "fixed_hz": 60,
+  "time_limit_seconds": 420,
+  "finished": true,
+  "elapsed_seconds": 420.0,
+  "ticks": 25200,
+  "winner": "opponent-rmuc-2026-region",
+  "wall_seconds": 60.358,
+  "minimum_robot_separation_mm": 360.017,
+  "max_path_queue": 11,
+  "movement_diagnostics": {
+    "blocked_ticks": 13,
+    "blocked_events": 13,
+    "invalid_path_events": 0,
+    "invalid_path_replans": 0,
+    "yield_decisions": 321,
+    "local_avoidance_attempts": 321,
+    "local_avoidance_fallbacks": 5,
+    "local_avoidance_moves": 321,
+    "local_replan_searches": 106,
+    "local_replan_expansions": 11482,
+    "local_replan_failures": 219,
+    "stuck_recovery_attempts": 0,
+    "stuck_recovery_successes": 0,
+    "stuck_path_replans": 0
+  },
+  "pathfinding_diagnostics": {
+    "requests": 3099,
+    "cache_hits": 29,
+    "cache_misses": 1113,
+    "searches_started": 1113,
+    "searches_completed": 1108,
+    "searches_failed": 242,
+    "node_pops": 1560760,
+    "node_expansions": 1556018,
+    "max_queue_length": 12
+  },
+  "robots": [
+    {
+      "id": "tarsgo-hero",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "hero",
+      "start_position_mm": [
+        2407.0,
+        5900.0
+      ],
+      "final_position_mm": [
+        6905.682672504123,
+        13888.466376480934
+      ],
+      "alive": true,
+      "hp": 150,
+      "target": "zone:supply:red",
+      "intent": "前往补给区",
+      "path_nodes": 1,
+      "path_length_mm": 4970.907,
+      "pathfinding_status": "route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "tarsgo-infantry-2",
+        "distance_mm": 3652.12
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 31.467,
+      "max_collision_stall_seconds": 0.017,
+      "longest_stationary_context": {
+        "at_seconds": 237.233333,
+        "position_mm": [
+          4124.376742370601,
+          12886.23580960365
+        ],
+        "intent": "等待复活",
+        "target": null,
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 31.467,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-engineer",
+            "alive": true,
+            "distance_mm": 944.68,
+            "position_mm": [
+              3194.0,
+              13050.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 5122.59,
+            "position_mm": [
+              9037.58786175488,
+              14335.811146839991
+            ],
+            "path_nodes": 3
+          },
+          {
+            "id": "tarsgo-sentry",
+            "alive": true,
+            "distance_mm": 5335.36,
+            "position_mm": [
+              6600.0,
+              8160.0
+            ],
+            "path_nodes": 0
+          }
+        ],
+        "stationary_reason": "dead_or_respawning",
+        "alive": false
+      },
+      "longest_collision_context": {
+        "at_seconds": 24.7,
+        "position_mm": [
+          19426.722219176616,
+          10984.521205843348
+        ],
+        "intent": "前往补给区",
+        "target": "zone:supply:red",
+        "path_length_mm": 19855.539,
+        "path_nodes": 3,
+        "pathfinding_status": "route",
+        "movement_allowed": false,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 5.017,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 4590.3,
+            "position_mm": [
+              21400.0,
+              6840.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-infantry-1",
+            "alive": true,
+            "distance_mm": 4841.02,
+            "position_mm": [
+              22713.1669093738,
+              7429.975477367907
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 5787.41,
+            "position_mm": [
+              14829.380080314335,
+              14500.0
+            ],
+            "path_nodes": 2
+          }
+        ],
+        "collision_stall_seconds": 0.017
+      },
+      "stationary_frame_classes": {
+        "legal_wait": 1532,
+        "power_or_rule_lock": 4214,
+        "collision_yield": 1,
+        "dead_or_respawning": 3358
+      }
+    },
+    {
+      "id": "tarsgo-engineer",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "engineer",
+      "start_position_mm": [
+        900.0,
+        7000.0
+      ],
+      "final_position_mm": [
+        3194.0,
+        13050.0
+      ],
+      "alive": true,
+      "hp": 250,
+      "target": "zone:supply:red",
+      "intent": "后方待命",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "tarsgo-hero",
+        "distance_mm": 3805.21
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 231.25,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 420.0,
+        "position_mm": [
+          3194.0,
+          13050.0
+        ],
+        "intent": "后方待命",
+        "target": "zone:supply:red",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 231.25,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-hero",
+            "alive": true,
+            "distance_mm": 3805.21,
+            "position_mm": [
+              6905.682672504123,
+              13888.466376480934
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "tarsgo-sentry",
+            "alive": true,
+            "distance_mm": 4655.63,
+            "position_mm": [
+              5015.547207279335,
+              8765.51322289808
+            ],
+            "path_nodes": 3
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 7456.73,
+            "position_mm": [
+              10487.285688614207,
+              14602.674956459077
+            ],
+            "path_nodes": 5
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 23065
+      }
+    },
+    {
+      "id": "tarsgo-infantry-1",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "infantry",
+      "start_position_mm": [
+        3900.0,
+        7000.0
+      ],
+      "final_position_mm": [
+        7833.168380406974,
+        500.0
+      ],
+      "alive": true,
+      "hp": 150,
+      "target": "zone:supply:red",
+      "intent": "前往补给区",
+      "path_nodes": 3,
+      "path_length_mm": 16213.537,
+      "pathfinding_status": "route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "tarsgo-sentry",
+        "distance_mm": 8732.57
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 26.15,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 185.433333,
+        "position_mm": [
+          20498.97359362935,
+          8395.228060299505
+        ],
+        "intent": "等待复活",
+        "target": null,
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 26.15,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 1007.02,
+            "position_mm": [
+              20668.556690628844,
+              7402.589577677472
+            ],
+            "path_nodes": 2
+          },
+          {
+            "id": "opponent-infantry-1",
+            "alive": true,
+            "distance_mm": 1141.53,
+            "position_mm": [
+              21616.0,
+              8160.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 1699.41,
+            "position_mm": [
+              21184.0,
+              6840.0
+            ],
+            "path_nodes": 0
+          }
+        ],
+        "stationary_reason": "dead_or_respawning",
+        "alive": false
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 1465,
+        "power_or_rule_lock": 4801,
+        "dead_or_respawning": 2010
+      }
+    },
+    {
+      "id": "tarsgo-infantry-2",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "infantry",
+      "start_position_mm": [
+        900.0,
+        8000.0
+      ],
+      "final_position_mm": [
+        10487.285688614207,
+        14602.674956459077
+      ],
+      "alive": true,
+      "hp": 135,
+      "target": "robot:opponent-infantry-2",
+      "intent": "集火残血目标",
+      "path_nodes": 5,
+      "path_length_mm": 24417.028,
+      "pathfinding_status": "route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "opponent-infantry-1",
+        "distance_mm": 637.44
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 31.033,
+      "max_collision_stall_seconds": 0.017,
+      "longest_stationary_context": {
+        "at_seconds": 60.866667,
+        "position_mm": [
+          9932.0,
+          12550.0
+        ],
+        "intent": "保护工程",
+        "target": "support:tarsgo-engineer",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 31.033,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-engineer",
+            "alive": true,
+            "distance_mm": 700.0,
+            "position_mm": [
+              9232.0,
+              12550.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-hero",
+            "alive": true,
+            "distance_mm": 2514.57,
+            "position_mm": [
+              7965.941890186301,
+              14117.694062363496
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "tarsgo-sentry",
+            "alive": true,
+            "distance_mm": 6841.49,
+            "position_mm": [
+              3094.915277023376,
+              12304.603043811985
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": {
+        "at_seconds": 60.866667,
+        "position_mm": [
+          9932.0,
+          12550.0
+        ],
+        "intent": "保护工程",
+        "target": "support:tarsgo-engineer",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 31.033,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-engineer",
+            "alive": true,
+            "distance_mm": 700.0,
+            "position_mm": [
+              9232.0,
+              12550.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-hero",
+            "alive": true,
+            "distance_mm": 2514.57,
+            "position_mm": [
+              7965.941890186301,
+              14117.694062363496
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "tarsgo-sentry",
+            "alive": true,
+            "distance_mm": 6841.49,
+            "position_mm": [
+              3094.915277023376,
+              12304.603043811985
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "collision_stall_seconds": 0.017
+      },
+      "stationary_frame_classes": {
+        "legal_wait": 7485,
+        "power_or_rule_lock": 2408,
+        "collision_yield": 6,
+        "dead_or_respawning": 1799
+      }
+    },
+    {
+      "id": "tarsgo-sentry",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "sentry",
+      "start_position_mm": [
+        3900.0,
+        8000.0
+      ],
+      "final_position_mm": [
+        5015.547207279335,
+        8765.51322289808
+      ],
+      "alive": true,
+      "hp": 400,
+      "target": "robot:opponent-infantry-2",
+      "intent": "集火残血目标",
+      "path_nodes": 3,
+      "path_length_mm": 25472.517,
+      "pathfinding_status": "route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "tarsgo-engineer",
+        "distance_mm": 4655.63
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 166.667,
+      "max_collision_stall_seconds": 0.017,
+      "longest_stationary_context": {
+        "at_seconds": 417.9,
+        "position_mm": [
+          2925.0,
+          12164.0
+        ],
+        "intent": "集火残血目标",
+        "target": "robot:opponent-infantry-2",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "pending",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 166.667,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-engineer",
+            "alive": true,
+            "distance_mm": 925.94,
+            "position_mm": [
+              3194.0,
+              13050.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-hero",
+            "alive": true,
+            "distance_mm": 4956.64,
+            "position_mm": [
+              7529.204769935085,
+              13999.6328546143
+            ],
+            "path_nodes": 3
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 6136.44,
+            "position_mm": [
+              8779.94210060264,
+              14001.254004593511
+            ],
+            "path_nodes": 2
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": {
+        "at_seconds": 28.55,
+        "position_mm": [
+          24181.172497315372,
+          4913.032037961927
+        ],
+        "intent": "等待复活",
+        "target": null,
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 12.417,
+        "nearest_robots": [
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 5947.18,
+            "position_mm": [
+              18768.0,
+              2450.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 6277.09,
+            "position_mm": [
+              18282.78770080578,
+              2765.7364307815733
+            ],
+            "path_nodes": 2
+          },
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 8032.89,
+            "position_mm": [
+              19105.581740533307,
+              11139.237458536949
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "collision_stall_seconds": 0.017
+      },
+      "stationary_frame_classes": {
+        "legal_wait": 17822,
+        "dead_or_respawning": 1919,
+        "collision_yield": 4,
+        "power_or_rule_lock": 383
+      }
+    },
+    {
+      "id": "tarsgo-drone",
+      "team": "tarsgo-rmuc-2026-region",
+      "type": "drone",
+      "start_position_mm": [
+        2000.0,
+        2400.0
+      ],
+      "final_position_mm": [
+        2000.0,
+        2400.0
+      ],
+      "alive": false,
+      "hp": 1,
+      "target": null,
+      "intent": "空中弹量耗尽",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": false,
+      "nearest_robot": {
+        "id": "tarsgo-infantry-1",
+        "distance_mm": 6134.81
+      },
+      "power_off_seconds": null,
+      "max_stationary_seconds": 201.0,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 395.616667,
+        "position_mm": [
+          23295.992719626443,
+          2112.1269659860695
+        ],
+        "intent": "空中压制敌方工程",
+        "target": "robot:opponent-engineer",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": null,
+        "stationary_seconds": 201.0,
+        "nearest_robots": [
+          {
+            "id": "opponent-infantry-2",
+            "alive": false,
+            "distance_mm": 1087.98,
+            "position_mm": [
+              23789.181915580866,
+              1142.3511244964664
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 1518.69,
+            "position_mm": [
+              24806.0,
+              1950.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 1920.64,
+            "position_mm": [
+              25075.0,
+              2836.0
+            ],
+            "path_nodes": 0
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 21602,
+        "dead_or_respawning": 1462
+      }
+    },
+    {
+      "id": "opponent-hero",
+      "team": "opponent-rmuc-2026-region",
+      "type": "hero",
+      "start_position_mm": [
+        25593.0,
+        9100.0
+      ],
+      "final_position_mm": [
+        23589.456090917167,
+        2290.0879083141836
+      ],
+      "alive": true,
+      "hp": 180,
+      "target": "structure:red-base",
+      "intent": "进攻基地",
+      "path_nodes": 3,
+      "path_length_mm": 27366.714,
+      "pathfinding_status": "route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "opponent-engineer",
+        "distance_mm": 1263.19
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 134.3,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 249.666667,
+        "position_mm": [
+          25473.005565044277,
+          500.0
+        ],
+        "intent": "进攻基地",
+        "target": "structure:red-base",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "pending",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 134.3,
+        "nearest_robots": [
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 1596.06,
+            "position_mm": [
+              24806.0,
+              1950.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 6800.5,
+            "position_mm": [
+              21547.643293684065,
+              6053.228578851822
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "opponent-infantry-1",
+            "alive": true,
+            "distance_mm": 8937.12,
+            "position_mm": [
+              21539.652189836368,
+              8525.016903285587
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 9416,
+        "power_or_rule_lock": 3010
+      }
+    },
+    {
+      "id": "opponent-engineer",
+      "team": "opponent-rmuc-2026-region",
+      "type": "engineer",
+      "start_position_mm": [
+        27100.0,
+        8000.0
+      ],
+      "final_position_mm": [
+        24806.0,
+        1950.0
+      ],
+      "alive": true,
+      "hp": 250,
+      "target": "zone:supply:blue",
+      "intent": "后方待命",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "opponent-infantry-2",
+        "distance_mm": 733.5
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 226.367,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 420.0,
+        "position_mm": [
+          24806.0,
+          1950.0
+        ],
+        "intent": "后方待命",
+        "target": "zone:supply:blue",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 226.367,
+        "nearest_robots": [
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 733.5,
+            "position_mm": [
+              25076.0,
+              1268.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 925.94,
+            "position_mm": [
+              25075.0,
+              2836.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-hero",
+            "alive": true,
+            "distance_mm": 1263.19,
+            "position_mm": [
+              23589.456090917167,
+              2290.0879083141836
+            ],
+            "path_nodes": 3
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 23342
+      }
+    },
+    {
+      "id": "opponent-infantry-1",
+      "team": "opponent-rmuc-2026-region",
+      "type": "infantry",
+      "start_position_mm": [
+        24100.0,
+        8000.0
+      ],
+      "final_position_mm": [
+        10986.539878422212,
+        14206.348632867323
+      ],
+      "alive": true,
+      "hp": 245,
+      "target": "zone:supply:blue",
+      "intent": "前往补给区",
+      "path_nodes": 2,
+      "path_length_mm": 21134.63,
+      "pathfinding_status": "route",
+      "movement_allowed": false,
+      "nearest_robot": {
+        "id": "tarsgo-infantry-2",
+        "distance_mm": 637.44
+      },
+      "power_off_seconds": 4.1,
+      "max_stationary_seconds": 81.117,
+      "max_collision_stall_seconds": 0.017,
+      "longest_stationary_context": {
+        "at_seconds": 248.05,
+        "position_mm": [
+          21616.0,
+          8160.0
+        ],
+        "intent": "防守前哨站",
+        "target": "defense:blue-outpost",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 81.117,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 1298.71,
+            "position_mm": [
+              20662.79872248435,
+              7277.918751843048
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 1388.89,
+            "position_mm": [
+              21184.0,
+              6840.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 3008.49,
+            "position_mm": [
+              19644.010567753037,
+              10432.05817631322
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": {
+        "at_seconds": 248.05,
+        "position_mm": [
+          21616.0,
+          8160.0
+        ],
+        "intent": "防守前哨站",
+        "target": "defense:blue-outpost",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 81.117,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 1298.71,
+            "position_mm": [
+              20662.79872248435,
+              7277.918751843048
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 1388.89,
+            "position_mm": [
+              21184.0,
+              6840.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 3008.49,
+            "position_mm": [
+              19644.010567753037,
+              10432.05817631322
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "collision_stall_seconds": 0.017
+      },
+      "stationary_frame_classes": {
+        "legal_wait": 8968,
+        "power_or_rule_lock": 2162,
+        "dead_or_respawning": 1019,
+        "collision_yield": 1
+      }
+    },
+    {
+      "id": "opponent-infantry-2",
+      "team": "opponent-rmuc-2026-region",
+      "type": "infantry",
+      "start_position_mm": [
+        27100.0,
+        7000.0
+      ],
+      "final_position_mm": [
+        25076.0,
+        1268.0
+      ],
+      "alive": true,
+      "hp": 68,
+      "target": "zone:supply:blue",
+      "intent": "补充弹量",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "opponent-engineer",
+        "distance_mm": 733.5
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 208.1,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 248.75,
+        "position_mm": [
+          21184.0,
+          6840.0
+        ],
+        "intent": "追击敌方步兵",
+        "target": "robot:tarsgo-infantry-2",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "pending",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 208.1,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 1006.85,
+            "position_mm": [
+              20240.077810406576,
+              7190.354535669689
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "opponent-infantry-1",
+            "alive": true,
+            "distance_mm": 2479.13,
+            "position_mm": [
+              20943.46738191342,
+              9307.431861859162
+            ],
+            "path_nodes": 2
+          },
+          {
+            "id": "tarsgo-infantry-2",
+            "alive": true,
+            "distance_mm": 3908.25,
+            "position_mm": [
+              19644.010567753037,
+              10432.05817631322
+            ],
+            "path_nodes": 1
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 13695,
+        "power_or_rule_lock": 1636,
+        "dead_or_respawning": 2820
+      }
+    },
+    {
+      "id": "opponent-sentry",
+      "team": "opponent-rmuc-2026-region",
+      "type": "sentry",
+      "start_position_mm": [
+        24100.0,
+        7000.0
+      ],
+      "final_position_mm": [
+        25075.0,
+        2836.0
+      ],
+      "alive": true,
+      "hp": 400,
+      "target": "zone:fortress:blue",
+      "intent": "占领堡垒",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": true,
+      "nearest_robot": {
+        "id": "opponent-engineer",
+        "distance_mm": 925.94
+      },
+      "power_off_seconds": 0.0,
+      "max_stationary_seconds": 167.817,
+      "max_collision_stall_seconds": 0.017,
+      "longest_stationary_context": {
+        "at_seconds": 420.0,
+        "position_mm": [
+          25075.0,
+          2836.0
+        ],
+        "intent": "占领堡垒",
+        "target": "zone:fortress:blue",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 167.817,
+        "nearest_robots": [
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 925.94,
+            "position_mm": [
+              24806.0,
+              1950.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-infantry-2",
+            "alive": true,
+            "distance_mm": 1568.0,
+            "position_mm": [
+              25076.0,
+              1268.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-hero",
+            "alive": true,
+            "distance_mm": 1582.68,
+            "position_mm": [
+              23589.456090917167,
+              2290.0879083141836
+            ],
+            "path_nodes": 3
+          }
+        ],
+        "stationary_reason": "legal_wait",
+        "alive": true
+      },
+      "longest_collision_context": {
+        "at_seconds": 37.183333,
+        "position_mm": [
+          21438.743923107013,
+          8427.496662024745
+        ],
+        "intent": "集火残血目标",
+        "target": "robot:tarsgo-sentry",
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": true,
+        "blocked": false,
+        "power_off_seconds": 0.0,
+        "stationary_seconds": 6.75,
+        "nearest_robots": [
+          {
+            "id": "tarsgo-sentry",
+            "alive": true,
+            "distance_mm": 1140.1,
+            "position_mm": [
+              21905.174004544973,
+              7387.1720411940805
+            ],
+            "path_nodes": 7
+          },
+          {
+            "id": "opponent-infantry-1",
+            "alive": true,
+            "distance_mm": 1535.11,
+            "position_mm": [
+              22794.359809672995,
+              7707.171270350497
+            ],
+            "path_nodes": 1
+          },
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 6547.01,
+            "position_mm": [
+              18768.0,
+              2450.0
+            ],
+            "path_nodes": 0
+          }
+        ],
+        "collision_stall_seconds": 0.017
+      },
+      "stationary_frame_classes": {
+        "legal_wait": 11045,
+        "collision_yield": 1,
+        "power_or_rule_lock": 3612
+      }
+    },
+    {
+      "id": "opponent-drone",
+      "team": "opponent-rmuc-2026-region",
+      "type": "drone",
+      "start_position_mm": [
+        26000.0,
+        12600.0
+      ],
+      "final_position_mm": [
+        26000.0,
+        12600.0
+      ],
+      "alive": false,
+      "hp": 1,
+      "target": null,
+      "intent": "空中弹量耗尽",
+      "path_nodes": 0,
+      "path_length_mm": 0.0,
+      "pathfinding_status": "no_route",
+      "movement_allowed": false,
+      "nearest_robot": {
+        "id": "opponent-sentry",
+        "distance_mm": 9807.72
+      },
+      "power_off_seconds": null,
+      "max_stationary_seconds": 120.0,
+      "max_collision_stall_seconds": 0.0,
+      "longest_stationary_context": {
+        "at_seconds": 420.0,
+        "position_mm": [
+          26000.0,
+          12600.0
+        ],
+        "intent": "空中弹量耗尽",
+        "target": null,
+        "path_length_mm": 0.0,
+        "path_nodes": 0,
+        "pathfinding_status": "no_route",
+        "movement_allowed": false,
+        "blocked": false,
+        "power_off_seconds": null,
+        "stationary_seconds": 120.0,
+        "nearest_robots": [
+          {
+            "id": "opponent-sentry",
+            "alive": true,
+            "distance_mm": 9807.72,
+            "position_mm": [
+              25075.0,
+              2836.0
+            ],
+            "path_nodes": 0
+          },
+          {
+            "id": "opponent-hero",
+            "alive": true,
+            "distance_mm": 10587.97,
+            "position_mm": [
+              23589.456090917167,
+              2290.0879083141836
+            ],
+            "path_nodes": 3
+          },
+          {
+            "id": "opponent-engineer",
+            "alive": true,
+            "distance_mm": 10716.72,
+            "position_mm": [
+              24806.0,
+              1950.0
+            ],
+            "path_nodes": 0
+          }
+        ],
+        "stationary_reason": "power_or_rule_lock",
+        "alive": true
+      },
+      "longest_collision_context": null,
+      "stationary_frame_classes": {
+        "legal_wait": 13534,
+        "dead_or_respawning": 7200
+      }
+    }
+  ],
+  "stationary_class_legend": {
+    "legal_wait": "alive and move-enabled, but has no active route; examples include a robot already at its role position",
+    "power_or_rule_lock": "alive but Match/Ruleset movement permission is false",
+    "dead_or_respawning": "robot is dead or in its respawn state",
+    "collision_yield": "valid route and movement permission, but conflict resolution stopped this frame",
+    "path_without_motion": "valid route and movement permission with no reported collision; the 420s run observed zero such frames"
+  },
+  "reproduced_pair_stall": {
+    "time_seconds": 327.0,
+    "robot_id": "tarsgo-infantry-2",
+    "robot_position_mm": [
+      17149.06993831712,
+      14500.0
+    ],
+    "intent": "占领堡垒",
+    "target": "zone:fortress:red",
+    "path_mm": [
+      [
+        16947.180708594322,
+        13669.177673072074
+      ],
+      [
+        10100.0,
+        14500.0
+      ],
+      [
+        3195.0,
+        12164.0
+      ]
+    ],
+    "movement_allowed": true,
+    "blocker": {
+      "robot_id": "tarsgo-hero",
+      "position_mm": [
+        17062.993760477468,
+        14145.776000710921
+      ],
+      "movement_allowed": false,
+      "reason": "底盘功率锁定，power_off_remaining=3.8s；仍有待执行路径"
+    },
+    "secondary_nearby_robot": {
+      "robot_id": "opponent-infantry-1",
+      "position_mm": [
+        17713.097865011892,
+        14500.0
+      ],
+      "path_nodes": 0
+    },
+    "start_separation_mm": 364.532,
+    "minimum_separation_mm": 360.0,
+    "pre_fix_collision_stall_seconds": 4.633,
+    "root_cause": "已有活动 detour 时，局部避障复用通往 detour 点的当前提案；该提案被全局轨迹冲突检查持续拒绝。因主候选列表非空，旧逻辑没有产生其它合法让行点。",
+    "post_fix_one_tick": {
+      "position_mm": [
+        17156.547317195742,
+        14530.771197293627
+      ],
+      "distance_mm": 31.667,
+      "hero_separation_mm": 396.199,
+      "nearby_robot_separation_mm": 557.401,
+      "terrain_traversal_valid": true,
+      "within_1900mm_per_second_speed_limit": true
+    }
+  },
+  "reproduced_terrain_path_invalidation": {
+    "time_seconds": 12.2167,
+    "robot_id": "tarsgo-hero",
+    "position_mm": [
+      9818.177287629509,
+      14340.354903768082
+    ],
+    "intent": "前往补给区",
+    "target": "zone:supply:red",
+    "old_next_waypoint_mm": [
+      10500.0,
+      14500.0
+    ],
+    "pathfinding_state": "no pending route request before fix; the invalid movement proposal cleared the robot path",
+    "root_cause": "坡道/高地边缘的均匀高度采样依赖线段长度，同一路径的长 A* 段与短帧移动段可能给出相反通行结果。",
+    "repair": "在每条相交的升高地形边缘两侧取样，使 can_traverse 对路径分段保持一致；若后续位置变化使旧路线不再合法，则保留目标并提交同一 A* 服务重规划。",
+    "subdivision_probe": {
+      "start_mm": [
+        9029.080897590035,
+        14045.537440139573
+      ],
+      "end_mm": [
+        11157.410893049142,
+        14743.777171717047
+      ],
+      "point_at_10_percent_mm": [
+        9241.913897135946,
+        14115.36141329732
+      ],
+      "before_fix": {
+        "whole_segment": true,
+        "subsegment": false
+      },
+      "after_fix": "whole segment and 2/3/7/20 subdivisions agree; mirrored test also agrees"
+    }
+  },
+  "local_full_test_result": {
+    "command": "python -m pytest -q",
+    "result": "1224 passed",
+    "skipped": 0
+  }
+}

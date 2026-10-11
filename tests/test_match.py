@@ -644,6 +644,61 @@ def test_stuck_recovery_repaths_through_budgeted_service_without_dropping_route(
     assert moving.path[-1] == original_route[-1]
 
 
+@pytest.mark.parametrize(
+    "scenario_path",
+    [default_scenario_path(), RULES_LAB_PATH],
+    ids=["training", "rmul"],
+)
+def test_invalid_player_route_replans_with_training_and_rmul_rulesets(
+    scenario_path: Path,
+) -> None:
+    match = Match(load_match_config(scenario_path))
+    radius = match.map.collision_radius
+    previous_grid_size = match.map.path_grid_size
+    match.map = GameMap(
+        width=40 * radius,
+        height=30 * radius,
+        obstacles=(Rectangle(19 * radius, 12 * radius, 2 * radius, 6 * radius),),
+        collision_radius=radius,
+        path_grid_size=previous_grid_size,
+    )
+    robot = match.robots[0]
+    match.robots = [robot]
+    start = (10 * radius, 15 * radius)
+    goal = (30 * radius, 15 * radius)
+    robot.position = start
+    robot.path = [goal]
+    chassis_power = getattr(match.ruleset, "_chassis_power_by_robot", {}).get(
+        robot.id
+    )
+    if chassis_power is not None:
+        chassis_power.power_off_remaining = 0.0
+        chassis_power.blocked_this_frame = False
+
+    assert not match.map.can_traverse(start, goal)
+    match._move_robots(1.0 / 60.0)
+
+    assert match.movement_diagnostics["invalid_path_events"] == 1
+    assert match.movement_diagnostics["invalid_path_replans"] == 1
+    assert robot.position == start
+    for _ in range(2000):
+        if not match._path_work_queue:
+            break
+        match._advance_path_requests()
+    assert not match._path_work_queue
+    assert robot.path and robot.path[-1] == goal
+    assert all(
+        match.map.can_traverse(first, second)
+        for first, second in zip([robot.position, *robot.path], robot.path)
+    )
+
+    before = robot.position
+    match._move_robots(1.0 / 60.0)
+    assert robot.position != before
+    assert match.map.can_traverse(before, robot.position)
+    assert math.dist(before, robot.position) <= robot.speed / 60.0 + 1e-6
+
+
 def test_player_can_move_each_friendly_robot_independently() -> None:
     match = Match(load_match_config(default_scenario_path()))
     first = _robot(match, T1)
