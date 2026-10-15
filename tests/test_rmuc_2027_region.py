@@ -10,6 +10,7 @@ import yaml
 from tarsgo_simulator.core.config import ConfigError, load_match_config
 from tarsgo_simulator.core.match import Match
 from tarsgo_simulator.core.replay import cli as replay_cli
+from tarsgo_simulator.core.structure import StructureProjectileHitContext
 from tarsgo_simulator.desktop.app import (
     _is_rmuc_2027_rules_lab,
     _robot_display_names,
@@ -64,6 +65,19 @@ def _territory(match: Match, territory_id: str):
     )
 
 
+def _structure(match: Match, structure_id: str):
+    return next(item for item in match.structures if item.id == structure_id)
+
+
+def _remote_blue_spawns() -> dict[str, list[int]]:
+    return {
+        "opponent-heavy": [15000, 1300],
+        "opponent-infantry-1": [15600, 1300],
+        "opponent-infantry-2": [15000, 1900],
+        "opponent-sentry": [15600, 1900],
+    }
+
+
 def test_rmuc_2027_ruleset_identity_and_official_active_roster() -> None:
     match = _match(seed=27)
     metadata = match.config.rule_document.metadata
@@ -80,7 +94,15 @@ def test_rmuc_2027_ruleset_identity_and_official_active_roster() -> None:
     assert match.config.scenario.map_height == 15000
     assert len(match.config.scenario.zones) == 8
     assert all(zone.approximation for zone in match.config.scenario.zones)
-    assert match.structures == []
+    assert {
+        (structure.id, structure.type, structure.team, structure.hp, structure.max_hp)
+        for structure in match.structures
+    } == {
+        ("red-base", "base", RED, 10_000, 10_000),
+        ("blue-base", "base", BLUE, 10_000, 10_000),
+        ("red-outpost", "outpost", RED, 1_000, 1_000),
+        ("blue-outpost", "outpost", BLUE, 1_000, 1_000),
+    }
 
     for team_id in (RED, BLUE):
         assert Counter(
@@ -132,17 +154,22 @@ def test_match_rejects_legacy_or_illegal_2027_rosters(
         Match(config)
 
 
-def test_reset_enables_real_movement_but_keeps_combat_unimplemented() -> None:
+def test_reset_enables_movement_and_structure_only_combat() -> None:
     match = _match(seed=2027)
     initial_positions = {robot.id: robot.position for robot in match.robots}
     heavy = next(robot for robot in match.robots if robot.id == "tarsgo-heavy")
+    sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
+    enemy_base = next(item for item in match.structures if item.id == "blue-base")
 
     match.update(0.25)
     assert match.elapsed_time == pytest.approx(0.25)
     assert match.ruleset.can_move(heavy)
     assert not match.ruleset.can_attack(heavy)
+    assert match.ruleset.can_attack(sentry)
     assert not match.ruleset.can_target(heavy)
+    assert match.ruleset.can_target(enemy_base)
     assert match.ruleset.resolve_damage(heavy, 50, BLUE) == 0
+    assert match.ruleset.resolve_damage(enemy_base, 50, RED) == 0
     assert match.ruleset.evaluate_result(match) is None
     assert all(item.status == "full" for item in match.ruleset.display_state.territory_control)
 
@@ -160,6 +187,7 @@ def test_reset_enables_real_movement_but_keeps_combat_unimplemented() -> None:
         item.status == "full"
         for item in match.ruleset.display_state.territory_control
     )
+    assert match.ruleset._remaining_sentry_ammo[sentry.id] == 300
 
     # P2a still has no official winner calculation at the timer boundary.
     match.elapsed_time = match.time_limit
@@ -173,9 +201,7 @@ def test_rmuc_2027_is_additive_and_has_an_explicit_rules_lab_ui_label() -> None:
     assert "training-v0" in RULESETS
 
     match = _match()
-    assert _window_caption(match) == (
-        "TARS-Go RMUC 2027 Rules Lab (P2a: Territory Control)"
-    )
+    assert _window_caption(match) == "TARS-Go RMUC 2027 Rules Lab (P2b: Structures)"
     names = _robot_display_names(match)
     assert names["tarsgo-heavy"] == "重装"
     assert _is_rmuc_2027_rules_lab(match)
@@ -290,8 +316,8 @@ def test_opponent_can_only_take_temporary_control_of_base_territory(
         },
     )
     robot = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
-    zone = next(item for item in match.map.zones if item.id == "blue-base-point")
-    assert match.order_move(robot.id, (25950, 13200))
+    zone = next(item for item in match.map.zones if item.id == "blue-fortress-point")
+    assert match.order_move(robot.id, (23000, 12000))
     for _ in range(180):
         if zone.contains(robot.position):
             break
@@ -302,6 +328,177 @@ def test_opponent_can_only_take_temporary_control_of_base_territory(
     territory = _territory(match, "blue-base")
     assert territory.status == "temporary"
     assert territory.owner == RED
+
+
+def test_sentry_projectile_hits_outpost_through_match_tick_with_official_damage(
+    tmp_path: Path,
+) -> None:
+    spawns = {
+        **_remote_blue_spawns(),
+        "tarsgo-sentry": [19000, 7500],
+    }
+    match = _zone_match(tmp_path, spawns=spawns)
+    outpost = _structure(match, "blue-outpost")
+    ammo_before = match.ruleset._remaining_sentry_ammo["tarsgo-sentry"]
+    observed_impacts = []
+
+    assert match.uses_physical_projectiles
+    for _ in range(1800):
+        match.update(1 / 60)
+        observed_impacts.extend(match.projectile_impacts)
+        if outpost.hp < outpost.max_hp:
+            break
+
+    assert outpost.hp == outpost.max_hp - 20
+    assert match.ruleset._remaining_sentry_ammo["tarsgo-sentry"] < ammo_before
+    assert any(
+        impact.shooter_id == "tarsgo-sentry"
+        and impact.target_id == "blue-outpost"
+        and impact.caliber == "17mm"
+        and impact.applied_damage == 20
+        for impact in observed_impacts
+    )
+
+
+def test_2027_structure_hit_speed_threshold_is_rule_set_owned() -> None:
+    match = _match(seed=2027)
+    outpost = _structure(match, "blue-outpost")
+    rules = match.ruleset
+    at_threshold = StructureProjectileHitContext(
+        module_id="outpost-armor-1",
+        impact_position=outpost.position,
+        caliber="17mm",
+        effective_impact_speed=12_000,
+        center_hit=False,
+        normal=(1.0, 0.0),
+    )
+    above_threshold = StructureProjectileHitContext(
+        module_id="outpost-armor-1",
+        impact_position=outpost.position,
+        caliber="17mm",
+        effective_impact_speed=12_001,
+        center_hit=False,
+        normal=(1.0, 0.0),
+    )
+
+    assert rules.projectile_minimum_hit_speed_for("17mm", "structure") == 12_000
+    assert rules.resolve_structure_projectile_hit(outpost, 20, at_threshold) == (0, 1.0)
+    assert rules.resolve_structure_projectile_hit(outpost, 20, above_threshold) == (20, 1.0)
+
+
+def test_destroying_outpost_stops_only_its_rotation_and_rotation_stops_at_three_minutes(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={
+            **_remote_blue_spawns(),
+            "tarsgo-sentry": [19000, 7500],
+        },
+    )
+    blue_outpost = _structure(match, "blue-outpost")
+    rules = match.ruleset
+
+    for _ in range(1800):
+        match.update(1 / 60)
+        if not blue_outpost.alive:
+            break
+    assert not blue_outpost.alive
+
+    def panel_vertices(structure_id: str):
+        structure = _structure(match, structure_id)
+        profile = rules.structure_projectile_hitbox_profile(structure)
+        assert profile is not None and profile.armor_panels
+        return profile.armor_panels[0].vertices
+
+    blue_at_destruction = panel_vertices("blue-outpost")
+    red_at_destruction = panel_vertices("red-outpost")
+    _tick(match, 1.0)
+    assert panel_vertices("blue-outpost") == blue_at_destruction
+    assert panel_vertices("red-outpost") != red_at_destruction
+
+    rules.prepare_combat(match, max(0.0, 180.0 - match.elapsed_time))
+    red_at_three_minutes = panel_vertices("red-outpost")
+    rules.prepare_combat(match, max(0.0, 181.0 - match.elapsed_time))
+    assert panel_vertices("red-outpost") == red_at_three_minutes
+
+
+def test_destroying_fully_controlled_outpost_downgrades_territory_to_temporary(
+    tmp_path: Path,
+) -> None:
+    spawns = {
+        **_remote_blue_spawns(),
+        "tarsgo-sentry": [19000, 7500],
+    }
+    match = _zone_match(tmp_path, spawns=spawns)
+    outpost = _structure(match, "blue-outpost")
+
+    for _ in range(1800):
+        match.update(1 / 60)
+        if not outpost.alive:
+            break
+
+    territory = _territory(match, "blue-outpost")
+    assert not outpost.alive
+    assert outpost.hp == 0
+    assert territory.status == "temporary"
+    assert territory.owner == BLUE
+
+
+def test_temporary_outpost_owner_destroys_structure_to_flip_and_rebuild_at_500_hp(
+    tmp_path: Path,
+) -> None:
+    spawns = {
+        **_remote_blue_spawns(),
+        "tarsgo-infantry-1": [25200, 7500],
+        "tarsgo-sentry": [18000, 7500],
+    }
+    match = _zone_match(tmp_path, spawns=spawns)
+    sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
+    outpost = _structure(match, "blue-outpost")
+
+    _tick(match, 5.2)
+    territory = _territory(match, "blue-outpost")
+    assert territory.status == "temporary"
+    assert territory.owner == RED
+    assert outpost.team == BLUE and outpost.hp == 1000
+
+    # Sentry is autonomous in this ruleset and has no player command surface;
+    # move it through the engine's normal path planner, as the AI does.
+    assert match._set_robot_destination(sentry, (19000, 7500))
+    for _ in range(1500):
+        match.update(1 / 60)
+        if outpost.team == RED and outpost.alive and outpost.hp == 500:
+            break
+
+    territory = _territory(match, "blue-outpost")
+    assert territory.status == "full"
+    assert territory.owner == RED
+    assert outpost.team == RED
+    assert outpost.alive
+    assert outpost.hp == 500
+    assert outpost.max_hp == 1000
+
+
+def test_base_full_outpost_control_blocks_sentry_damage_until_territory_is_temporary(
+    tmp_path: Path,
+) -> None:
+    spawns = {
+        **_remote_blue_spawns(),
+        "tarsgo-sentry": [19000, 12374],
+        "tarsgo-infantry-1": [25200, 7500],
+    }
+    match = _zone_match(tmp_path, spawns=spawns)
+    base = _structure(match, "blue-base")
+
+    _tick(match, 4.8)
+    assert _territory(match, "blue-outpost").status == "full"
+    assert base.hp == 10_000
+
+    _tick(match, 0.4)
+    assert _territory(match, "blue-outpost").status == "temporary"
+    _tick(match, 1.0)
+    assert base.hp < 10_000
 
 
 def test_opposing_robots_on_distinct_gainpoints_pause_the_same_territory(

@@ -40,6 +40,23 @@ rules_lab_placeholder:
   attack_interval: 1
   damage: 0
 
+# RMUC 2027 Competition Rules V1.0.0 §§3.1.3, 4.5.2, 5.1.1 Table 5-1,
+# 5.1.1 Table 5-2, and 5.6.1. HP, damage, hit-speed threshold, and initial
+# sentry ammunition are official. Projectile speed/range/rate are isolated
+# Rules Lab values inside the official legal speed and detection constraints.
+structures:
+  base:
+    max_hp: 10000
+  outpost:
+    max_hp: 1000
+rules_lab_structure_attack:
+  sentry_initial_17mm_ammo: 300
+  structure_hit_damage_17mm: 20
+  minimum_effective_speed_mm_s: 12000
+  projectile_speed_mm_s: 13000
+  firing_interval_seconds: 0.05
+  effective_range_mm: 7000
+
 # RMUC 2027 Competition Rules V1.0.0 §5.6.2 and Table 5-21.
 # Card polygons are separately sourced and marked approximate in the field file.
 territory_control:
@@ -64,9 +81,10 @@ territory_control:
       gainpoints: [blue-base-point, blue-fortress-point]
 
 unimplemented:
-  - "§5.6.1 outpost ownership, structure HP, and dynamic base defense"
-  - "§5.6.2 outpost destruction transitions and control-degree scoring"
+  - "§5.6.2 control-degree accumulation and scoring eligibility"
   - "§5.8 victory and timeout settlement"
-  - "official robot performance and combat"
-  - "damage, economy, projectiles, mechanisms, and robot abilities"
+  - "§5.6.1 outpost rotation stop on opposing base armor deployment; waiting for base-armor activation behavior"
+  - "17mm fire from infantry/heavy and robot-vs-robot damage"
+  - "official weapon cadence, heat, ammunition purchases, and projectile trajectories"
+  - "economy, mechanisms, and robot abilities"
   - "official 2027 field geometry, terrain, and collision model"

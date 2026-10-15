@@ -40,6 +40,7 @@ _RMUC_AI_STICKY_SECONDS = 2.25
 _RMUC_AI_SWITCH_MARGIN = 0.45
 _RMUC_AI_STRATEGY_STICKY_SECONDS = 4.0
 _RMUC_RULE_ID = "rmuc-2026-region-v1.4.0"
+_RMUC_2027_RULE_ID = "rmuc-2027-region-v1.0.0"
 _RMUC_ROBOT_NAMES = {
     "hero": "英雄",
     "engineer": "工程",
@@ -464,7 +465,10 @@ class Match:
 
     @property
     def uses_physical_projectiles(self) -> bool:
-        return self.config.rule_document.metadata.id == _RMUC_RULE_ID
+        return self.config.rule_document.metadata.id in {
+            _RMUC_RULE_ID,
+            _RMUC_2027_RULE_ID,
+        }
 
     @property
     def projectiles(self) -> list[Projectile]:
@@ -718,6 +722,14 @@ class Match:
             )
             self.current_events.append(event)
             self.battle_statistics.record(event)
+            if is_structure:
+                on_destroyed = getattr(
+                    self.ruleset,
+                    "on_structure_destroyed",
+                    None,
+                )
+                if callable(on_destroyed):
+                    on_destroyed(self, target, source_team_id, event_time)
         return actual_damage
 
     def battle_report(
@@ -1300,6 +1312,11 @@ class Match:
                     ),
                     special_hitboxes=energy_hitboxes,
                     on_special_hit=on_energy_mechanism_hit,
+                    minimum_hit_speed_for=getattr(
+                        self.ruleset,
+                        "projectile_minimum_hit_speed_for",
+                        None,
+                    ),
                     simulation_start_time=self.elapsed_time,
                 )
             else:
