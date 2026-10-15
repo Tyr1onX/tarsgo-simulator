@@ -57,6 +57,19 @@ class DamageResolution:
     virtual_shield_absorbed: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class TerritoryControlDisplayState:
+    """Read-only territory state shared with the HUD and battle reports."""
+
+    territory_id: str
+    kind: str
+    owner: str
+    status: str
+    progress_seconds: float
+    progress_team_id: str | None
+    active_team_ids: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class AimMotionParameters:
     """Rules Lab-only turret and chassis motion rates, in radians/second."""
@@ -164,6 +177,7 @@ class RuleSetDisplayState:
     ] = ()
     dart_outcome_events: tuple[tuple[str, int, str, str], ...] = ()
     dart_effect_statuses: tuple[tuple[str, float, float], ...] = ()
+    territory_control: tuple[TerritoryControlDisplayState, ...] = ()
 
 
 class RuleSet(Protocol):

@@ -3748,6 +3748,8 @@ class Match:
                 )
 
     def _update_ai(self, dt: float) -> None:
+        if not getattr(self.ruleset, "runs_generic_robot_ai", True):
+            return
         if self._rmuc_spectator_ai:
             dart_ai = getattr(self.ruleset, "update_dart_ai", None)
             if callable(dart_ai):

@@ -429,6 +429,12 @@ def _zones(
         if not isinstance(value, dict):
             raise ConfigError(f"{path}: `{item_field}` 必须是 YAML 字典")
         zone_id = _string(value, "id", f"{item_field}.id", path)
+        source = value.get("source", "")
+        approximation = value.get("approximation", "")
+        if not isinstance(source, str) or not isinstance(approximation, str):
+            raise ConfigError(
+                f"{path}: `{item_field}.source/approximation` 必须是字串"
+            )
         if zone_id in zone_ids:
             raise ConfigError(f"{path}: 区域 id `{zone_id}` 重复")
         if "points" in value:
@@ -442,6 +448,8 @@ def _zones(
                 width=max(xs) - min(xs),
                 height=max(ys) - min(ys),
                 vertices=vertices,
+                source=source,
+                approximation=approximation,
             )
         else:
             zone = Zone(
@@ -450,6 +458,8 @@ def _zones(
                 y=_number(value, "y", f"{item_field}.y", path, allow_zero=True),
                 width=_number(value, "width", f"{item_field}.width", path),
                 height=_number(value, "height", f"{item_field}.height", path),
+                source=source,
+                approximation=approximation,
             )
         if zone.right > map_width or zone.bottom > map_height:
             raise ConfigError(f"{path}: `{field}` 超出地图边界")
@@ -925,6 +935,8 @@ def _mirror_team_zones(
                 width=max(xs) - min(xs),
                 height=max(ys) - min(ys),
                 vertices=vertices,
+                source=zone.source,
+                approximation=zone.approximation,
             )
         )
     return tuple(mirrored)
