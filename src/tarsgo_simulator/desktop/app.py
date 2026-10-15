@@ -182,6 +182,7 @@ RMUC_ZONE_STYLE = {
 RMUC_DEFAULT_ZONE_IDS = frozenset(RMUC_ZONE_STYLE)
 RMUC_DEBUG_ZONE_PREFIXES = ("red-terrain-", "blue-terrain-")
 RMUC_ROBOT_NAMES = {
+    "heavy": "重装",
     "hero": "英雄",
     "engineer": "工程",
     "infantry": "步兵",
@@ -525,12 +526,18 @@ def cli() -> None:
 
 
 def _window_caption(match: Match) -> str:
+    if _is_rmuc_2027_rules_lab(match):
+        return "TARS-Go RMUC 2027 Rules Lab (P1: Roster / Startup Only)"
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
         return "TARS-Go RMUC 2026 区域赛"
     if display_state is not None:
         return "TARS-Go RMUL 2026 Rules Lab (Partial / Experimental)"
     return "TARS-Go Infantry Training"
+
+
+def _is_rmuc_2027_rules_lab(match: Match) -> bool:
+    return match.config.rule_document.metadata.id == "rmuc-2027-region-v1.0.0"
 
 
 def _is_rmuc_rules_lab(match: Match) -> bool:
@@ -712,6 +719,7 @@ def _default_robot_labels(
                 labels[robot.id] = f"{prefix}{index + 1}"
         return labels
     type_labels = {
+        "heavy": "重",
         "hero": "H",
         "engineer": "E",
         "infantry": "I",
@@ -2139,6 +2147,8 @@ def _draw_rmuc_hud(
             if match.winner
             else "平局"
         )
+    elif _is_rmuc_2027_rules_lab(match) and timer == 0:
+        status = "P1 未结算"
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
     pygame.draw.rect(screen, PANEL_SECTION_ALT, timer_rect, border_radius=8)
@@ -5046,6 +5056,8 @@ def _draw(
                 if match.winner
                 else "DRAW"
             )
+        elif _is_rmuc_2027_rules_lab(match) and timer == 0:
+            status = "P1 UNSETTLED"
         else:
             status = f"BATTLE  {timer // 60:02}:{timer % 60:02}"
 

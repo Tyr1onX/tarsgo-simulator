@@ -1,0 +1,25 @@
+schema_version: 1
+rules: rmuc-2027-region-v1.0.0
+player_team: tarsgo-rmuc-2027-region
+player_controlled:
+  - tarsgo-heavy
+  - tarsgo-infantry-1
+  - tarsgo-infantry-2
+learning_goals:
+  - "RMUC 2027 V1.0.0 P1: load the independent ruleset and validate the four-robot ground lineup"
+  - "Inspect a synthetic startup layout; combination systems are roster metadata, not ground units"
+  - "Only startup, reset, and the official 420-second duration are represented; battle mechanics and winner settlement are not implemented"
+field_geometry: rmuc-2027-v1.0.0-rules-lab
+setup:
+  teams:
+    red: tarsgo-rmuc-2027-region
+    blue: opponent-rmuc-2027-region
+  spawns:
+    tarsgo-heavy: [1100, 1300]
+    tarsgo-infantry-1: [1700, 1300]
+    tarsgo-infantry-2: [1100, 1900]
+    tarsgo-sentry: [1700, 1900]
+    opponent-heavy: [7900, 3700]
+    opponent-infantry-1: [7300, 3700]
+    opponent-infantry-2: [7900, 3100]
+    opponent-sentry: [7300, 3100]

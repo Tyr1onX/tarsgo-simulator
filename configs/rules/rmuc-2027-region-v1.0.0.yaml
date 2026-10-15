@@ -1,0 +1,48 @@
+schema_version: 1
+id: rmuc-2027-region-v1.0.0
+status: rules-lab-partial
+competition: RMUC
+season: 2027
+format: regional
+official_version: V1.0.0
+source_url: null
+last_verified: "2026-10-15"
+stage: regional
+
+# RMUC 2027 Competition Rules V1.0.0, §3 Tables 3-1 and 3-2.
+# Combination systems are roster entries, not ordinary ground Robot instances.
+active_roster:
+  ground:
+    heavy: 1
+    infantry: 2
+    sentry: 1
+  systems:
+    air:
+      hangar: 1
+      aircraft: 4
+    dart:
+      launcher: 1
+      dart_bodies: 4
+    radar:
+      computing_platform: 1
+      sensor: 1
+
+# §6.6. Official duration only. P1 does not implement timeout settlement.
+match_duration: 420
+
+# Synthetic spawn-scene values only; none are official robot statistics.
+# Movement, attacks, damage, structures, and match outcome stay disabled in P1.
+rules_lab_placeholder:
+  max_hp: 1
+  move_speed: 0
+  collision_radius: 200
+  attack_range: 0
+  attack_interval: 1
+  damage: 0
+
+unimplemented:
+  - "§5.6 battlefield control, outpost ownership, and base defense"
+  - "§5.8 victory and timeout settlement"
+  - "robot movement and combat performance"
+  - "damage, economy, projectiles, mechanisms, and robot abilities"
+  - "official 2027 field geometry, terrain, and collision model"

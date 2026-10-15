@@ -34,5 +34,6 @@ jobs:
           python -c "from tarsgo_simulator.core.match import Match; m=Match.from_scenario('configs/scenarios/first-steps.yaml'); m.update(0.01)"
           python -c "from tarsgo_simulator.core.match import Match; m=Match.from_scenario('configs/scenarios/rmul-2026-rules-lab.yaml'); m.update(0.01)"
           python -c "from tarsgo_simulator.core.match import Match; m=Match.from_scenario('configs/scenarios/rmuc-2026-region-rules-lab.yaml'); m.update(0.01)"
+          python -c "from tarsgo_simulator.core.match import Match; m=Match.from_scenario('configs/scenarios/rmuc-2027-region-rules-lab.yaml', seed=2027); m.update(0.01)"
       - name: Run tests
         run: python -m pytest
