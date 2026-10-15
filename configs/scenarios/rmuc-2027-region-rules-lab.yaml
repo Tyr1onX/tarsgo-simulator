@@ -6,20 +6,21 @@ player_controlled:
   - tarsgo-infantry-1
   - tarsgo-infantry-2
 learning_goals:
-  - "RMUC 2027 V1.0.0 P2a: move ground robots through match ticks to activate gainpoint zones"
-  - "Exercise temporary/full territory control, five-second thresholds, two-second RFID invalidation, contest pause, and retreat"
-  - "Gainpoint card polygons are schematic projections; structures, damage, scoring, and settlement remain later P2 work"
+  - "RMUC 2027 V1.0.0 P2b: capture territory with ground robots and attack structures with sentry projectiles"
+  - "Exercise five-second control transitions, territory-dependent base defense, outpost ownership transfer, and rebuilding"
+  - "Structure footprints and sentry projectile speed/cadence/range are explicit Rules Lab projections where V1.0.0 does not specify dimensions or weapon trajectory"
+  - "Control-degree scoring and official match settlement remain P2c work"
 field_geometry: rmuc-2027-v1.0.0-rules-lab
 setup:
   teams:
     red: tarsgo-rmuc-2027-region
     blue: opponent-rmuc-2027-region
   spawns:
-    tarsgo-heavy: [1100, 1300]
-    tarsgo-infantry-1: [1700, 1300]
-    tarsgo-infantry-2: [1100, 1900]
-    tarsgo-sentry: [1700, 1900]
-    opponent-heavy: [26900, 13700]
-    opponent-infantry-1: [26300, 13700]
-    opponent-infantry-2: [26900, 13100]
-    opponent-sentry: [26300, 13100]
+    tarsgo-heavy: [4200, 1300]
+    tarsgo-infantry-1: [4800, 1300]
+    tarsgo-infantry-2: [4200, 1900]
+    tarsgo-sentry: [4800, 1900]
+    opponent-heavy: [23800, 13700]
+    opponent-infantry-1: [23200, 13700]
+    opponent-infantry-2: [23800, 13100]
+    opponent-sentry: [23200, 13100]

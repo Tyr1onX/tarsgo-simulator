@@ -401,6 +401,7 @@ class ProjectileSystem:
             str,
         ]
         | None = None,
+        minimum_hit_speed_for: Callable[[str, str], float | None] | None = None,
         simulation_start_time: float = 0.0,
     ) -> None:
         """Advance selected projectiles continuously and settle first contacts."""
@@ -531,6 +532,13 @@ class ProjectileSystem:
                 ):
                     shooter = robot_by_id.get(projectile.shooter_id)
                     required_speed = 12_000.0 if projectile.caliber == "17mm" else 10_000.0
+                    if minimum_hit_speed_for is not None:
+                        configured_threshold = minimum_hit_speed_for(
+                            projectile.caliber,
+                            target_kind,
+                        )
+                        if configured_threshold is not None:
+                            required_speed = max(0.0, configured_threshold)
                     if target_kind == "robot" and surface != "armor":
                         outcome = "non_armor"
                     elif (

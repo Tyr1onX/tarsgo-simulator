@@ -1,18 +1,33 @@
 id: rmuc-2027-v1.0.0-rules-lab
 units: mm
 source:
-  title: "RMUC 2027 Competition Rules V1.0.0, §§4.1 and 5.6.4.1, Figure 5-23"
+  title: "RMUC 2027 Competition Rules V1.0.0, §§4.1, 4.2.2, 4.3.2.4, 5.6.4.1; Figures 4-5, 4-10, 4-34, 5-23"
   official_rules_version: V1.0.0
   verified: "2026-10-15"
 limitations:
-  - "Official outer bounds are 28000 x 15000 mm; terrain, obstacles, structures, and vertical geometry are not modeled in P2a."
+  - "Official outer bounds and Base/Outpost positions and envelopes follow Figures 4-5, 4-10, and 4-34; other terrain, obstacles, and vertical geometry are not modeled in P2b."
   - "Figure 5-23 is explicitly a distribution schematic and does not dimension the interactive-card footprints. Gainpoint polygons are isolated Rules Lab projections, not surveyed official geometry."
+  - "Base closed-footprint envelope (1873 x 1609 mm) and Outpost body diameter (550 mm) are official; the two-dimensional armor-face collision projections are Rules Lab approximations."
 size_mm:
   length: 28000
   width: 15000
 team_symmetry: rotate_180
 obstacles: []
-structures: []
+structures:
+  # Figure 4-5 gives the component centers; Base shape dimensions are from
+  # Figure 4-10 and the Outpost body diameter from Figure 4-34.
+  - side: red
+    type: base
+    position: [2075, 2626]
+    footprint:
+      shape: polygon
+      width: 1873
+      height: 1609
+      points: [[-546.5, -804.5], [546.5, -804.5], [936.5, 0], [386, 804.5], [-386, 804.5], [-936.5, 0]]
+  - side: red
+    type: outpost
+    position: [2075, 7500]
+    footprint: {shape: circle, width: 550, height: 550}
 zones:
   - id: red-outpost-point
     points: [[900, 5700], [3100, 5700], [3900, 7500], [3100, 9300], [900, 9300], [100, 7500]]

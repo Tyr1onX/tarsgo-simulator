@@ -527,7 +527,7 @@ def cli() -> None:
 
 def _window_caption(match: Match) -> str:
     if _is_rmuc_2027_rules_lab(match):
-        return "TARS-Go RMUC 2027 Rules Lab (P2a: Territory Control)"
+        return "TARS-Go RMUC 2027 Rules Lab (P2b: Structures)"
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
         return "TARS-Go RMUC 2026 区域赛"
@@ -2148,7 +2148,7 @@ def _draw_rmuc_hud(
             else "平局"
         )
     elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-        status = "P2a 未结算"
+        status = "P2b 未结算"
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
     pygame.draw.rect(screen, PANEL_SECTION_ALT, timer_rect, border_radius=8)
@@ -5057,7 +5057,7 @@ def _draw(
                 else "DRAW"
             )
         elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-            status = "P2a UNSETTLED"
+            status = "P2b UNSETTLED"
         else:
             status = f"BATTLE  {timer // 60:02}:{timer % 60:02}"
 

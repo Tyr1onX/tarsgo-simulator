@@ -68,7 +68,7 @@ python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
 
 ## 本地运行
 
-### RMUC 2027 P2a Rules Lab
+### RMUC 2027 P2b Rules Lab
 
 Run the separate startup and lineup scene with:
 
@@ -76,7 +76,7 @@ Run the separate startup and lineup scene with:
 python run_game.py --scenario configs/scenarios/rmuc-2027-region-rules-lab.yaml
 ```
 
-This separate scene validates the RMUC 2027 V1.0.0 ground lineup and uses the official 28,000 × 15,000 mm outer field bounds. Ground robots can move through the shared simulation and activate the four territory groups. P2a implements the official five-second control transitions, contested-progress pause, uniform capture retreat, and two-second activation invalidation delay. Figure 5-23 is a distribution schematic rather than a dimensioned card plan, so gainpoint polygons are explicitly marked Rules Lab projections in the field configuration. Movement speed is also a Rules Lab assumption, not an official robot parameter. The air, dart, and radar systems are roster metadata, not ground robots. Structures, damage, outpost ownership, control-degree scoring, and official winner settlement remain P2 work; the window label and timer do not claim a complete 2027 match.
+This separate scene validates the RMUC 2027 V1.0.0 ground lineup and uses the official 28,000 × 15,000 mm outer field bounds. Ground robots move through the shared simulation to control territory; sentry projectiles hit the official base and outpost HP values; outpost destruction drives full/temporary control transitions; and full outpost control switches base attack defense. P2a territory timing, contested-progress pause, capture retreat, and activation invalidation remain active. Structure footprints, local projected armor faces, sentry firing speed/cadence/range, and movement speed are explicitly marked Rules Lab approximations wherever V1.0.0 does not provide those parameters. The air, dart, and radar systems are roster metadata, not ground robots. Control-degree scoring and official winner settlement remain P2c work; the window label and timer do not claim a complete 2027 match.
 
 Seeded headless replay is also available. Until P2c implements the official result chain, a 2027 replay stops at 420 seconds with `result_status: unsettled-timebox`; it records no official winner.
 
