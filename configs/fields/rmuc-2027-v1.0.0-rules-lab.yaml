@@ -1,0 +1,20 @@
+id: rmuc-2027-v1.0.0-rules-lab
+units: mm
+source:
+  title: "RMUC 2027 Rules Lab synthetic staging boundary"
+  official_rules_version: V1.0.0
+  verified: "2026-10-15"
+limitations:
+  - "Synthetic 9000 x 5000 mm test boundary; it is not the official field footprint."
+  - "No obstacles, structures, zones, elevations, or collision geometry are modeled in P1."
+size_mm:
+  length: 9000
+  width: 5000
+team_symmetry: rotate_180
+obstacles: []
+structures: []
+zones: []
+terrain:
+  features: []
+  connections: []
+  regions: []

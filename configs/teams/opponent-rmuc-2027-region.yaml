@@ -1,0 +1,8 @@
+schema_version: 1
+team_id: opponent-rmuc-2027-region
+display_name: "TARS-Go RMUC 2027 Rules Lab (Blue)"
+robots:
+  - {id: opponent-heavy, type: heavy}
+  - {id: opponent-infantry-1, type: infantry}
+  - {id: opponent-infantry-2, type: infantry}
+  - {id: opponent-sentry, type: sentry}

@@ -1,0 +1,8 @@
+schema_version: 1
+team_id: tarsgo-rmuc-2027-region
+display_name: "TARS-Go RMUC 2027 Rules Lab (Red)"
+robots:
+  - {id: tarsgo-heavy, type: heavy}
+  - {id: tarsgo-infantry-1, type: infantry}
+  - {id: tarsgo-infantry-2, type: infantry}
+  - {id: tarsgo-sentry, type: sentry}

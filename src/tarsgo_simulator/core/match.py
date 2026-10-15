@@ -270,6 +270,9 @@ class Match:
 
     def reset(self) -> None:
         scenario = self.config.scenario
+        validate_scenario = getattr(self.ruleset, "validate_scenario", None)
+        if callable(validate_scenario):
+            validate_scenario(scenario)
         definitions = [
             (scenario.teams[side], definition)
             for side in ("red", "blue")

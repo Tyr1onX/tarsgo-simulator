@@ -68,6 +68,18 @@ python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
 
 ## 本地运行
 
+### RMUC 2027 P1 Rules Lab
+
+Run the separate startup and lineup scene with:
+
+```bash
+python run_game.py --scenario configs/scenarios/rmuc-2027-region-rules-lab.yaml
+```
+
+This P1 scene validates the RMUC 2027 V1.0.0 ground lineup and can be reset. Its 9,000 × 5,000 mm field is a synthetic staging boundary, not the official battlefield. The air, dart, and radar systems are recorded in the rules roster but are not instantiated as ground robots. Movement, combat, damage, economy, control points, terrain, and official winner settlement are not implemented; the seven-minute timer does not imply that timeout results are supported. The window title labels this mode “Roster / Startup Only.”
+
+Seeded headless replay is also available. A P1 replay stops at 420 seconds with `result_status: unsettled-timebox`; it records no official winner.
+
 需要 Python 3.11 或更新版本。
 
 ```bash

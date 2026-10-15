@@ -31,7 +31,7 @@ def _fingerprint(match: Match) -> str:
 
 
 def run(settings: dict) -> dict:
-    """Run to a terminal result; movement inputs are applied before their tick."""
+    """Run to a result or declared timebox; inputs apply before their tick."""
     scenario = Path(settings["scenario"])
     match = Match.from_scenario(
         scenario,
@@ -54,6 +54,9 @@ def run(settings: dict) -> dict:
         raise ValueError("max_ticks must be positive")
 
     checkpoints = [_fingerprint(match)]
+    replay_timebox_without_settlement = getattr(
+        match.ruleset, "replay_timebox_without_settlement", False
+    )
     for tick in range(settings["max_ticks"]):
         for action in commands.get(tick, []):
             if not match.order_group_move(
@@ -64,18 +67,25 @@ def run(settings: dict) -> dict:
         checkpoints.append(_fingerprint(match))
         if match.finished:
             break
+        if replay_timebox_without_settlement and match.elapsed_time >= match.time_limit:
+            break
 
-    if not match.finished:
+    if not match.finished and not (
+        replay_timebox_without_settlement and match.elapsed_time >= match.time_limit
+    ):
         raise ValueError("Match did not finish within max_ticks")
     if any(tick >= len(checkpoints) - 1 for tick in commands):
         raise ValueError("Input scheduled after match finished")
-    return {
+    result = {
         "settings": settings,
         "scenario_sha256": sha256(scenario.read_bytes()).hexdigest(),
         "checkpoints": checkpoints,
         "winner": match.winner,
         "elapsed_time": match.elapsed_time,
     }
+    if not match.finished:
+        result["result_status"] = "unsettled-timebox"
+    return result
 
 
 def verify(expected: dict) -> dict:
