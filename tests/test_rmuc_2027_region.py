@@ -36,6 +36,34 @@ def _copy_configs(tmp_path: Path) -> Path:
     return config_root
 
 
+def _zone_match(
+    tmp_path: Path,
+    *,
+    spawns: dict[str, list[int]],
+) -> Match:
+    config_root = _copy_configs(tmp_path)
+    scenario_file = config_root / "scenarios" / SCENARIO.name
+    scenario = yaml.safe_load(scenario_file.read_text(encoding="utf-8"))
+    scenario["setup"]["spawns"].update(spawns)
+    scenario_file.write_text(
+        yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8"
+    )
+    return Match.from_scenario(scenario_file, seed=2027)
+
+
+def _tick(match: Match, seconds: float) -> None:
+    for _ in range(round(seconds * 60)):
+        match.update(1 / 60)
+
+
+def _territory(match: Match, territory_id: str):
+    return next(
+        item
+        for item in match.ruleset.display_state.territory_control
+        if item.territory_id == territory_id
+    )
+
+
 def test_rmuc_2027_ruleset_identity_and_official_active_roster() -> None:
     match = _match(seed=27)
     metadata = match.config.rule_document.metadata
@@ -48,8 +76,10 @@ def test_rmuc_2027_ruleset_identity_and_official_active_roster() -> None:
     assert metadata.status == "rules-lab-partial"
     assert match.time_limit == 420
     assert match.seed == 27
-    assert match.config.scenario.map_width == 9000
-    assert match.config.scenario.map_height == 5000
+    assert match.config.scenario.map_width == 28000
+    assert match.config.scenario.map_height == 15000
+    assert len(match.config.scenario.zones) == 8
+    assert all(zone.approximation for zone in match.config.scenario.zones)
     assert match.structures == []
 
     for team_id in (RED, BLUE):
@@ -102,18 +132,19 @@ def test_match_rejects_legacy_or_illegal_2027_rosters(
         Match(config)
 
 
-def test_reset_and_time_advance_do_not_enable_unimplemented_match_rules() -> None:
+def test_reset_enables_real_movement_but_keeps_combat_unimplemented() -> None:
     match = _match(seed=2027)
     initial_positions = {robot.id: robot.position for robot in match.robots}
     heavy = next(robot for robot in match.robots if robot.id == "tarsgo-heavy")
 
     match.update(0.25)
     assert match.elapsed_time == pytest.approx(0.25)
-    assert not match.ruleset.can_move(heavy)
+    assert match.ruleset.can_move(heavy)
     assert not match.ruleset.can_attack(heavy)
     assert not match.ruleset.can_target(heavy)
     assert match.ruleset.resolve_damage(heavy, 50, BLUE) == 0
     assert match.ruleset.evaluate_result(match) is None
+    assert all(item.status == "full" for item in match.ruleset.display_state.territory_control)
 
     heavy.hp = 0
     heavy.alive = False
@@ -125,7 +156,12 @@ def test_reset_and_time_advance_do_not_enable_unimplemented_match_rules() -> Non
     assert {robot.id: robot.position for robot in match.robots} == initial_positions
     assert all(not robot.aerial for robot in match.robots)
 
-    # P1 has no official winner calculation, including at the timer boundary.
+    assert all(
+        item.status == "full"
+        for item in match.ruleset.display_state.territory_control
+    )
+
+    # P2a still has no official winner calculation at the timer boundary.
     match.elapsed_time = match.time_limit
     assert match.ruleset.evaluate_result(match) is None
 
@@ -138,11 +174,172 @@ def test_rmuc_2027_is_additive_and_has_an_explicit_rules_lab_ui_label() -> None:
 
     match = _match()
     assert _window_caption(match) == (
-        "TARS-Go RMUC 2027 Rules Lab (P1: Roster / Startup Only)"
+        "TARS-Go RMUC 2027 Rules Lab (P2a: Territory Control)"
     )
     names = _robot_display_names(match)
     assert names["tarsgo-heavy"] == "重装"
     assert _is_rmuc_2027_rules_lab(match)
+
+
+def test_real_movement_captures_opponent_outpost_territory_after_five_seconds(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={"tarsgo-infantry-1": [23000, 7500]},
+    )
+    robot = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
+    zone = next(item for item in match.map.zones if item.id == "blue-outpost-point")
+
+    assert match.order_move(robot.id, (25200, 7500))
+    for _ in range(180):
+        if zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert zone.contains(robot.position)
+    _tick(match, 4.5)
+    assert _territory(match, "blue-outpost").status == "full"
+    _tick(match, 0.6)
+
+    territory = _territory(match, "blue-outpost")
+    assert territory.status == "temporary"
+    assert territory.owner == RED
+
+    match.reset()
+    assert _territory(match, "blue-outpost").status == "full"
+    assert _territory(match, "blue-outpost").owner == BLUE
+
+
+def test_interrupted_capture_retreats_after_two_second_activation_invalidation(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={"tarsgo-infantry-1": [23000, 7500]},
+    )
+    robot = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
+    zone = next(item for item in match.map.zones if item.id == "blue-outpost-point")
+    assert match.order_move(robot.id, (25200, 7500))
+    for _ in range(180):
+        if zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert zone.contains(robot.position)
+    _tick(match, 1.0)
+    before_exit = _territory(match, "blue-outpost").progress_seconds
+    assert 0.9 <= before_exit <= 1.1
+
+    assert match.order_move(robot.id, (22600, 7500))
+    for _ in range(180):
+        if not zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert not zone.contains(robot.position)
+    progress_at_exit = _territory(match, "blue-outpost").progress_seconds
+    _tick(match, 1.8)
+    during_invalidation = _territory(match, "blue-outpost").progress_seconds
+    assert during_invalidation == pytest.approx(
+        progress_at_exit + 1.8, abs=0.04
+    )
+    _tick(match, 0.7)
+    assert _territory(match, "blue-outpost").progress_seconds < during_invalidation
+
+
+def test_temporary_outpost_control_returns_to_prior_full_owner_after_five_idle_seconds(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={"tarsgo-infantry-1": [23000, 7500]},
+    )
+    robot = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
+    zone = next(item for item in match.map.zones if item.id == "blue-outpost-point")
+    assert match.order_move(robot.id, (25200, 7500))
+    for _ in range(180):
+        if zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert zone.contains(robot.position)
+    _tick(match, 5.2)
+    assert _territory(match, "blue-outpost").status == "temporary"
+    assert _territory(match, "blue-outpost").owner == RED
+
+    assert match.order_move(robot.id, (22600, 7500))
+    for _ in range(180):
+        if not zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert not zone.contains(robot.position)
+    _tick(match, 7.2)
+    territory = _territory(match, "blue-outpost")
+    assert territory.status == "full"
+    assert territory.owner == BLUE
+
+
+def test_opponent_can_only_take_temporary_control_of_base_territory(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={
+            "tarsgo-infantry-1": [23000, 13200],
+            "opponent-heavy": [23000, 10000],
+            "opponent-infantry-1": [23600, 10000],
+            "opponent-infantry-2": [23000, 10600],
+            "opponent-sentry": [23600, 10600],
+        },
+    )
+    robot = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
+    zone = next(item for item in match.map.zones if item.id == "blue-base-point")
+    assert match.order_move(robot.id, (25950, 13200))
+    for _ in range(180):
+        if zone.contains(robot.position):
+            break
+        match.update(1 / 60)
+    assert zone.contains(robot.position)
+    _tick(match, 6)
+
+    territory = _territory(match, "blue-base")
+    assert territory.status == "temporary"
+    assert territory.owner == RED
+
+
+def test_opposing_robots_on_distinct_gainpoints_pause_the_same_territory(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={
+            "tarsgo-infantry-1": [15500, 7500],
+            "opponent-infantry-1": [23800, 7500],
+        },
+    )
+    red = next(item for item in match.robots if item.id == "tarsgo-infantry-1")
+    blue = next(item for item in match.robots if item.id == "opponent-infantry-1")
+    blue_outpost = next(
+        item for item in match.map.zones if item.id == "blue-outpost-point"
+    )
+    blue_highland = next(
+        item for item in match.map.zones if item.id == "blue-central-highland-point"
+    )
+    assert match.order_move(red.id, (16650, 7500))
+    # The opponent has no manual command surface in this match; dispatch its
+    # destination through the same engine path planner used by the AI.
+    assert match._set_robot_destination(blue, (25200, 7500))
+    for _ in range(180):
+        if blue_highland.contains(red.position) and blue_outpost.contains(blue.position):
+            break
+        match.update(1 / 60)
+    assert blue_highland.contains(red.position)
+    assert blue_outpost.contains(blue.position)
+
+    state = _territory(match, "blue-outpost")
+    assert set(state.active_team_ids) == {RED, BLUE}
+    progress = state.progress_seconds
+    _tick(match, 2)
+    assert _territory(match, "blue-outpost").progress_seconds == pytest.approx(
+        progress, abs=0.04
+    )
 
 
 def test_seeded_replay_cli_records_and_verifies_unsettled_2027_timebox(

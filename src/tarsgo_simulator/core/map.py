@@ -25,7 +25,7 @@ class Rectangle:
 
 @dataclass(frozen=True)
 class Zone:
-    """A named map area; its bounds and optional polygon are inclusive."""
+    """A named map area with optional source notes and inclusive bounds."""
 
     id: str
     x: float
@@ -33,6 +33,8 @@ class Zone:
     width: float
     height: float
     vertices: tuple[tuple[float, float], ...] = ()
+    source: str = ""
+    approximation: str = ""
 
     @property
     def right(self) -> float:

@@ -6,9 +6,9 @@ player_controlled:
   - tarsgo-infantry-1
   - tarsgo-infantry-2
 learning_goals:
-  - "RMUC 2027 V1.0.0 P1: load the independent ruleset and validate the four-robot ground lineup"
-  - "Inspect a synthetic startup layout; combination systems are roster metadata, not ground units"
-  - "Only startup, reset, and the official 420-second duration are represented; battle mechanics and winner settlement are not implemented"
+  - "RMUC 2027 V1.0.0 P2a: move ground robots through match ticks to activate gainpoint zones"
+  - "Exercise temporary/full territory control, five-second thresholds, two-second RFID invalidation, contest pause, and retreat"
+  - "Gainpoint card polygons are schematic projections; structures, damage, scoring, and settlement remain later P2 work"
 field_geometry: rmuc-2027-v1.0.0-rules-lab
 setup:
   teams:
@@ -19,7 +19,7 @@ setup:
     tarsgo-infantry-1: [1700, 1300]
     tarsgo-infantry-2: [1100, 1900]
     tarsgo-sentry: [1700, 1900]
-    opponent-heavy: [7900, 3700]
-    opponent-infantry-1: [7300, 3700]
-    opponent-infantry-2: [7900, 3100]
-    opponent-sentry: [7300, 3100]
+    opponent-heavy: [26900, 13700]
+    opponent-infantry-1: [26300, 13700]
+    opponent-infantry-2: [26900, 13100]
+    opponent-sentry: [26300, 13100]

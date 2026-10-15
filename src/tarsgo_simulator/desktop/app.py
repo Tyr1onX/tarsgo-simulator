@@ -527,7 +527,7 @@ def cli() -> None:
 
 def _window_caption(match: Match) -> str:
     if _is_rmuc_2027_rules_lab(match):
-        return "TARS-Go RMUC 2027 Rules Lab (P1: Roster / Startup Only)"
+        return "TARS-Go RMUC 2027 Rules Lab (P2a: Territory Control)"
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
         return "TARS-Go RMUC 2026 区域赛"
@@ -2148,7 +2148,7 @@ def _draw_rmuc_hud(
             else "平局"
         )
     elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-        status = "P1 未结算"
+        status = "P2a 未结算"
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
     pygame.draw.rect(screen, PANEL_SECTION_ALT, timer_rect, border_radius=8)
@@ -5022,7 +5022,7 @@ def _draw(
         player_max_hp = sum(robot.max_hp for robot in player_robots)
         opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
 
-        if display_state is None:
+        if display_state is None or _is_rmuc_2027_rules_lab(match):
             left = (
                 f"{match.team_name(player_team)}  "
                 f"{player_alive}/{len(player_robots)} alive  "
@@ -5057,7 +5057,7 @@ def _draw(
                 else "DRAW"
             )
         elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-            status = "P1 UNSETTLED"
+            status = "P2a UNSETTLED"
         else:
             status = f"BATTLE  {timer // 60:02}:{timer % 60:02}"
 
@@ -5077,7 +5077,25 @@ def _draw(
                 22,
             ),
         )
-        if display_state is not None:
+        if display_state is not None and _is_rmuc_2027_rules_lab(match):
+            territory_names = {"outpost": "前哨", "base": "基地"}
+            owner_names = {
+                team.team_id: team.display_name
+                for team in match.config.scenario.teams.values()
+            }
+            control_status = {"full": "全控", "temporary": "临控"}
+            summary = " · ".join(
+                f"{territory_names[item.kind]}:{owner_names[item.owner]}{control_status[item.status]}"
+                for item in display_state.territory_control
+            )
+            detail_surface = small_font.render(summary, True, TEXT_COLOR)
+            screen.blit(
+                detail_surface,
+                detail_surface.get_rect(
+                    center=(screen.get_width() // 2, 54)
+                ),
+            )
+        elif display_state is not None:
             control_owner = (
                 match.team_name(display_state.control_owner)
                 if display_state.control_owner is not None

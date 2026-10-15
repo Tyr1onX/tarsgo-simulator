@@ -1,20 +1,37 @@
 id: rmuc-2027-v1.0.0-rules-lab
 units: mm
 source:
-  title: "RMUC 2027 Rules Lab synthetic staging boundary"
+  title: "RMUC 2027 Competition Rules V1.0.0, §§4.1 and 5.6.4.1, Figure 5-23"
   official_rules_version: V1.0.0
   verified: "2026-10-15"
 limitations:
-  - "Synthetic 9000 x 5000 mm test boundary; it is not the official field footprint."
-  - "No obstacles, structures, zones, elevations, or collision geometry are modeled in P1."
+  - "Official outer bounds are 28000 x 15000 mm; terrain, obstacles, structures, and vertical geometry are not modeled in P2a."
+  - "Figure 5-23 is explicitly a distribution schematic and does not dimension the interactive-card footprints. Gainpoint polygons are isolated Rules Lab projections, not surveyed official geometry."
 size_mm:
-  length: 9000
-  width: 5000
+  length: 28000
+  width: 15000
 team_symmetry: rotate_180
 obstacles: []
 structures: []
-zones: []
+zones:
+  - id: red-outpost-point
+    points: [[900, 5700], [3100, 5700], [3900, 7500], [3100, 9300], [900, 9300], [100, 7500]]
+    source: "RMUC 2027 Competition Rules V1.0.0, §5.6.4.1, Figure 5-23 [9]"
+    approximation: "Projected from the schematic onto the official field bounds; exact card edge is not dimensioned."
+  - id: red-central-highland-point
+    points: [[10500, 5950], [12800, 5950], [13600, 7500], [12800, 9050], [10500, 9050], [9700, 7500]]
+    source: "RMUC 2027 Competition Rules V1.0.0, §5.6.4.1, Figure 5-23 [12]"
+    approximation: "Projected from the schematic onto the official field bounds; exact card edge is not dimensioned."
+  - id: red-base-point
+    points: [[1000, 800], [3100, 800], [3100, 2800], [1000, 2800]]
+    source: "RMUC 2027 Competition Rules V1.0.0, §5.6.4.1, Figure 5-23 [6]"
+    approximation: "Rules Lab projection in the red base area; Figure 5-23 does not dimension this card footprint."
+  - id: red-fortress-point
+    points: [[4700, 2100], [6900, 2100], [6900, 4100], [4700, 4100]]
+    source: "RMUC 2027 Competition Rules V1.0.0, §5.6.4.1, Figure 5-23 [7]"
+    approximation: "Rules Lab projection in the red fortress area; Figure 5-23 does not dimension this card footprint."
 terrain:
   features: []
   connections: []
   regions: []
+schema_version: 1

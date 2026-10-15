@@ -68,7 +68,7 @@ python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
 
 ## 本地运行
 
-### RMUC 2027 P1 Rules Lab
+### RMUC 2027 P2a Rules Lab
 
 Run the separate startup and lineup scene with:
 
@@ -76,9 +76,9 @@ Run the separate startup and lineup scene with:
 python run_game.py --scenario configs/scenarios/rmuc-2027-region-rules-lab.yaml
 ```
 
-This P1 scene validates the RMUC 2027 V1.0.0 ground lineup and can be reset. Its 9,000 × 5,000 mm field is a synthetic staging boundary, not the official battlefield. The air, dart, and radar systems are recorded in the rules roster but are not instantiated as ground robots. Movement, combat, damage, economy, control points, terrain, and official winner settlement are not implemented; the seven-minute timer does not imply that timeout results are supported. The window title labels this mode “Roster / Startup Only.”
+This separate scene validates the RMUC 2027 V1.0.0 ground lineup and uses the official 28,000 × 15,000 mm outer field bounds. Ground robots can move through the shared simulation and activate the four territory groups. P2a implements the official five-second control transitions, contested-progress pause, uniform capture retreat, and two-second activation invalidation delay. Figure 5-23 is a distribution schematic rather than a dimensioned card plan, so gainpoint polygons are explicitly marked Rules Lab projections in the field configuration. Movement speed is also a Rules Lab assumption, not an official robot parameter. The air, dart, and radar systems are roster metadata, not ground robots. Structures, damage, outpost ownership, control-degree scoring, and official winner settlement remain P2 work; the window label and timer do not claim a complete 2027 match.
 
-Seeded headless replay is also available. A P1 replay stops at 420 seconds with `result_status: unsettled-timebox`; it records no official winner.
+Seeded headless replay is also available. Until P2c implements the official result chain, a 2027 replay stops at 420 seconds with `result_status: unsettled-timebox`; it records no official winner.
 
 需要 Python 3.11 或更新版本。
 
