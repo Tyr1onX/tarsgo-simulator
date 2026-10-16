@@ -6,11 +6,14 @@ remain isolated Rules Lab assumptions; implemented rule behavior follows RMUC
 """
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
+from fractions import Fraction
 import math
 from typing import TYPE_CHECKING, Any
 
 from tarsgo_simulator.core.config import ConfigError, RuleDocument
+from tarsgo_simulator.core.events import MatchEvent, MatchEventType
 from tarsgo_simulator.core.structure import (
     Structure,
     StructureArmorPanelProjection,
@@ -226,6 +229,9 @@ class RMUC2027RegionRules:
         self._active_robot_zones: set[tuple[str, str]] = set()
         self._zone_inactive_at: dict[tuple[str, str], float] = {}
         self._last_update_time = 0.0
+        self._control_degrees_by_team: dict[str, Fraction] = {}
+        self._attack_damage_by_team: dict[str, int] = {}
+        self._control_owners_at_tick_start: dict[str, str] | None = None
         self._remaining_sentry_ammo: dict[str, int] = {}
         self._structures: tuple[Structure, ...] = ()
         self._outpost_rotation_direction = 1
@@ -243,8 +249,8 @@ class RMUC2027RegionRules:
 
     @property
     def replay_timebox_without_settlement(self) -> bool:
-        """P2a has no winner rule yet; P2c removes this guard with settlement."""
-        return True
+        """Official RMUC 2027 matches settle at Base destruction or 420 seconds."""
+        return False
 
     @property
     def display_state(self) -> RuleSetDisplayState:
@@ -261,8 +267,16 @@ class RMUC2027RegionRules:
             for state in sorted(self._territories.values(), key=lambda item: item.territory_id)
         )
         return RuleSetDisplayState(
-            victory_points=(),
+            # The legacy display protocol stores integer points. Keep exact
+            # fractions for result comparison and expose completed degrees.
+            victory_points=tuple(
+                (team_id, int(degrees))
+                for team_id, degrees in sorted(
+                    self._control_degrees_by_team.items()
+                )
+            ),
             control_owner=None,
+            attack_damage=tuple(sorted(self._attack_damage_by_team.items())),
             structure_statuses=tuple(
                 (
                     structure.id,
@@ -467,7 +481,11 @@ class RMUC2027RegionRules:
         )
 
     def prepare_movement(self, match: "Match", dt: float) -> None:
-        del match, dt
+        del dt
+        self._control_owners_at_tick_start = {
+            territory_id: state.owner
+            for territory_id, state in self._territories.items()
+        }
 
     def prepare_combat(self, match: "Match", dt: float) -> None:
         self._current_time = match.elapsed_time + max(0.0, dt)
@@ -476,6 +494,14 @@ class RMUC2027RegionRules:
         self._team_ids_by_side = {
             side: match.config.scenario.teams[side].team_id
             for side in ("red", "blue")
+        }
+        self._control_degrees_by_team = {
+            team_id: Fraction(0)
+            for team_id in sorted(self._team_ids_by_side.values())
+        }
+        self._attack_damage_by_team = {
+            team_id: 0
+            for team_id in sorted(self._team_ids_by_side.values())
         }
         self._structures = tuple(match.structures)
         self._remaining_sentry_ammo = {
@@ -519,6 +545,7 @@ class RMUC2027RegionRules:
         }
         self._zone_inactive_at.clear()
         self._last_update_time = match.elapsed_time
+        self._control_owners_at_tick_start = None
 
     def on_structure_destroyed(
         self,
@@ -577,6 +604,8 @@ class RMUC2027RegionRules:
         now = match.elapsed_time
         elapsed = max(0.0, now - self._last_update_time)
         self._last_update_time = now
+        self._record_attack_damage(match.current_events)
+        self._accumulate_control_degrees(elapsed)
         active_teams_by_zone = self._active_teams_by_zone(match, now)
 
         for territory_id, state in self._territories.items():
@@ -586,6 +615,53 @@ class RMUC2027RegionRules:
             )
             state.active_team_ids = tuple(sorted(active_teams))
             self._advance_territory(state, active_teams, elapsed)
+
+    def _record_attack_damage(self, events: Iterable[MatchEvent]) -> None:
+        for event in events:
+            if event.type not in {
+                MatchEventType.ROBOT_DAMAGED,
+                MatchEventType.STRUCTURE_DAMAGED,
+            }:
+                continue
+            attacker = event.attacker_team_id
+            if (
+                attacker in self._attack_damage_by_team
+                and attacker != event.team_id
+            ):
+                self._attack_damage_by_team[attacker] += max(0, event.damage)
+
+    def _accumulate_control_degrees(self, elapsed: float) -> None:
+        """Apply §5.6.2 rates for territories controlled at this tick boundary.
+
+        The rule says "control" after defining temporary and full control, so
+        both statuses qualify. This also matches the fact that the opposing
+        team may only temporarily control a Base territory.
+        """
+        if elapsed <= 0:
+            return
+        seconds = Fraction(elapsed).limit_denominator(60_000)
+        owners = self._control_owners_at_tick_start
+        if owners is None:
+            owners = {
+                territory_id: state.owner
+                for territory_id, state in self._territories.items()
+            }
+        for team_id in self._control_degrees_by_team:
+            outposts = [
+                territory_id
+                for territory_id, state in self._territories.items()
+                if state.kind == "outpost"
+            ]
+            if all(owners.get(territory_id) == team_id for territory_id in outposts):
+                self._control_degrees_by_team[team_id] += seconds
+
+            bases = [
+                territory_id
+                for territory_id, state in self._territories.items()
+                if state.kind == "base"
+            ]
+            if all(owners.get(territory_id) == team_id for territory_id in bases):
+                self._control_degrees_by_team[team_id] += 3 * seconds
 
     def _active_teams_by_zone(
         self, match: "Match", now: float
@@ -678,8 +754,41 @@ class RMUC2027RegionRules:
             state.progress_team_id = None
 
     def evaluate_result(self, match: "Match") -> MatchResult | None:
-        del match
-        return None
+        bases = {
+            structure.team: structure
+            for structure in match.structures
+            if structure.type == "base"
+        }
+        if len(bases) == 2 and any(not base.alive for base in bases.values()):
+            remaining = {team_id: max(0, base.hp) for team_id, base in bases.items()}
+            highest = max(remaining.values())
+            leaders = [team_id for team_id, hp in remaining.items() if hp == highest]
+            # If both Bases are destroyed during the same Match tick, they
+            # have equal remaining HP and this priority yields a draw.
+            return MatchResult(leaders[0] if len(leaders) == 1 else None)
+
+        if match.elapsed_time < self._time_limit:
+            return None
+
+        winner = _unique_leader(self._control_degrees_by_team)
+        if winner is not None:
+            return MatchResult(winner)
+        winner = _unique_leader(self._attack_damage_by_team)
+        if winner is not None:
+            return MatchResult(winner)
+        remaining_hp = {
+            team_id: sum(
+                max(0, robot.hp)
+                for robot in match.robots
+                if robot.team == team_id
+            )
+            for team_id in self._control_degrees_by_team
+        }
+        winner = _unique_leader(remaining_hp)
+        if winner is not None:
+            return MatchResult(winner)
+        # §5.8's final listed priority is a draw after all three comparisons tie.
+        return MatchResult(None)
 
 
 def _territory_definitions(
@@ -739,6 +848,14 @@ def _territory_definitions(
     if len(all_zones) != len(set(all_zones)):
         raise ConfigError(f"{document.path}: a gainpoint zone cannot belong to two territories")
     return result
+
+
+def _unique_leader(scores: dict[str, Any]) -> str | None:
+    if not scores:
+        return None
+    highest = max(scores.values())
+    leaders = [team_id for team_id, score in scores.items() if score == highest]
+    return leaders[0] if len(leaders) == 1 else None
 
 
 def _outpost_armor_panels(
