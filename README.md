@@ -68,7 +68,7 @@ python run_game.py --scenario configs/scenarios/rmuc-2026-region-rules-lab.yaml
 
 ## 本地运行
 
-### RMUC 2027 P2b Rules Lab
+### RMUC 2027 P2 Rules Lab
 
 Run the separate startup and lineup scene with:
 
@@ -76,9 +76,9 @@ Run the separate startup and lineup scene with:
 python run_game.py --scenario configs/scenarios/rmuc-2027-region-rules-lab.yaml
 ```
 
-This separate scene validates the RMUC 2027 V1.0.0 ground lineup and uses the official 28,000 × 15,000 mm outer field bounds. Ground robots move through the shared simulation to control territory; sentry projectiles hit the official base and outpost HP values; outpost destruction drives full/temporary control transitions; and full outpost control switches base attack defense. P2a territory timing, contested-progress pause, capture retreat, and activation invalidation remain active. Structure footprints, local projected armor faces, sentry firing speed/cadence/range, and movement speed are explicitly marked Rules Lab approximations wherever V1.0.0 does not provide those parameters. The air, dart, and radar systems are roster metadata, not ground robots. Control-degree scoring and official winner settlement remain P2c work; the window label and timer do not claim a complete 2027 match.
+This separate scene validates the RMUC 2027 V1.0.0 ground lineup and uses the official 28,000 × 15,000 mm outer field bounds. Ground robots move through the shared simulation to control territory; sentry projectiles hit the official base and outpost HP values; outpost destruction drives full/temporary control transitions; and full outpost control switches base attack defense. Territory control, control-degree scoring, Base destruction, and the §5.8 result order run through the shared Match tick and replay paths. Structure footprints, local projected armor faces, sentry firing speed/cadence/range, and movement speed remain explicitly marked Rules Lab approximations wherever V1.0.0 does not provide those parameters. The air, dart, and radar systems are roster metadata, not ground robots. This closes P2 only; later 2027 mechanisms remain unimplemented.
 
-Seeded headless replay is also available. Until P2c implements the official result chain, a 2027 replay stops at 420 seconds with `result_status: unsettled-timebox`; it records no official winner.
+Seeded headless replay is also available. A 2027 replay settles on Base destruction or at 420 seconds using the implemented §5.8 priority order, and records the same `MatchResult` as the live match.
 
 需要 Python 3.11 或更新版本。
 

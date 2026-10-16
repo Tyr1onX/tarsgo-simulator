@@ -1,4 +1,5 @@
 from collections import Counter
+from fractions import Fraction
 import json
 from pathlib import Path
 import shutil
@@ -189,9 +190,10 @@ def test_reset_enables_movement_and_structure_only_combat() -> None:
     )
     assert match.ruleset._remaining_sentry_ammo[sentry.id] == 300
 
-    # P2a still has no official winner calculation at the timer boundary.
+    # P2c settles the official tie-break chain at the timer boundary.
     match.elapsed_time = match.time_limit
-    assert match.ruleset.evaluate_result(match) is None
+    result = match.ruleset.evaluate_result(match)
+    assert result is not None and result.winner is None
 
 
 def test_rmuc_2027_is_additive_and_has_an_explicit_rules_lab_ui_label() -> None:
@@ -201,7 +203,7 @@ def test_rmuc_2027_is_additive_and_has_an_explicit_rules_lab_ui_label() -> None:
     assert "training-v0" in RULESETS
 
     match = _match()
-    assert _window_caption(match) == "TARS-Go RMUC 2027 Rules Lab (P2b: Structures)"
+    assert _window_caption(match) == "TARS-Go RMUC 2027 Rules Lab (P2c: Settlement)"
     names = _robot_display_names(match)
     assert names["tarsgo-heavy"] == "重装"
     assert _is_rmuc_2027_rules_lab(match)
@@ -328,6 +330,118 @@ def test_opponent_can_only_take_temporary_control_of_base_territory(
     territory = _territory(match, "blue-base")
     assert territory.status == "temporary"
     assert territory.owner == RED
+
+
+def test_both_temporary_territories_generate_control_degrees_in_live_match(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={
+            **_remote_blue_spawns(),
+            "tarsgo-infantry-1": [25200, 7500],
+            "tarsgo-infantry-2": [26500, 13800],
+        },
+    )
+
+    assert _territory(match, "blue-outpost").owner == BLUE
+    assert _territory(match, "blue-base").owner == BLUE
+    assert dict(match.ruleset.display_state.victory_points) == {RED: 0, BLUE: 0}
+    _tick(match, 6)
+
+    assert _territory(match, "blue-outpost").status == "temporary"
+    assert _territory(match, "blue-base").status == "temporary"
+    assert _territory(match, "blue-outpost").owner == RED
+    assert _territory(match, "blue-base").owner == RED
+    # Temporary control qualifies under §5.6.2; red earns (1 + 3) degrees/s.
+    red_degrees = match.ruleset._control_degrees_by_team[RED]
+    assert Fraction(7, 2) <= red_degrees <= Fraction(4, 1)
+    assert dict(match.ruleset.display_state.victory_points)[RED] == 3
+
+    match.reset()
+    assert match.ruleset._control_degrees_by_team == {
+        RED: Fraction(0),
+        BLUE: Fraction(0),
+    }
+
+
+def _prepare_timeout_tick(match: Match) -> None:
+    match.elapsed_time = match.time_limit - 1 / 60
+    match.ruleset._last_update_time = match.elapsed_time
+    match.update(1 / 60)
+    assert match.finished
+    assert match.elapsed_time == match.time_limit
+
+
+def test_timeout_settlement_prefers_control_degrees_over_damage_and_hp() -> None:
+    match = _match(seed=2027)
+    match.ruleset._control_degrees_by_team[RED] = Fraction(11, 2)
+    match.ruleset._control_degrees_by_team[BLUE] = Fraction(5, 1)
+    match.ruleset._attack_damage_by_team.update({RED: 0, BLUE: 10_000})
+    _prepare_timeout_tick(match)
+
+    assert match.winner == RED
+
+
+def test_timeout_settlement_uses_actual_attack_damage_when_control_ties() -> None:
+    match = _match(seed=2027)
+    blue_outpost = _structure(match, "blue-outpost")
+    red_sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
+    assert match.apply_damage(blue_outpost, 37, source_robot=red_sentry) == 37
+    _prepare_timeout_tick(match)
+
+    assert dict(match.ruleset.display_state.attack_damage) == {RED: 37, BLUE: 0}
+    assert match.winner == RED
+
+
+def test_timeout_settlement_uses_team_robot_hp_after_control_and_damage_tie() -> None:
+    match = _match(seed=2027)
+    blue_robot = next(robot for robot in match.robots if robot.id == "opponent-heavy")
+    blue_robot.hp = 0
+    blue_robot.alive = False
+    _prepare_timeout_tick(match)
+
+    assert match.winner == RED
+
+
+def test_timeout_settlement_returns_draw_when_all_three_priorities_tie() -> None:
+    match = _match(seed=2027)
+    _prepare_timeout_tick(match)
+
+    assert match.finished
+    assert match.winner is None
+
+
+def test_base_destruction_by_match_projectile_settles_immediately(
+    tmp_path: Path,
+) -> None:
+    match = _zone_match(
+        tmp_path,
+        spawns={
+            **_remote_blue_spawns(),
+            "tarsgo-infantry-1": [25200, 7500],
+            "tarsgo-sentry": [19000, 12374],
+        },
+    )
+    base = _structure(match, "blue-base")
+    base.hp = 20  # Keep the test short; the Match damage path remains real.
+    observed_impacts = []
+
+    for _ in range(2400):
+        match.update(1 / 60)
+        observed_impacts.extend(match.projectile_impacts)
+        if match.finished:
+            break
+
+    assert match.finished
+    assert match.winner == RED
+    assert base.hp == 0 and not base.alive
+    assert any(
+        impact.shooter_id == "tarsgo-sentry"
+        and impact.target_id == "blue-base"
+        and impact.applied_damage == 20
+        for impact in observed_impacts
+    )
 
 
 def test_sentry_projectile_hits_outpost_through_match_tick_with_official_damage(
@@ -539,10 +653,10 @@ def test_opposing_robots_on_distinct_gainpoints_pause_the_same_territory(
     )
 
 
-def test_seeded_replay_cli_records_and_verifies_unsettled_2027_timebox(
+def test_seeded_replay_cli_records_and_verifies_settled_2027_timebox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    trace_path = tmp_path / "rmuc-2027-p1-trace.json"
+    trace_path = tmp_path / "rmuc-2027-p2c-trace.json"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -566,7 +680,7 @@ def test_seeded_replay_cli_records_and_verifies_unsettled_2027_timebox(
     assert trace["settings"]["seed"] == 2027
     assert trace["winner"] is None
     assert trace["elapsed_time"] == 420
-    assert trace["result_status"] == "unsettled-timebox"
+    assert "result_status" not in trace
 
     monkeypatch.setattr(sys, "argv", ["replay", "--verify", str(trace_path)])
     replay_cli()

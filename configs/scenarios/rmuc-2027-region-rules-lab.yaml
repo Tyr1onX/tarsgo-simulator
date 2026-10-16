@@ -6,10 +6,9 @@ player_controlled:
   - tarsgo-infantry-1
   - tarsgo-infantry-2
 learning_goals:
-  - "RMUC 2027 V1.0.0 P2b: capture territory with ground robots and attack structures with sentry projectiles"
+  - "RMUC 2027 V1.0.0 P2: capture territory, accumulate control degrees, attack structures, and settle the match"
   - "Exercise five-second control transitions, territory-dependent base defense, outpost ownership transfer, and rebuilding"
-  - "Structure footprints and sentry projectile speed/cadence/range are explicit Rules Lab projections where V1.0.0 does not specify dimensions or weapon trajectory"
-  - "Control-degree scoring and official match settlement remain P2c work"
+  - "Territory polygons, robot speed, and weapon cadence/range remain isolated Rules Lab projections where V1.0.0 does not specify dimensions or trajectories"
 field_geometry: rmuc-2027-v1.0.0-rules-lab
 setup:
   teams:

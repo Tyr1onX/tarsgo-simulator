@@ -27,7 +27,7 @@ active_roster:
       computing_platform: 1
       sensor: 1
 
-# §6.6. Official duration. P2c will add official settlement.
+# §6.6. Official duration; §5.8 settlement is implemented by the RMUC 2027 RuleSet.
 match_duration: 420
 
 # Rules Lab movement values only. V1.0.0 does not set a simulator speed;
@@ -81,8 +81,6 @@ territory_control:
       gainpoints: [blue-base-point, blue-fortress-point]
 
 unimplemented:
-  - "§5.6.2 control-degree accumulation and scoring eligibility"
-  - "§5.8 victory and timeout settlement"
   - "§5.6.1 outpost rotation stop on opposing base armor deployment; waiting for base-armor activation behavior"
   - "17mm fire from infantry/heavy and robot-vs-robot damage"
   - "official weapon cadence, heat, ammunition purchases, and projectile trajectories"

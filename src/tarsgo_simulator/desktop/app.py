@@ -527,7 +527,7 @@ def cli() -> None:
 
 def _window_caption(match: Match) -> str:
     if _is_rmuc_2027_rules_lab(match):
-        return "TARS-Go RMUC 2027 Rules Lab (P2b: Structures)"
+        return "TARS-Go RMUC 2027 Rules Lab (P2c: Settlement)"
     display_state = match.ruleset.display_state
     if display_state is not None and display_state.structure_statuses:
         return "TARS-Go RMUC 2026 区域赛"
@@ -2148,7 +2148,7 @@ def _draw_rmuc_hud(
             else "平局"
         )
     elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-        status = "P2b 未结算"
+        status = "P2c 结算中"
     else:
         status = f"{timer // 60:02}:{timer % 60:02}"
     pygame.draw.rect(screen, PANEL_SECTION_ALT, timer_rect, border_radius=8)
@@ -5022,7 +5022,24 @@ def _draw(
         player_max_hp = sum(robot.max_hp for robot in player_robots)
         opponent_max_hp = sum(robot.max_hp for robot in opponent_robots)
 
-        if display_state is None or _is_rmuc_2027_rules_lab(match):
+        if _is_rmuc_2027_rules_lab(match) and display_state is not None:
+            control_degrees = dict(display_state.victory_points)
+            attack_damage = dict(display_state.attack_damage)
+            left = (
+                f"{match.team_name(player_team)}  "
+                f"{player_alive}/{len(player_robots)} alive  "
+                f"HP {player_hp}/{player_max_hp}  "
+                f"CTL {control_degrees.get(player_team, 0)}  "
+                f"DMG {attack_damage.get(player_team, 0)}"
+            )
+            right = (
+                f"{match.team_name(opponent_team)}  "
+                f"{opponent_alive}/{len(opponent_robots)} alive  "
+                f"HP {opponent_hp}/{opponent_max_hp}  "
+                f"CTL {control_degrees.get(opponent_team, 0)}  "
+                f"DMG {attack_damage.get(opponent_team, 0)}"
+            )
+        elif display_state is None:
             left = (
                 f"{match.team_name(player_team)}  "
                 f"{player_alive}/{len(player_robots)} alive  "
@@ -5057,7 +5074,7 @@ def _draw(
                 else "DRAW"
             )
         elif _is_rmuc_2027_rules_lab(match) and timer == 0:
-            status = "P2b UNSETTLED"
+            status = "P2c SETTLING"
         else:
             status = f"BATTLE  {timer // 60:02}:{timer % 60:02}"
 
