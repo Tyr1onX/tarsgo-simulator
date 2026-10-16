@@ -1,6 +1,7 @@
 from collections import Counter
 from fractions import Fraction
 import json
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -10,6 +11,7 @@ import yaml
 
 from tarsgo_simulator.core.config import ConfigError, load_match_config
 from tarsgo_simulator.core.match import Match
+from tarsgo_simulator.core.projectiles import Projectile
 from tarsgo_simulator.core.replay import cli as replay_cli
 from tarsgo_simulator.core.structure import StructureProjectileHitContext
 from tarsgo_simulator.desktop.app import (
@@ -442,6 +444,86 @@ def test_base_destruction_by_match_projectile_settles_immediately(
         and impact.applied_damage == 20
         for impact in observed_impacts
     )
+
+
+def test_outpost_and_base_projectiles_resolve_in_order_within_one_match_tick() -> None:
+    match = _match(seed=2027)
+    sentry = next(robot for robot in match.robots if robot.id == "tarsgo-sentry")
+    outpost = _structure(match, "blue-outpost")
+    base = _structure(match, "blue-base")
+    outpost.hp = 20
+    base.hp = 20
+    speed = 13_000.0
+    radius = 8.4
+
+    # The first shot sweeps through the third projected Outpost armor panel.
+    panel_angle = 5 * math.pi / 6
+    outpost_start = (
+        outpost.position[0] + math.cos(panel_angle) * 430.0,
+        outpost.position[1] + math.sin(panel_angle) * 430.0,
+    )
+    outpost_velocity = (
+        -math.cos(panel_angle) * speed,
+        -math.sin(panel_angle) * speed,
+    )
+
+    # The second shot sweeps inward through a real Base armor edge.
+    vertices = base.footprint_vertices
+    first, second = vertices[0], vertices[1]
+    edge = (second[0] - first[0], second[1] - first[1])
+    edge_length = math.hypot(*edge)
+    tangent = (edge[0] / edge_length, edge[1] / edge_length)
+    area_twice = sum(
+        a[0] * b[1] - b[0] * a[1]
+        for a, b in zip(vertices, (*vertices[1:], vertices[0]))
+    )
+    outward = (
+        (tangent[1], -tangent[0])
+        if area_twice > 0
+        else (-tangent[1], tangent[0])
+    )
+    base_edge_center = (
+        base.position[0] + (first[0] + second[0]) / 2,
+        base.position[1] + (first[1] + second[1]) / 2,
+    )
+    base_start = (
+        base_edge_center[0] + outward[0] * 120.0,
+        base_edge_center[1] + outward[1] * 120.0,
+    )
+    base_velocity = (-outward[0] * speed, -outward[1] * speed)
+
+    for projectile_id, target, position, velocity in (
+        (9001, outpost, outpost_start, outpost_velocity),
+        (9002, base, base_start, base_velocity),
+    ):
+        match.projectile_system.projectiles.append(
+            Projectile(
+                id=projectile_id,
+                shooter_id=sentry.id,
+                shooter_team_id=sentry.team,
+                caliber="17mm",
+                damage=20,
+                radius=radius,
+                speed=speed,
+                effective_range=1_000.0,
+                position=position,
+                previous_position=position,
+                velocity=velocity,
+                target_id=target.id,
+            )
+        )
+
+    match.update(1 / 60)
+
+    assert _territory(match, "blue-outpost").status == "temporary"
+    assert outpost.hp == 0 and not outpost.alive
+    assert base.hp == 0 and not base.alive
+    assert match.finished and match.winner == RED
+    assert [
+        (impact.target_id, impact.applied_damage)
+        for impact in match.projectile_impacts
+        if impact.projectile_id in {9001, 9002}
+    ] == [("blue-outpost", 20), ("blue-base", 20)]
 
 
 def test_sentry_projectile_hits_outpost_through_match_tick_with_official_damage(
