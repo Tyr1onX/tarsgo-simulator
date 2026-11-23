@@ -45,6 +45,13 @@ zones:
     points: [[4700, 2100], [6900, 2100], [6900, 4100], [4700, 4100]]
     source: "RMUC 2027 Competition Rules V1.0.0, §5.6.4.1, Figure 5-23 [7]"
     approximation: "Rules Lab projection in the red fortress area; Figure 5-23 does not dimension this card footprint."
+# P3a navigable interaction projection. These are NOT surveyed official
+# RMUC 2027 resource island/card coordinates; replace when verified in P4.
+zones:
+  - id: red-resource
+    points: [[5900, 2500], [7100, 2500], [7100, 3700], [5900, 3700]]
+    source: "RMUC 2027 V1.0.0 §5.4.3 resource/energy-unit interaction"
+    approximation: "Rules Lab pickup region only; official resource island boundary and 3D interaction card are not modeled."
 terrain:
   features: []
   connections: []
