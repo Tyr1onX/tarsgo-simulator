@@ -780,6 +780,11 @@ def test_p3a_heavy_energy_pickup_is_zone_gated_bounded_and_resettable() -> None:
     assert not match.order_pickup_energy_unit("opponent-heavy")
 
     target = (resource.x + resource.width / 2, resource.y + resource.height / 2)
+    # A schematic resource location must not double as a territory gainpoint.
+    assert not any(
+        zone.id.endswith("-point") and zone.contains(target)
+        for zone in match.map.zones
+    )
     assert match.order_move(heavy.id, target)
     _tick(match, 5)
     assert match.is_robot_in_zone(heavy.id, resource.id)
