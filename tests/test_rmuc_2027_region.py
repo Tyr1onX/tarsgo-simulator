@@ -95,7 +95,7 @@ def test_rmuc_2027_ruleset_identity_and_official_active_roster() -> None:
     assert match.seed == 27
     assert match.config.scenario.map_width == 28000
     assert match.config.scenario.map_height == 15000
-    assert len(match.config.scenario.zones) == 8
+    assert len(match.config.scenario.zones) == 10
     assert all(zone.approximation for zone in match.config.scenario.zones)
     assert {
         (structure.id, structure.type, structure.team, structure.hp, structure.max_hp)
@@ -766,3 +766,55 @@ def test_seeded_replay_cli_records_and_verifies_settled_2027_timebox(
 
     monkeypatch.setattr(sys, "argv", ["replay", "--verify", str(trace_path)])
     replay_cli()
+
+
+def test_p3a_heavy_energy_pickup_is_zone_gated_bounded_and_resettable() -> None:
+    match = _match(seed=2027)
+    heavy = next(robot for robot in match.robots if robot.id == "tarsgo-heavy")
+    resource = next(zone for zone in match.map.zones if zone.id == "red-resource")
+
+    assert dict(match.ruleset.display_state.energy_unit_reserves) == {RED: 6, BLUE: 6}
+    assert dict(match.ruleset.display_state.heavy_energy_units)[heavy.id] == 0
+    assert not match.order_pickup_energy_unit(heavy.id)
+    assert not match.order_pickup_energy_unit("tarsgo-infantry-1")
+    assert not match.order_pickup_energy_unit("opponent-heavy")
+
+    target = (resource.x + resource.width / 2, resource.y + resource.height / 2)
+    # A schematic resource location must not double as a territory gainpoint.
+    assert not any(
+        zone.id.endswith("-point") and zone.contains(target)
+        for zone in match.map.zones
+    )
+    assert match.order_move(heavy.id, target)
+    _tick(match, 5)
+    assert match.is_robot_in_zone(heavy.id, resource.id)
+    assert match.order_pickup_energy_unit(heavy.id)
+    assert match.order_pickup_energy_unit(heavy.id)
+    assert not match.order_pickup_energy_unit(heavy.id)
+
+    state = match.ruleset.display_state
+    assert dict(state.heavy_energy_units)[heavy.id] == 2
+    assert dict(state.energy_unit_reserves) == {RED: 4, BLUE: 6}
+    assert not match.ruleset.can_attack(heavy)
+
+    match.reset()
+    state = match.ruleset.display_state
+    assert dict(state.heavy_energy_units)[heavy.id] == 0
+    assert dict(state.energy_unit_reserves) == {RED: 6, BLUE: 6}
+    assert not match.order_pickup_energy_unit(heavy.id)
+
+
+def test_p3a_heavy_cannot_pick_up_from_the_opposing_resource_zone() -> None:
+    match = _match()
+    heavy = next(robot for robot in match.robots if robot.id == "tarsgo-heavy")
+    enemy_resource = next(
+        zone for zone in match.map.zones if zone.id == "blue-resource"
+    )
+    heavy.position = (
+        enemy_resource.x + enemy_resource.width / 2,
+        enemy_resource.y + enemy_resource.height / 2,
+    )
+    assert not match.ruleset.pickup_energy_unit(match, heavy)
+    assert dict(match.ruleset.display_state.energy_unit_reserves) == {
+        RED: 6, BLUE: 6,
+    }

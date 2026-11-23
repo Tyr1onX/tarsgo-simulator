@@ -558,6 +558,16 @@ class Match:
             return False
         return self.ruleset.exchange_projectiles(self, robot)
 
+    def order_pickup_energy_unit(self, robot_id: str) -> bool:
+        """Request a resource pickup using the existing player/zone simulation."""
+        if self.finished:
+            return False
+        robot = next((item for item in self.robots if item.id == robot_id), None)
+        if robot is None or not robot.alive or not self.is_player_controlled(robot_id):
+            return False
+        pickup = getattr(self.ruleset, "pickup_energy_unit", None)
+        return bool(callable(pickup) and pickup(self, robot))
+
     def order_activate_small_energy_mechanism(self, robot_id: str) -> bool:
         """Send the eligible selected robot's legal small-mechanism command."""
         if self.finished:

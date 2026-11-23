@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
 RMUC_2027_RULE_ID = "rmuc-2027-region-v1.0.0"
 _GROUND_ROSTER = {"heavy": 1, "infantry": 2, "sentry": 1}
+_ENERGY_UNITS_PER_TEAM = 6
+_HEAVY_CARRY_CAPACITY = 2
 _SYSTEM_ROSTER = {
     "air": {"hangar": 1, "aircraft": 4},
     "dart": {"launcher": 1, "dart_bodies": 4},
@@ -233,6 +235,8 @@ class RMUC2027RegionRules:
         self._attack_damage_by_team: dict[str, int] = {}
         self._control_owners_at_tick_start: dict[str, str] | None = None
         self._remaining_sentry_ammo: dict[str, int] = {}
+        self._energy_unit_reserves_by_team: dict[str, int] = {}
+        self._heavy_energy_units_by_robot: dict[str, int] = {}
         self._structures: tuple[Structure, ...] = ()
         self._outpost_rotation_direction = 1
         self._outpost_rotation_stopped_at: dict[str, float] = {}
@@ -290,6 +294,8 @@ class RMUC2027RegionRules:
                 sorted(self._remaining_sentry_ammo.items())
             ),
             territory_control=territories,
+            heavy_energy_units=tuple(sorted(self._heavy_energy_units_by_robot.items())),
+            energy_unit_reserves=tuple(sorted(self._energy_unit_reserves_by_team.items())),
         )
 
     def validate_scenario(self, scenario: "ScenarioDefinition") -> None:
@@ -334,6 +340,37 @@ class RMUC2027RegionRules:
             raise ConfigError(
                 f"RMUC 2027 does not define structure type `{structure_type}`"
             ) from exc
+
+    def pickup_energy_unit(self, match: "Match", heavy: "Robot") -> bool:
+        """P3a Rules Lab: collect a unit only at the team's simulated resource zone.
+
+        The projected resource-zone geometry is not a verified official
+        interaction-card footprint. No assembly reward is granted by pickup.
+        """
+        if (
+            match.finished
+            or heavy.type != "heavy"
+            or not heavy.alive
+            or not any(robot is heavy for robot in match.robots)
+        ):
+            return False
+        side = next(
+            (side for side, team_id in self._team_ids_by_side.items()
+             if team_id == heavy.team),
+            None,
+        )
+        if side is None or not match.is_robot_in_zone(heavy.id, f"{side}-resource"):
+            return False
+        carried = self._heavy_energy_units_by_robot.get(heavy.id)
+        if (
+            carried is None
+            or carried >= _HEAVY_CARRY_CAPACITY
+            or self._energy_unit_reserves_by_team.get(heavy.team, 0) <= 0
+        ):
+            return False
+        self._heavy_energy_units_by_robot[heavy.id] = carried + 1
+        self._energy_unit_reserves_by_team[heavy.team] -= 1
+        return True
 
     def can_move(self, robot: "Robot") -> bool:
         return robot.type in _GROUND_ROSTER and self._parameters.move_speed > 0
@@ -509,6 +546,13 @@ class RMUC2027RegionRules:
             for robot in match.robots
             if robot.type == "sentry"
         }
+        self._energy_unit_reserves_by_team = {
+            team_id: _ENERGY_UNITS_PER_TEAM
+            for team_id in sorted(self._team_ids_by_side.values())
+        }
+        self._heavy_energy_units_by_robot = {
+            robot.id: 0 for robot in match.robots if robot.type == "heavy"
+        }
         seed = getattr(match, "seed", 0) or 0
         self._outpost_rotation_direction = 1 if seed % 2 else -1
         self._outpost_rotation_stopped_at = {}
@@ -524,6 +568,15 @@ class RMUC2027RegionRules:
             raise ConfigError(
                 "RMUC 2027 field is missing territory gainpoint zones: "
                 + ", ".join(sorted(missing_zones))
+            )
+
+        missing_resource_zones = {
+            f"{side}-resource" for side in self._team_ids_by_side
+        } - self._zone_by_id.keys()
+        if missing_resource_zones:
+            raise ConfigError(
+                "RMUC 2027 field is missing resource zones: "
+                + ", ".join(sorted(missing_resource_zones))
             )
 
         self._territories = {}

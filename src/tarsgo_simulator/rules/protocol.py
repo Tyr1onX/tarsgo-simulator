@@ -162,6 +162,8 @@ class RuleSetDisplayState:
         tuple[str, int, int, int, int, int, int | None, float], ...
     ] = ()
     engineer_energy_units: tuple[tuple[str, int], ...] = ()
+    heavy_energy_units: tuple[tuple[str, int], ...] = ()
+    energy_unit_reserves: tuple[tuple[str, int], ...] = ()
     d4_status: tuple[
         tuple[str, str, int, float, float, float, float, bool, int], ...
     ] = ()
